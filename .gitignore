@@ -1,0 +1,57 @@
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# PowerShell
+*.ps1.lnk
+*.ps1xml
+*.psc1
+*.pssc
+*.psm1
+
+# Excel temporary files
+~$*.xlsx
+~$*.xls
+*.tmp
+*.temp
+
+# Log files
+*.log
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# VS Code
+.vscode/
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+packages/
+
+# Test results
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+
+# Personal files (uncomment if needed)
+# *.xlsx
+# *.xls
+
