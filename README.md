@@ -82,7 +82,7 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    ```
 
 2. In the GUI window:
-   - **Browse** for your input XLSX vulnerability scan file (must contain "Source Data" sheet)
+   - **Browse** for your input XLSX vulnerability scan file
    - Enter the **Client Name**
    - Select the **Scan Date**
    - Choose output options (Excel Report and/or Word Report)
@@ -90,6 +90,8 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    - Click **Generate**
 
 3. The application will:
+   - **Auto-detect** and consolidate all "Remediate within *" and "Remediate at *" sheets
+   - Exclude "Company" and "Linux Remediations" sheets
    - Read and analyze vulnerability data
    - Calculate composite risk scores
    - Identify top 10 vulnerabilities
@@ -100,8 +102,14 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 
 ### Required Excel Structure
 
+**Auto-Sheet Detection:**
+VScanMagic v3 automatically finds and consolidates data from multiple sheets:
+- **Included**: All sheets matching "Remediate within *" or "Remediate at *" patterns
+- **Excluded**: "Company", "Linux Remediations"
+- No manual sheet selection needed - works just like v2!
+
 **Flexible Column Detection:**
-VScanMagic v3 uses intelligent column mapping and can detect variations of common column names:
+The script uses intelligent column mapping and can detect variations of common column names:
 
 **Minimum Required:**
 - **Product/Software** column (required) - Variations recognized:
@@ -118,12 +126,13 @@ VScanMagic v3 uses intelligent column mapping and can detect variations of commo
 - **EPSS Score**: EPSS Score, EPSS, Exploit Prediction Score, Max EPSS Score
 
 **Smart Features:**
+- Automatic multi-sheet consolidation (like v2)
 - Case-insensitive column matching
 - Partial column name matching
 - Automatic vulnerability count calculation if not provided (sums Critical + High + Medium + Low)
 - Handles missing columns gracefully (uses defaults)
 - Filters out rows with no product name or zero vulnerabilities
-- Sheet name selector (auto-detects "Source Data" or allows manual selection)
+- Progress logging for large datasets
 
 ### VScanMagic v2 (Command Line)
 
