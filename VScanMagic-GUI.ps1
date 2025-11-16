@@ -1096,6 +1096,17 @@ function New-WordReport {
 
         # Save document
         Write-Log "Saving document to: $OutputPath"
+
+        # Delete existing file if present (Word SaveAs can be finicky with overwriting)
+        if (Test-Path $OutputPath) {
+            try {
+                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Write-Log "Removed existing Word report file"
+            } catch {
+                Write-Log "Warning: Could not delete existing file, attempting SaveAs anyway: $($_.Exception.Message)" -Level Warning
+            }
+        }
+
         $doc.SaveAs([ref]$OutputPath, [ref]16)  # 16 = wdFormatDocumentDefault (.docx)
 
         Write-Log "Word document generated successfully" -Level Success
@@ -1452,6 +1463,17 @@ function New-ExcelReport {
 
         # --- 4. Save and Close ---
         Write-Log "Saving workbook to: $OutputPath" -Level Info
+
+        # Delete existing file if present (Excel SaveAs can be finicky with overwriting)
+        if (Test-Path $OutputPath) {
+            try {
+                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Write-Log "Removed existing Excel report file"
+            } catch {
+                Write-Log "Warning: Could not delete existing file, attempting SaveAs anyway: $($_.Exception.Message)" -Level Warning
+            }
+        }
+
         $workbook.SaveAs($OutputPath)
         $workbook.Close($false)
 
@@ -1664,44 +1686,6 @@ function Show-VScanMagicGUI {
         if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked) {
             [System.Windows.Forms.MessageBox]::Show("Please select at least one output option.", "Validation Error",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-
-        # Try to delete existing output files before starting
-        $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
-        $lockedFiles = @()
-
-        if ($checkBoxWord.Checked) {
-            $wordOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Report.docx"
-            if (Test-Path $wordOutputPath) {
-                try {
-                    Remove-Item -Path $wordOutputPath -Force -ErrorAction Stop
-                    Write-Log "Removed existing Word report: $wordOutputPath"
-                } catch {
-                    $lockedFiles += "Word Report: $wordOutputPath`n  Error: $($_.Exception.Message)"
-                }
-            }
-        }
-
-        if ($checkBoxExcel.Checked) {
-            $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
-            if (Test-Path $excelOutputPath) {
-                try {
-                    Remove-Item -Path $excelOutputPath -Force -ErrorAction Stop
-                    Write-Log "Removed existing Excel report: $excelOutputPath"
-                } catch {
-                    $lockedFiles += "Excel Report: $excelOutputPath`n  Error: $($_.Exception.Message)"
-                }
-            }
-        }
-
-        if ($lockedFiles.Count -gt 0) {
-            $lockedFilesList = $lockedFiles -join "`n`n"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Cannot overwrite the following output file(s):`n`n$lockedFilesList`n`nPlease close these files and try again.",
-                "Cannot Overwrite Files",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
