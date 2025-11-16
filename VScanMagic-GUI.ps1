@@ -1577,8 +1577,8 @@ function Show-VScanMagicGUI {
     # --- Input File Section ---
     $labelInputFile = New-Object System.Windows.Forms.Label
     $labelInputFile.Location = New-Object System.Drawing.Point(20, 20)
-    $labelInputFile.Size = New-Object System.Drawing.Size(150, 20)
-    $labelInputFile.Text = "Input XLSX File:"
+    $labelInputFile.Size = New-Object System.Drawing.Size(200, 20)
+    $labelInputFile.Text = "Pending EPSS Report (XLSX):"
     $form.Controls.Add($labelInputFile)
 
     $textBoxInputFile = New-Object System.Windows.Forms.TextBox
@@ -1594,7 +1594,7 @@ function Show-VScanMagicGUI {
     $buttonBrowseInput.Add_Click({
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
         $openFileDialog.Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
-        $openFileDialog.Title = "Select Input Vulnerability Scan File"
+        $openFileDialog.Title = "Select Pending EPSS Report"
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $textBoxInputFile.Text = $openFileDialog.FileName
@@ -1602,6 +1602,14 @@ function Show-VScanMagicGUI {
             # Automatically set output directory to input file's directory
             $inputDirectory = [System.IO.Path]::GetDirectoryName($openFileDialog.FileName)
             $textBoxOutputDir.Text = $inputDirectory
+
+            # Extract company name from filename
+            # Expected format: "...Reports-{CompanyName}_{timestamp}.xlsx"
+            $fileName = [System.IO.Path]::GetFileNameWithoutExtension($openFileDialog.FileName)
+            if ($fileName -match '-([^_-]+)_') {
+                $companyName = $matches[1]
+                $textBoxClientName.Text = $companyName
+            }
         }
     })
     $form.Controls.Add($buttonBrowseInput)
@@ -1640,15 +1648,15 @@ function Show-VScanMagicGUI {
 
     $checkBoxExcel = New-Object System.Windows.Forms.CheckBox
     $checkBoxExcel.Location = New-Object System.Drawing.Point(20, 25)
-    $checkBoxExcel.Size = New-Object System.Drawing.Size(200, 20)
-    $checkBoxExcel.Text = "Generate Excel Report"
+    $checkBoxExcel.Size = New-Object System.Drawing.Size(250, 20)
+    $checkBoxExcel.Text = "Generate Pending EPSS Report (Excel)"
     $checkBoxExcel.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxExcel)
 
     $checkBoxWord = New-Object System.Windows.Forms.CheckBox
     $checkBoxWord.Location = New-Object System.Drawing.Point(20, 50)
-    $checkBoxWord.Size = New-Object System.Drawing.Size(200, 20)
-    $checkBoxWord.Text = "Generate Word Report"
+    $checkBoxWord.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxWord.Text = "Generate Top Ten Vulnerabilities Report (Word)"
     $checkBoxWord.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxWord)
 
@@ -1699,8 +1707,8 @@ function Show-VScanMagicGUI {
     # --- Open Report Buttons ---
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
     $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 500)
-    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(150, 25)
-    $script:buttonOpenWord.Text = "Open Word Report"
+    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(200, 25)
+    $script:buttonOpenWord.Text = "Open Top Ten Vulnerabilities"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
         if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
@@ -1710,9 +1718,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenWord)
 
     $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(180, 500)
-    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(150, 25)
-    $script:buttonOpenExcel.Text = "Open Excel Report"
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(230, 500)
+    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(180, 25)
+    $script:buttonOpenExcel.Text = "Open Pending EPSS Report"
     $script:buttonOpenExcel.Enabled = $false
     $script:buttonOpenExcel.Add_Click({
         if ($script:ExcelReportPath -and (Test-Path $script:ExcelReportPath)) {
@@ -1768,8 +1776,11 @@ function Show-VScanMagicGUI {
 
             # Generate Word report
             if ($checkBoxWord.Checked) {
-                $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
-                $wordOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Report.docx"
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report.docx"
 
                 New-WordReport -OutputPath $wordOutputPath `
                               -ClientName $textBoxClientName.Text `
@@ -1780,13 +1791,16 @@ function Show-VScanMagicGUI {
                 $script:WordReportPath = $wordOutputPath
                 $script:buttonOpenWord.Enabled = $true
 
-                Write-Log "Word report saved to: $wordOutputPath" -Level Success
+                Write-Log "Top Ten Vulnerabilities Report saved to: $wordOutputPath" -Level Success
             }
 
             # Generate Excel report
             if ($checkBoxExcel.Checked) {
-                $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
-                $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                $excelOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Pending EPSS Report.xlsx"
 
                 New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
 
@@ -1794,7 +1808,7 @@ function Show-VScanMagicGUI {
                 $script:ExcelReportPath = $excelOutputPath
                 $script:buttonOpenExcel.Enabled = $true
 
-                Write-Log "Excel report saved to: $excelOutputPath" -Level Success
+                Write-Log "Pending EPSS Report saved to: $excelOutputPath" -Level Success
             }
 
             Write-Log "=== Processing Complete ===" -Level Success
