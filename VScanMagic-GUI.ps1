@@ -713,7 +713,7 @@ function New-WordReport {
 
         $selection.Font.Name = "Courier New"
         $selection.Font.Bold = $true
-        $selection.TypeText("Risk Score = Vulnerability Count × EPSS Score × Average CVSS Equivalent")
+        $selection.TypeText("Risk Score = Vulnerability Count x EPSS Score x Average CVSS Equivalent")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
@@ -724,7 +724,7 @@ function New-WordReport {
         $selection.TypeParagraph()
 
         $selection.Font.Name = "Courier New"
-        $selection.TypeText("(Critical × 9.0 + High × 7.0 + Medium × 5.0 + Low × 3.0) / Total Vulnerabilities")
+        $selection.TypeText("(Critical x 9.0 + High x 7.0 + Medium x 5.0 + Low x 3.0) / Total Vulnerabilities")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
@@ -849,7 +849,7 @@ function New-WordReport {
             $selection.Font.Bold = $false
 
             foreach ($system in ($item.AffectedSystems | Select-Object -Unique)) {
-                $selection.TypeText("  • $system")
+                $selection.TypeText("  - $system")
                 $selection.TypeParagraph()
             }
             $selection.TypeParagraph()
