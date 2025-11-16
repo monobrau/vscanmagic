@@ -827,7 +827,6 @@ function New-WordReport {
         $selection.TypeText("This vulnerability assessment report summarizes the security posture of $ClientName based on the vulnerability scan conducted on $ScanDate. ")
         $selection.TypeText("The organization utilizes ConnectWise Automate for patch management. WSUS is not currently in use.")
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.TypeText("This report identifies the top 10 security risks based on a composite risk score that considers vulnerability count, ")
         $selection.TypeText("EPSS (Exploit Prediction Scoring System) scores, and CVSS severity ratings. ")
@@ -848,7 +847,6 @@ function New-WordReport {
         $selection.Font.Size = 11
         $selection.Font.Bold = $false
         $selection.TypeText("The Composite Risk Score is calculated using the following formula:")
-        $selection.TypeParagraph()
         $selection.TypeParagraph()
 
         # Add shaded box for formula
@@ -968,10 +966,9 @@ function New-WordReport {
         $legendTable.AutoFitBehavior(1)  # 1 = wdAutoFitContent (fit to content)
 
         $selection.EndKey(6)  # Move to end of document
-        $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
-        $selection.InsertBreak(7)  # Page break before Top 10 table
+        # Insert page break before Top 10 table
+        $selection.InsertBreak(7)
 
         # --- Top 10 Vulnerabilities Table ---
         Write-Log "Creating top 10 vulnerabilities table..."
@@ -1041,10 +1038,9 @@ function New-WordReport {
         $table.AutoFitBehavior(2)  # 2 = wdAutoFitWindow (fit to window)
 
         $selection.EndKey(6)
-        $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
-        $selection.InsertBreak(7)  # Page break before Detailed Findings
+        # Insert page break before Detailed Findings
+        $selection.InsertBreak(7)
 
         # --- Detailed Findings ---
         Write-Log "Creating detailed findings section..."
@@ -1129,9 +1125,8 @@ function New-WordReport {
 
             $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
-            $selection.TypeParagraph()
 
-            # Add extra spacing between items (except after the last one)
+            # Add spacing between items (except after the last one)
             if ($rank -lt $Top10Data.Count) {
                 $selection.TypeParagraph()
             }
