@@ -59,6 +59,7 @@ $script:Config = @{
 
     # Source Sheet Configuration
     SourceSheetPatterns = @("Remediate within *", "Remediate at *")
+    ExcludeSheetPatterns = @("Company", "Linux Remediations")
     ConsolidatedSheetName = "Source Data"
     PivotSheetName = "Proposed Remediations (all)"
 
@@ -211,18 +212,123 @@ function Get-SafeDoubleValue {
     return $DefaultValue
 }
 
+function Test-SheetMatch {
+    param(
+        [string]$SheetName,
+        [string[]]$Patterns
+    )
+
+    foreach ($pattern in $Patterns) {
+        if ($SheetName -like $pattern) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Read-SheetData {
+    param(
+        [object]$Worksheet,
+        [hashtable]$ColumnIndices
+    )
+
+    $data = @()
+    $usedRange = $Worksheet.UsedRange
+    $rowCount = $usedRange.Rows.Count
+
+    if ($rowCount -le 1) {
+        return $data
+    }
+
+    # Read data rows with flexible parsing
+    for ($row = 2; $row -le $rowCount; $row++) {
+        # Show progress for large datasets
+        if ($row % 100 -eq 0) {
+            Write-Log "  Processing row $row of $rowCount..."
+        }
+
+        $rowData = @{
+            'Host Name' = ''
+            'IP' = ''
+            'Product' = ''
+            'Critical' = 0
+            'High' = 0
+            'Medium' = 0
+            'Low' = 0
+            'Vulnerability Count' = 0
+            'EPSS Score' = 0.0
+        }
+
+        # Read HostName
+        if ($columnIndices.ContainsKey('HostName')) {
+            $rowData['Host Name'] = $Worksheet.Cells.Item($row, $columnIndices['HostName']).Text
+        }
+
+        # Read IP
+        if ($columnIndices.ContainsKey('IP')) {
+            $rowData['IP'] = $Worksheet.Cells.Item($row, $columnIndices['IP']).Text
+        }
+
+        # Read Product (required)
+        if ($columnIndices.ContainsKey('Product')) {
+            $rowData['Product'] = $Worksheet.Cells.Item($row, $columnIndices['Product']).Text
+        }
+
+        # Skip rows with no product name
+        if ([string]::IsNullOrWhiteSpace($rowData['Product'])) {
+            continue
+        }
+
+        # Read severity counts
+        if ($columnIndices.ContainsKey('Critical')) {
+            $rowData['Critical'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Critical']).Text
+        }
+
+        if ($columnIndices.ContainsKey('High')) {
+            $rowData['High'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['High']).Text
+        }
+
+        if ($columnIndices.ContainsKey('Medium')) {
+            $rowData['Medium'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Medium']).Text
+        }
+
+        if ($columnIndices.ContainsKey('Low')) {
+            $rowData['Low'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Low']).Text
+        }
+
+        # Read Vulnerability Count
+        if ($columnIndices.ContainsKey('VulnCount')) {
+            $rowData['Vulnerability Count'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['VulnCount']).Text
+        } else {
+            # Calculate from severity counts if not provided
+            $rowData['Vulnerability Count'] = $rowData['Critical'] + $rowData['High'] + $rowData['Medium'] + $rowData['Low']
+        }
+
+        # Read EPSS Score
+        if ($columnIndices.ContainsKey('EPSS')) {
+            $rowData['EPSS Score'] = Get-SafeDoubleValue -Value $Worksheet.Cells.Item($row, $columnIndices['EPSS']).Text
+        }
+
+        # Only add rows that have at least one vulnerability
+        if ($rowData['Vulnerability Count'] -gt 0) {
+            $data += [PSCustomObject]$rowData
+        }
+    }
+
+    return $data
+}
+
 function Get-VulnerabilityData {
     param(
-        [string]$ExcelPath,
-        [string]$SheetName = "Source Data"
+        [string]$ExcelPath
     )
 
     Write-Log "Reading vulnerability data from Excel..."
+    Write-Log "Auto-detecting and consolidating remediation sheets..."
 
     $excel = $null
     $workbook = $null
-    $worksheet = $null
-    $data = @()
+    $allData = @()
 
     try {
         $excel = New-Object -ComObject Excel.Application
@@ -231,33 +337,52 @@ function Get-VulnerabilityData {
 
         $workbook = $excel.Workbooks.Open($ExcelPath)
 
-        # Try to find the sheet - be flexible with sheet name
-        $worksheet = $workbook.Worksheets | Where-Object { $_.Name -eq $SheetName }
+        # Find all sheets that match remediation patterns
+        $sourceSheets = @()
+        foreach ($sheet in $workbook.Worksheets) {
+            $sheetName = $sheet.Name
 
-        if (-not $worksheet) {
-            # Try case-insensitive match
-            $worksheet = $workbook.Worksheets | Where-Object { $_.Name.ToLower() -eq $SheetName.ToLower() }
+            # Skip excluded sheets
+            $shouldExclude = $false
+            foreach ($excludePattern in $script:Config.ExcludeSheetPatterns) {
+                if ($sheetName -like $excludePattern -or $sheetName -eq $excludePattern) {
+                    $shouldExclude = $true
+                    break
+                }
+            }
+
+            if ($shouldExclude) {
+                Write-Log "Excluding sheet: $sheetName"
+                Clear-ComObject $sheet
+                continue
+            }
+
+            # Check if sheet matches any remediation pattern
+            $isMatch = Test-SheetMatch -SheetName $sheetName -Patterns $script:Config.SourceSheetPatterns
+
+            if ($isMatch) {
+                Write-Log "Found remediation sheet: $sheetName"
+                $sourceSheets += $sheet
+            } else {
+                Clear-ComObject $sheet
+            }
         }
 
-        if (-not $worksheet) {
-            # List available sheets
-            $availableSheets = ($workbook.Worksheets | ForEach-Object { $_.Name }) -join ", "
-            Write-Log "Available sheets: $availableSheets" -Level Warning
-            throw "Sheet '$SheetName' not found. Available sheets: $availableSheets"
+        if ($sourceSheets.Count -eq 0) {
+            throw "No remediation sheets found. Looking for patterns: $($script:Config.SourceSheetPatterns -join ', '). Excluding: $($script:Config.ExcludeSheetPatterns -join ', ')"
         }
 
-        Write-Log "Found sheet: $($worksheet.Name)"
+        Write-Log "Processing $($sourceSheets.Count) remediation sheet(s)..."
 
-        $usedRange = $worksheet.UsedRange
-        $rowCount = $usedRange.Rows.Count
+        # Get headers from first sheet and create column mappings
+        $firstSheet = $sourceSheets[0]
+        $usedRange = $firstSheet.UsedRange
         $colCount = $usedRange.Columns.Count
 
-        Write-Log "Sheet has $rowCount rows and $colCount columns"
-
-        # Get headers with flexible matching
+        # Get headers
         $headers = @{}
         for ($col = 1; $col -le $colCount; $col++) {
-            $headerName = $worksheet.Cells.Item(1, $col).Text
+            $headerName = $firstSheet.Cells.Item(1, $col).Text
             if ($headerName) {
                 $headers[$headerName] = $col
             }
@@ -265,7 +390,7 @@ function Get-VulnerabilityData {
 
         Write-Log "Found headers: $($headers.Keys -join ', ')"
 
-        # Define flexible column mappings with multiple possible names
+        # Define flexible column mappings
         $columnMappings = @{
             'HostName' = @('Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine')
             'IP' = @('IP', 'IP Address', 'IPAddress', 'Address')
@@ -303,92 +428,29 @@ function Get-VulnerabilityData {
             throw "Missing required columns: $($missingRequired -join ', '). Please ensure your Excel file has at least a Product/Software column."
         }
 
-        Write-Log "Successfully mapped $($columnIndices.Count) columns. Reading data rows..."
+        Write-Log "Successfully mapped $($columnIndices.Count) columns."
 
-        # Read data rows with flexible parsing
-        for ($row = 2; $row -le $rowCount; $row++) {
-            # Show progress for large datasets
-            if ($row % 100 -eq 0) {
-                Write-Log "Processing row $row of $rowCount..."
-            }
-
-            $rowData = @{
-                'Host Name' = ''
-                'IP' = ''
-                'Product' = ''
-                'Critical' = 0
-                'High' = 0
-                'Medium' = 0
-                'Low' = 0
-                'Vulnerability Count' = 0
-                'EPSS Score' = 0.0
-            }
-
-            # Read HostName
-            if ($columnIndices.ContainsKey('HostName')) {
-                $rowData['Host Name'] = $worksheet.Cells.Item($row, $columnIndices['HostName']).Text
-            }
-
-            # Read IP
-            if ($columnIndices.ContainsKey('IP')) {
-                $rowData['IP'] = $worksheet.Cells.Item($row, $columnIndices['IP']).Text
-            }
-
-            # Read Product (required)
-            if ($columnIndices.ContainsKey('Product')) {
-                $rowData['Product'] = $worksheet.Cells.Item($row, $columnIndices['Product']).Text
-            }
-
-            # Skip rows with no product name
-            if ([string]::IsNullOrWhiteSpace($rowData['Product'])) {
-                continue
-            }
-
-            # Read severity counts
-            if ($columnIndices.ContainsKey('Critical')) {
-                $rowData['Critical'] = Get-SafeNumericValue -Value $worksheet.Cells.Item($row, $columnIndices['Critical']).Text
-            }
-
-            if ($columnIndices.ContainsKey('High')) {
-                $rowData['High'] = Get-SafeNumericValue -Value $worksheet.Cells.Item($row, $columnIndices['High']).Text
-            }
-
-            if ($columnIndices.ContainsKey('Medium')) {
-                $rowData['Medium'] = Get-SafeNumericValue -Value $worksheet.Cells.Item($row, $columnIndices['Medium']).Text
-            }
-
-            if ($columnIndices.ContainsKey('Low')) {
-                $rowData['Low'] = Get-SafeNumericValue -Value $worksheet.Cells.Item($row, $columnIndices['Low']).Text
-            }
-
-            # Read Vulnerability Count
-            if ($columnIndices.ContainsKey('VulnCount')) {
-                $rowData['Vulnerability Count'] = Get-SafeNumericValue -Value $worksheet.Cells.Item($row, $columnIndices['VulnCount']).Text
-            } else {
-                # Calculate from severity counts if not provided
-                $rowData['Vulnerability Count'] = $rowData['Critical'] + $rowData['High'] + $rowData['Medium'] + $rowData['Low']
-            }
-
-            # Read EPSS Score
-            if ($columnIndices.ContainsKey('EPSS')) {
-                $rowData['EPSS Score'] = Get-SafeDoubleValue -Value $worksheet.Cells.Item($row, $columnIndices['EPSS']).Text
-            }
-
-            # Only add rows that have at least one vulnerability
-            if ($rowData['Vulnerability Count'] -gt 0) {
-                $data += [PSCustomObject]$rowData
-            }
+        # Read data from all matching sheets
+        foreach ($sheet in $sourceSheets) {
+            Write-Log "Reading data from: $($sheet.Name)"
+            $sheetData = Read-SheetData -Worksheet $sheet -ColumnIndices $columnIndices
+            Write-Log "  Found $($sheetData.Count) vulnerability records"
+            $allData += $sheetData
         }
 
-        Write-Log "Successfully read $($data.Count) vulnerability records" -Level Success
+        Write-Log "Total vulnerability records consolidated: $($allData.Count)" -Level Success
 
-        return $data
+        # Clean up sheet references
+        foreach ($sheet in $sourceSheets) {
+            Clear-ComObject $sheet
+        }
+
+        return $allData
 
     } catch {
         Write-Log "Error reading Excel data: $($_.Exception.Message)" -Level Error
         throw
     } finally {
-        if ($worksheet) { Clear-ComObject $worksheet }
         if ($workbook) {
             $workbook.Close($false)
             Clear-ComObject $workbook
@@ -723,13 +785,13 @@ function New-WordReport {
         foreach ($item in $Top10Data) {
             $rowIndex = $rank + 1
 
-            $table.Cell($rowIndex, 1).Range.Text = $rank
+            $table.Cell($rowIndex, 1).Range.Text = $rank.ToString()
             $table.Cell($rowIndex, 2).Range.Text = $item.Product
             $table.Cell($rowIndex, 3).Range.Text = $item.RiskScore.ToString("N2")
             $table.Cell($rowIndex, 4).Range.Text = $item.EPSSScore.ToString("N4")
             $table.Cell($rowIndex, 5).Range.Text = $item.AvgCVSS.ToString("N2")
-            $table.Cell($rowIndex, 6).Range.Text = $item.VulnCount
-            $table.Cell($rowIndex, 7).Range.Text = $item.AffectedSystems.Count
+            $table.Cell($rowIndex, 6).Range.Text = $item.VulnCount.ToString()
+            $table.Cell($rowIndex, 7).Range.Text = $item.AffectedSystems.Count.ToString()
 
             # Apply color coding based on risk score
             $colorInfo = Get-RiskScoreColor -RiskScore $item.RiskScore
@@ -852,7 +914,7 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 640)
+    $form.Size = New-Object System.Drawing.Size(700, 610)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -881,87 +943,38 @@ function Show-VScanMagicGUI {
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $textBoxInputFile.Text = $openFileDialog.FileName
-
-            # Populate sheet selector
-            $comboBoxSheet.Items.Clear()
-            try {
-                $excel = New-Object -ComObject Excel.Application
-                $excel.Visible = $false
-                $excel.DisplayAlerts = $false
-                $workbook = $excel.Workbooks.Open($openFileDialog.FileName)
-
-                foreach ($sheet in $workbook.Worksheets) {
-                    $comboBoxSheet.Items.Add($sheet.Name) | Out-Null
-                }
-
-                # Auto-select "Source Data" if it exists
-                $sourceDataIndex = $comboBoxSheet.Items.IndexOf("Source Data")
-                if ($sourceDataIndex -ge 0) {
-                    $comboBoxSheet.SelectedIndex = $sourceDataIndex
-                } else {
-                    # Select first sheet by default
-                    if ($comboBoxSheet.Items.Count -gt 0) {
-                        $comboBoxSheet.SelectedIndex = 0
-                    }
-                }
-
-                $workbook.Close($false)
-                $excel.Quit()
-                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($workbook) | Out-Null
-                [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null
-                [System.GC]::Collect()
-                [System.GC]::WaitForPendingFinalizers()
-            } catch {
-                [System.Windows.Forms.MessageBox]::Show("Could not read sheets from Excel file: $($_.Exception.Message)",
-                    "Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            }
         }
     })
     $form.Controls.Add($buttonBrowseInput)
 
-    # --- Sheet Selector ---
-    $labelSheet = New-Object System.Windows.Forms.Label
-    $labelSheet.Location = New-Object System.Drawing.Point(20, 75)
-    $labelSheet.Size = New-Object System.Drawing.Size(150, 20)
-    $labelSheet.Text = "Source Sheet:"
-    $form.Controls.Add($labelSheet)
-
-    $comboBoxSheet = New-Object System.Windows.Forms.ComboBox
-    $comboBoxSheet.Location = New-Object System.Drawing.Point(20, 100)
-    $comboBoxSheet.Size = New-Object System.Drawing.Size(300, 20)
-    $comboBoxSheet.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-    $comboBoxSheet.Items.Add("Source Data") | Out-Null
-    $comboBoxSheet.SelectedIndex = 0
-    $form.Controls.Add($comboBoxSheet)
-
     # --- Client Name ---
     $labelClientName = New-Object System.Windows.Forms.Label
-    $labelClientName.Location = New-Object System.Drawing.Point(20, 135)
+    $labelClientName.Location = New-Object System.Drawing.Point(20, 85)
     $labelClientName.Size = New-Object System.Drawing.Size(150, 20)
     $labelClientName.Text = "Client Name:"
     $form.Controls.Add($labelClientName)
 
     $textBoxClientName = New-Object System.Windows.Forms.TextBox
-    $textBoxClientName.Location = New-Object System.Drawing.Point(20, 160)
+    $textBoxClientName.Location = New-Object System.Drawing.Point(20, 110)
     $textBoxClientName.Size = New-Object System.Drawing.Size(300, 20)
     $form.Controls.Add($textBoxClientName)
 
     # --- Scan Date ---
     $labelScanDate = New-Object System.Windows.Forms.Label
-    $labelScanDate.Location = New-Object System.Drawing.Point(350, 135)
+    $labelScanDate.Location = New-Object System.Drawing.Point(350, 85)
     $labelScanDate.Size = New-Object System.Drawing.Size(150, 20)
     $labelScanDate.Text = "Scan Date:"
     $form.Controls.Add($labelScanDate)
 
     $datePickerScanDate = New-Object System.Windows.Forms.DateTimePicker
-    $datePickerScanDate.Location = New-Object System.Drawing.Point(350, 160)
+    $datePickerScanDate.Location = New-Object System.Drawing.Point(350, 110)
     $datePickerScanDate.Size = New-Object System.Drawing.Size(200, 20)
     $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
     $form.Controls.Add($datePickerScanDate)
 
     # --- Output Options ---
     $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
-    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 195)
+    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 145)
     $groupBoxOutput.Size = New-Object System.Drawing.Size(630, 80)
     $groupBoxOutput.Text = "Output Options"
     $form.Controls.Add($groupBoxOutput)
@@ -982,19 +995,19 @@ function Show-VScanMagicGUI {
 
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 290)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 240)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 315)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 265)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(520, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 313)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 263)
     $buttonBrowseOutput.Size = New-Object System.Drawing.Size(100, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
@@ -1010,14 +1023,14 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 355)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 305)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 380)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 150)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 330)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 180)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
@@ -1026,7 +1039,7 @@ function Show-VScanMagicGUI {
 
     # --- Action Buttons ---
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 545)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 525)
     $buttonGenerate.Size = New-Object System.Drawing.Size(100, 30)
     $buttonGenerate.Text = "Generate"
     $buttonGenerate.Add_Click({
@@ -1056,13 +1069,11 @@ function Show-VScanMagicGUI {
         try {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
             Write-Log "Input File: $($textBoxInputFile.Text)"
-            Write-Log "Sheet: $($comboBoxSheet.SelectedItem)"
             Write-Log "Client: $($textBoxClientName.Text)"
             Write-Log "Scan Date: $($datePickerScanDate.Value.ToShortDateString())"
 
-            # Read vulnerability data
-            $selectedSheet = if ($comboBoxSheet.SelectedItem) { $comboBoxSheet.SelectedItem.ToString() } else { "Source Data" }
-            $vulnData = Get-VulnerabilityData -ExcelPath $textBoxInputFile.Text -SheetName $selectedSheet
+            # Read vulnerability data from all remediation sheets
+            $vulnData = Get-VulnerabilityData -ExcelPath $textBoxInputFile.Text
 
             # Calculate top 10 vulnerabilities
             $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
@@ -1102,7 +1113,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(560, 545)
+    $buttonClose.Location = New-Object System.Drawing.Point(560, 525)
     $buttonClose.Size = New-Object System.Drawing.Size(90, 30)
     $buttonClose.Text = "Close"
     $buttonClose.Add_Click({ $form.Close() })
