@@ -724,12 +724,17 @@ function New-WordReport {
         Write-Log "Adding new document..."
         $doc = $word.Documents.Add()
 
-        # Set document properties
+        # Set document properties (optional - may fail on some systems)
         Write-Log "Setting document properties..."
-        $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
-        $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
-        $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
-        $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
+        try {
+            $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
+            $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
+            $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
+            $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
+            Write-Log "Document properties set successfully"
+        } catch {
+            Write-Log "Warning: Could not set document properties (this is optional): $($_.Exception.Message)" -Level Warning
+        }
 
         # Set page margins (in points: 1 inch = 72 points)
         # Default margins are usually 1 inch (72 points)
