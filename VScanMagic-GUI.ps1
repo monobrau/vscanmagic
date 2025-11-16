@@ -117,12 +117,24 @@ function Test-FileLocked {
     }
 
     try {
-        $fileStream = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        # Try to open with delete access (less restrictive than ReadWrite)
+        # This will only fail if the file is actually locked by another process
+        $fileStream = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
         $fileStream.Close()
         $fileStream.Dispose()
         return $false
+    } catch [System.IO.IOException] {
+        # Check if it's specifically a sharing violation
+        if ($_.Exception.Message -like "*being used by another process*" -or
+            $_.Exception.Message -like "*locked*" -or
+            $_.Exception.HResult -eq 0x80070020) {
+            return $true
+        }
+        # Other IO errors (permissions, etc.) - not a lock issue
+        return $false
     } catch {
-        return $true
+        # Other exceptions (permissions, etc.) - not a lock issue
+        return $false
     }
 }
 
@@ -1084,17 +1096,6 @@ function New-WordReport {
 
         # Save document
         Write-Log "Saving document to: $OutputPath"
-
-        # Delete existing file if present
-        if (Test-Path $OutputPath) {
-            try {
-                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
-                Write-Log "Removed existing file: $OutputPath"
-            } catch {
-                throw "Cannot overwrite existing file '$OutputPath'. Please close it if it's open and try again."
-            }
-        }
-
         $doc.SaveAs([ref]$OutputPath, [ref]16)  # 16 = wdFormatDocumentDefault (.docx)
 
         Write-Log "Word document generated successfully" -Level Success
@@ -1451,17 +1452,6 @@ function New-ExcelReport {
 
         # --- 4. Save and Close ---
         Write-Log "Saving workbook to: $OutputPath" -Level Info
-
-        # Delete existing file if present
-        if (Test-Path $OutputPath) {
-            try {
-                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
-                Write-Log "Removed existing file: $OutputPath" -Level Info
-            } catch {
-                throw "Cannot overwrite existing file '$OutputPath'. Please close it if it's open and try again."
-            }
-        }
-
         $workbook.SaveAs($OutputPath)
         $workbook.Close($false)
 
@@ -1677,29 +1667,39 @@ function Show-VScanMagicGUI {
             return
         }
 
-        # Check if output files are locked before starting
+        # Try to delete existing output files before starting
         $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
         $lockedFiles = @()
 
         if ($checkBoxWord.Checked) {
             $wordOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Report.docx"
-            if (Test-FileLocked -FilePath $wordOutputPath) {
-                $lockedFiles += "Word Report: $wordOutputPath"
+            if (Test-Path $wordOutputPath) {
+                try {
+                    Remove-Item -Path $wordOutputPath -Force -ErrorAction Stop
+                    Write-Log "Removed existing Word report: $wordOutputPath"
+                } catch {
+                    $lockedFiles += "Word Report: $wordOutputPath`n  Error: $($_.Exception.Message)"
+                }
             }
         }
 
         if ($checkBoxExcel.Checked) {
             $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
-            if (Test-FileLocked -FilePath $excelOutputPath) {
-                $lockedFiles += "Excel Report: $excelOutputPath"
+            if (Test-Path $excelOutputPath) {
+                try {
+                    Remove-Item -Path $excelOutputPath -Force -ErrorAction Stop
+                    Write-Log "Removed existing Excel report: $excelOutputPath"
+                } catch {
+                    $lockedFiles += "Excel Report: $excelOutputPath`n  Error: $($_.Exception.Message)"
+                }
             }
         }
 
         if ($lockedFiles.Count -gt 0) {
-            $lockedFilesList = $lockedFiles -join "`n"
+            $lockedFilesList = $lockedFiles -join "`n`n"
             [System.Windows.Forms.MessageBox]::Show(
-                "The following output file(s) are currently open or locked:`n`n$lockedFilesList`n`nPlease close these files and try again.",
-                "Files Are Locked",
+                "Cannot overwrite the following output file(s):`n`n$lockedFilesList`n`nPlease close these files and try again.",
+                "Cannot Overwrite Files",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
