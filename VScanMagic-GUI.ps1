@@ -62,8 +62,10 @@ $script:Config = @{
     ExcludeSheetPatterns = @("Company", "Linux Remediations")
     ConsolidatedSheetName = "Source Data"
     PivotSheetName = "Proposed Remediations (all)"
+    SheetToExcludeFormatting = "Company"
 
-    # Excel Path Limit
+    # Excel Formatting Configuration
+    ConditionalFormatThreshold = 0.075
     ExcelPathLimit = 200
 }
 
@@ -908,6 +910,369 @@ function New-WordReport {
     }
 }
 
+# Function to generate Excel report with pivot table
+function New-ExcelReport {
+    param(
+        [string]$InputPath,
+        [string]$OutputPath
+    )
+
+    Write-Log "Starting Excel report generation..." -Level Info
+
+    $excel = $null
+    $workbook = $null
+    $sourceDataSheet = $null
+    $pivotSheet = $null
+
+    try {
+        # Create Excel COM Object
+        Write-Log "Creating Excel COM object..." -Level Info
+        $excel = New-Object -ComObject Excel.Application
+        if ($null -eq $excel) {
+            throw "Failed to create Excel COM object. Make sure Microsoft Excel is installed."
+        }
+
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+        $excel.ScreenUpdating = $false
+
+        # Open Input Workbook
+        Write-Log "Opening input workbook..." -Level Info
+        $workbook = $excel.Workbooks.Open($InputPath)
+        if ($null -eq $workbook) {
+            throw "Failed to open workbook. File may be corrupted or in use."
+        }
+
+        # --- 1. Autofit Columns and Rows ---
+        Write-Log "Auto-fitting columns and rows..." -Level Info
+        foreach ($worksheet in $workbook.Worksheets) {
+            if ($worksheet.Name -ne $script:Config.SheetToExcludeFormatting) {
+                try {
+                    $worksheet.UsedRange.Columns.AutoFit() | Out-Null
+                    $worksheet.UsedRange.Rows.AutoFit() | Out-Null
+                } catch {
+                    Write-Log "Could not AutoFit sheet '$($worksheet.Name)'" -Level Warning
+                }
+            }
+            Clear-ComObject $worksheet
+        }
+
+        # --- 2. Consolidate Data ---
+        Write-Log "Consolidating data from remediation sheets..." -Level Info
+
+        # Delete existing consolidated sheet if present
+        $existingSheet = $null
+        foreach ($sheet in $workbook.Worksheets) {
+            if ($sheet.Name -eq $script:Config.ConsolidatedSheetName) {
+                $existingSheet = $sheet
+                break
+            }
+        }
+
+        if ($null -ne $existingSheet) {
+            Write-Log "Deleting existing '$($script:Config.ConsolidatedSheetName)' sheet..." -Level Info
+            $existingSheet.Delete()
+            Clear-ComObject $existingSheet
+        }
+
+        # Create new consolidated sheet
+        $lastSheet = $workbook.Worksheets[$workbook.Worksheets.Count]
+        $sourceDataSheet = $workbook.Worksheets.Add([System.Reflection.Missing]::Value, $lastSheet)
+        $sourceDataSheet.Name = $script:Config.ConsolidatedSheetName
+        Write-Log "Created '$($script:Config.ConsolidatedSheetName)' sheet" -Level Info
+        Clear-ComObject $lastSheet
+
+        # Find and collect source sheets
+        $sourceSheets = @()
+        $firstValidSheet = $null
+
+        foreach ($pattern in $script:Config.SourceSheetPatterns) {
+            foreach ($sheet in $workbook.Worksheets) {
+                $shouldInclude = $false
+
+                # Check if matches pattern
+                if ($sheet.Name -like $pattern) {
+                    $shouldInclude = $true
+                }
+
+                # Check exclusions
+                foreach ($excludePattern in $script:Config.ExcludeSheetPatterns) {
+                    if ($sheet.Name -like $excludePattern -or $sheet.Name -eq $excludePattern) {
+                        $shouldInclude = $false
+                        break
+                    }
+                }
+
+                if ($shouldInclude) {
+                    try {
+                        if ($null -ne $sheet.UsedRange -and $sheet.UsedRange.Rows.Count -ge 1) {
+                            $sourceSheets += $sheet
+                            if ($null -eq $firstValidSheet) {
+                                $firstValidSheet = $sheet
+                                Write-Log "Found first valid sheet: $($firstValidSheet.Name)" -Level Info
+                            }
+                        }
+                    } catch {
+                        Write-Log "Could not evaluate sheet '$($sheet.Name)'" -Level Warning
+                    }
+                }
+            }
+        }
+
+        Write-Log "Found $($sourceSheets.Count) source sheets to consolidate" -Level Info
+
+        # Copy headers from first valid sheet
+        if ($null -ne $firstValidSheet) {
+            try {
+                $sourceCols = $firstValidSheet.UsedRange.Columns.Count
+                $headerRange = $firstValidSheet.Range("A1", $firstValidSheet.Cells.Item(1, $sourceCols))
+                $headerValues = $headerRange.Value2
+                $targetRange = $sourceDataSheet.Range("A1", $sourceDataSheet.Cells.Item(1, $sourceCols))
+                $targetRange.Value2 = $headerValues
+                Write-Log "Headers copied successfully" -Level Info
+                Clear-ComObject $headerRange
+                Clear-ComObject $targetRange
+            } catch {
+                throw "Failed to copy headers: $($_.Exception.Message)"
+            }
+        }
+
+        # Copy data rows from all source sheets
+        $destRow = 2
+        foreach ($sourceSheet in $sourceSheets) {
+            Write-Log "Copying data from: $($sourceSheet.Name)" -Level Info
+
+            try {
+                $sourceRange = $sourceSheet.UsedRange
+                $sourceRows = $sourceRange.Rows.Count
+
+                if ($sourceRows -gt 1) {
+                    $sourceCols = $sourceRange.Columns.Count
+                    $dataRange = $sourceSheet.Range("A2", $sourceSheet.Cells.Item($sourceRows, $sourceCols))
+                    $dataValues = $dataRange.Value2
+                    $targetRowCount = $dataRange.Rows.Count
+                    $targetRange = $sourceDataSheet.Range($sourceDataSheet.Cells.Item($destRow, 1), $sourceDataSheet.Cells.Item($destRow + $targetRowCount - 1, $sourceCols))
+                    $targetRange.Value2 = $dataValues
+                    $destRow += $targetRowCount
+                    Clear-ComObject $dataRange
+                    Clear-ComObject $targetRange
+                }
+                Clear-ComObject $sourceRange
+            } catch {
+                Write-Log "Failed to copy data from '$($sourceSheet.Name)': $($_.Exception.Message)" -Level Warning
+            }
+        }
+
+        Write-Log "Data consolidation complete" -Level Info
+
+        # Release source sheet references
+        foreach ($sheet in $sourceSheets) {
+            Clear-ComObject $sheet
+        }
+        Clear-ComObject $firstValidSheet
+
+        # --- 3. Create Pivot Table ---
+        Write-Log "Creating Pivot Table..." -Level Info
+
+        # Delete existing pivot sheet if present
+        $existingPivotSheet = $null
+        foreach ($sheet in $workbook.Worksheets) {
+            if ($sheet.Name -eq $script:Config.PivotSheetName) {
+                $existingPivotSheet = $sheet
+                break
+            }
+        }
+
+        if ($null -ne $existingPivotSheet) {
+            Write-Log "Deleting existing '$($script:Config.PivotSheetName)' sheet..." -Level Info
+            $existingPivotSheet.Delete()
+            Clear-ComObject $existingPivotSheet
+        }
+
+        # Find Company sheet to place pivot after
+        $companySheet = $null
+        foreach ($sheet in $workbook.Worksheets) {
+            if ($sheet.Name -eq $script:Config.SheetToExcludeFormatting) {
+                $companySheet = $sheet
+                break
+            }
+        }
+
+        # Add pivot sheet
+        if ($null -ne $companySheet) {
+            $pivotSheet = $workbook.Worksheets.Add([System.Reflection.Missing]::Value, $companySheet)
+            Write-Log "Added Pivot Table sheet after '$($companySheet.Name)'" -Level Info
+        } else {
+            $lastSheet2 = $workbook.Worksheets[$workbook.Worksheets.Count]
+            $pivotSheet = $workbook.Worksheets.Add([System.Reflection.Missing]::Value, $lastSheet2)
+            Write-Log "Added Pivot Table sheet at end" -Level Info
+            Clear-ComObject $lastSheet2
+        }
+
+        $pivotSheet.Name = $script:Config.PivotSheetName
+        $pivotSheet.Tab.ColorIndex = 6  # Yellow
+
+        Clear-ComObject $companySheet
+
+        # Create pivot table
+        $pivotSourceRange = $sourceDataSheet.UsedRange
+        $sourceRowCount = $pivotSourceRange.Rows.Count
+        Write-Log "Source Data has $sourceRowCount rows" -Level Info
+
+        if ($sourceRowCount -le 1) {
+            Write-Log "No data rows for Pivot Table" -Level Warning
+        } else {
+            $xlRowField = 1
+            $xlDataField = 4
+            $xlMax = -4136
+            $xlSum = -4157
+
+            $pivotCache = $workbook.PivotCaches().Create(1, $pivotSourceRange)
+            $pivotTable = $pivotCache.CreatePivotTable($pivotSheet.Range("A3"), "VulnPivotTable")
+            Write-Log "Pivot Table object created" -Level Info
+
+            # Configure pivot table fields
+            $rowFieldsToAdd = @("Remediation Type", "Product", "Host Name", "Fix", "IP", "Evidence Path", "Evidence Version")
+
+            Write-Log "Configuring Pivot Table fields..." -Level Info
+            foreach ($fieldName in $rowFieldsToAdd) {
+                try {
+                    $ptField = $pivotTable.PivotFields($fieldName)
+                    $ptField.Orientation = $xlRowField
+                    Clear-ComObject $ptField
+                } catch {
+                    Write-Log "Could not add row field '$fieldName'" -Level Warning
+                }
+            }
+
+            # Add value fields
+            $dataField1 = $null
+            $dataField2 = $null
+
+            try {
+                $sourceField1 = $pivotTable.PivotFields("EPSS Score")
+                $dataField1 = $pivotTable.AddDataField($sourceField1)
+                $dataField1.Function = $xlMax
+                $dataField1.Name = "Max EPSS Score"
+                Clear-ComObject $sourceField1
+                Write-Log "Added Max EPSS Score field" -Level Info
+            } catch {
+                Write-Log "Could not add EPSS Score field" -Level Warning
+            }
+
+            try {
+                $sourceField2 = $pivotTable.PivotFields("Vulnerability Count")
+                $dataField2 = $pivotTable.AddDataField($sourceField2)
+                $dataField2.Function = $xlSum
+                $dataField2.Name = "Total Vulnerability Count"
+                Clear-ComObject $sourceField2
+                Write-Log "Added Total Vulnerability Count field" -Level Info
+            } catch {
+                Write-Log "Could not add Vulnerability Count field" -Level Warning
+            }
+
+            # Apply conditional formatting
+            if ($null -ne $dataField1) {
+                try {
+                    $cfRange = $dataField1.DataRange
+                    $cfRange.FormatConditions.Delete()
+                    $cfCondition = $cfRange.FormatConditions.Add(1, 5, "$($script:Config.ConditionalFormatThreshold)")
+                    $cfCondition.Interior.ColorIndex = 3  # Red
+                    Write-Log "Applied conditional formatting (EPSS > $($script:Config.ConditionalFormatThreshold))" -Level Info
+                    Clear-ComObject $cfCondition
+                    Clear-ComObject $cfRange
+                } catch {
+                    Write-Log "Could not apply conditional formatting" -Level Warning
+                }
+            }
+
+            # Add color key
+            try {
+                $keyStartCol = $pivotTable.TableRange2.Column + $pivotTable.TableRange2.Columns.Count + 1
+                $keyStartRow = $pivotTable.TableRange1.Row
+
+                $headerCell = $pivotSheet.Cells.Item($keyStartRow, $keyStartCol)
+                $headerCell.Value2 = "Key"
+                $headerCell.Font.Bold = $true
+                Clear-ComObject $headerCell
+
+                $keyCurrentRow = $keyStartRow + 1
+                $keyData = @(
+                    @{Text = "Do not touch"; BgColorIndex = 3; FontColorIndex = 2; Strikethrough = $false}
+                    @{Text = "No action needed - auto updates"; BgColorIndex = 4; FontColorIndex = 2; Strikethrough = $false}
+                    @{Text = "Update or patch"; BgColorIndex = 5; FontColorIndex = 2; Strikethrough = $false}
+                    @{Text = "Uninstall"; BgColorIndex = 16; FontColorIndex = 1; Strikethrough = $false}
+                    @{Text = "Already Remediated"; BgColorIndex = 2; FontColorIndex = 1; Strikethrough = $true}
+                    @{Text = "Configuration change needed and further investigation"; BgColorIndex = 6; FontColorIndex = 1; Strikethrough = $false}
+                )
+
+                foreach ($item in $keyData) {
+                    $keyCell = $pivotSheet.Cells.Item($keyCurrentRow, $keyStartCol)
+                    $keyCell.Value2 = $item.Text
+                    $keyCell.Interior.ColorIndex = $item.BgColorIndex
+                    $keyCell.Font.ColorIndex = $item.FontColorIndex
+                    $keyCell.Font.Strikethrough = $item.Strikethrough
+                    Clear-ComObject $keyCell
+                    $keyCurrentRow++
+                }
+
+                $keyColumn = $pivotSheet.Columns.Item($keyStartCol)
+                $keyColumn.AutoFit() | Out-Null
+                Clear-ComObject $keyColumn
+
+                Write-Log "Color key added" -Level Info
+            } catch {
+                Write-Log "Could not add color key: $($_.Exception.Message)" -Level Warning
+            }
+
+            # Resize Column A
+            try {
+                $colA = $pivotSheet.Columns("A")
+                $colA.ColumnWidth = 50
+                Clear-ComObject $colA
+                Write-Log "Column A resized to width 50" -Level Info
+            } catch {
+                Write-Log "Could not resize Column A" -Level Warning
+            }
+
+            Clear-ComObject $dataField1
+            Clear-ComObject $dataField2
+            Clear-ComObject $pivotTable
+            Clear-ComObject $pivotCache
+        }
+
+        Clear-ComObject $pivotSourceRange
+
+        # --- 4. Save and Close ---
+        Write-Log "Saving workbook to: $OutputPath" -Level Info
+        $workbook.SaveAs($OutputPath)
+        $workbook.Close($false)
+
+        Write-Log "Excel report generation complete" -Level Success
+
+    } catch {
+        Write-Log "Excel report generation failed: $($_.Exception.Message)" -Level Error
+        throw $_
+    } finally {
+        # Cleanup COM objects
+        Clear-ComObject $pivotSheet
+        Clear-ComObject $sourceDataSheet
+        Clear-ComObject $workbook
+
+        if ($null -ne $excel) {
+            try {
+                $excel.Quit()
+            } catch {
+                Write-Log "Excel quit failed" -Level Warning
+            }
+            Clear-ComObject $excel
+        }
+
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+    }
+}
+
 # --- GUI Functions ---
 
 function Show-VScanMagicGUI {
@@ -1091,10 +1456,14 @@ function Show-VScanMagicGUI {
                 Write-Log "Word report saved to: $wordOutputPath" -Level Success
             }
 
-            # Generate Excel report (existing functionality would go here)
+            # Generate Excel report
             if ($checkBoxExcel.Checked) {
-                Write-Log "Excel report generation: Feature coming soon" -Level Info
-                # TODO: Integrate existing Excel processing code
+                $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
+                $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
+
+                New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
+
+                Write-Log "Excel report saved to: $excelOutputPath" -Level Success
             }
 
             Write-Log "=== Processing Complete ===" -Level Success
