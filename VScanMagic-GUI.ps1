@@ -879,10 +879,10 @@ function New-WordReport {
             $selection.TypeParagraph()
             $selection.Font.Bold = $false
 
-            foreach ($system in ($item.AffectedSystems | Select-Object -Unique)) {
-                $selection.TypeText("  - $system")
-                $selection.TypeParagraph()
-            }
+            # Display systems as comma-separated list
+            $systemsList = ($item.AffectedSystems | Select-Object -Unique) -join ", "
+            $selection.TypeText($systemsList)
+            $selection.TypeParagraph()
             $selection.TypeParagraph()
 
             # Remediation guidance
