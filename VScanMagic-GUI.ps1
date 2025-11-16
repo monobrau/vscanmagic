@@ -1131,13 +1131,9 @@ function New-WordReport {
             $selection.TypeParagraph()
             $selection.TypeParagraph()
 
-            # Add a subtle separator between items (except after the last one)
+            # Add extra spacing between items (except after the last one)
             if ($rank -lt $Top10Data.Count) {
-                $selection.ParagraphFormat.Borders.Item(3).LineStyle = 1  # Bottom border
-                $selection.ParagraphFormat.Borders.Item(3).LineWidth = 1
-                $selection.ParagraphFormat.Borders.Item(3).Color = 12632256  # Light gray
                 $selection.TypeParagraph()
-                $selection.ParagraphFormat.Borders.Item(3).LineStyle = 0  # Reset border
             }
 
             $rank++
