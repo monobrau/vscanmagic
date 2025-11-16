@@ -666,6 +666,12 @@ function New-WordReport {
         $word.Visible = $false
         $doc = $word.Documents.Add()
 
+        # Set document properties
+        $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
+        $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
+        $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
+        $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
+
         # Set page margins (in points: 1 inch = 72 points)
         # Default margins are usually 1 inch (72 points)
         # Setting to 0.5 inch (36 points) for left and right
@@ -678,20 +684,39 @@ function New-WordReport {
         Write-Log "Creating title page..."
         $selection = $word.Selection
 
-        $selection.Font.Size = 28
+        # Add some top spacing for title page
+        $selection.TypeParagraph()
+        $selection.TypeParagraph()
+        $selection.TypeParagraph()
+
+        $selection.Font.Name = "Calibri"
+        $selection.Font.Size = 32
         $selection.Font.Bold = $true
+        $selection.Font.Color = 5855577  # Dark blue color
         $selection.ParagraphFormat.Alignment = 1  # Center
         $selection.TypeText("Vulnerability Assessment Report")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
-        $selection.Font.Size = 18
-        $selection.Font.Bold = $false
+        # Add horizontal line
+        $selection.ParagraphFormat.Borders.Item(3).LineStyle = 1  # Bottom border
+        $selection.ParagraphFormat.Borders.Item(3).LineWidth = 24  # Thicker line
+        $selection.ParagraphFormat.Borders.Item(3).Color = 5855577  # Dark blue
+        $selection.TypeParagraph()
+        $selection.ParagraphFormat.Borders.Item(3).LineStyle = 0  # Reset border
+        $selection.TypeParagraph()
+        $selection.TypeParagraph()
+
+        $selection.Font.Size = 20
+        $selection.Font.Bold = $true
+        $selection.Font.Color = 0  # Black
         $selection.TypeText($ClientName)
+        $selection.TypeParagraph()
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
         $selection.Font.Size = 14
+        $selection.Font.Bold = $false
         $selection.TypeText("Scan Date: $ScanDate")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
@@ -705,10 +730,12 @@ function New-WordReport {
         # --- Executive Summary ---
         Write-Log "Creating executive summary..."
         $selection.ParagraphFormat.Alignment = 0  # Left align
-        $selection.Font.Size = 16
-        $selection.Font.Bold = $true
+        $selection.Style = "Heading 1"
         $selection.TypeText("Executive Summary")
         $selection.TypeParagraph()
+
+        $selection.Style = "Normal"
+        $selection.Font.Size = 11
         $selection.TypeParagraph()
 
         $selection.Font.Size = 11
@@ -726,10 +753,12 @@ function New-WordReport {
 
         # --- Scoring Methodology ---
         Write-Log "Creating scoring methodology section..."
-        $selection.Font.Size = 16
-        $selection.Font.Bold = $true
+        $selection.Style = "Heading 1"
         $selection.TypeText("Scoring Methodology")
         $selection.TypeParagraph()
+
+        $selection.Style = "Normal"
+        $selection.Font.Size = 11
         $selection.TypeParagraph()
 
         $selection.Font.Size = 11
@@ -738,30 +767,43 @@ function New-WordReport {
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
+        # Add shaded box for formula
+        $selection.ParagraphFormat.Shading.BackgroundPatternColor = 15329769  # Light blue/gray
+        $selection.ParagraphFormat.LeftIndent = 18
+        $selection.ParagraphFormat.RightIndent = 18
+        $selection.ParagraphFormat.SpaceBefore = 6
+        $selection.ParagraphFormat.SpaceAfter = 6
+
         $selection.Font.Name = "Courier New"
         $selection.Font.Bold = $true
+        $selection.Font.Size = 10
         $selection.TypeText("Risk Score = Vulnerability Count x EPSS Score x Average CVSS Equivalent")
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
-        $selection.Font.Name = "Calibri"
         $selection.Font.Bold = $false
         $selection.TypeText("Where Average CVSS is calculated as:")
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
-        $selection.Font.Name = "Courier New"
         $selection.TypeText("(Critical x 9.0 + High x 7.0 + Medium x 5.0 + Low x 3.0) / Total Vulnerabilities")
         $selection.TypeParagraph()
+
+        # Reset formatting
+        $selection.ParagraphFormat.Shading.BackgroundPatternColor = 16777215  # White
+        $selection.ParagraphFormat.LeftIndent = 0
+        $selection.ParagraphFormat.RightIndent = 0
+        $selection.ParagraphFormat.SpaceBefore = 0
+        $selection.ParagraphFormat.SpaceAfter = 0
+        $selection.Font.Name = "Calibri"
+        $selection.Font.Size = 11
         $selection.TypeParagraph()
 
         # --- Risk Score Color Legend ---
         Write-Log "Creating color legend..."
-        $selection.Font.Name = "Calibri"
-        $selection.Font.Size = 14
-        $selection.Font.Bold = $true
+        $selection.Style = "Heading 2"
         $selection.TypeText("Risk Score Color Legend")
         $selection.TypeParagraph()
+
+        $selection.Style = "Normal"
         $selection.TypeParagraph()
 
         # Create legend table
@@ -772,28 +814,37 @@ function New-WordReport {
         $legendTable.Cell(1, 1).Range.Text = "Critical"
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.Color
         $legendTable.Cell(1, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.TextColor
-        $legendTable.Cell(1, 2).Range.Text = "Risk Score ≥ $($script:Config.RiskColors.Critical.Threshold)"
+        $legendTable.Cell(1, 1).Range.Font.Bold = $true
+        $legendTable.Cell(1, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.Critical.Threshold)"
 
         $legendTable.Cell(2, 1).Range.Text = "High"
         $legendTable.Cell(2, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.Color
         $legendTable.Cell(2, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.TextColor
-        $legendTable.Cell(2, 2).Range.Text = "Risk Score ≥ $($script:Config.RiskColors.High.Threshold)"
+        $legendTable.Cell(2, 1).Range.Font.Bold = $true
+        $legendTable.Cell(2, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.High.Threshold)"
 
         $legendTable.Cell(3, 1).Range.Text = "Medium"
         $legendTable.Cell(3, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.Color
         $legendTable.Cell(3, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.TextColor
+        $legendTable.Cell(3, 1).Range.Font.Bold = $true
         $legendTable.Cell(3, 2).Range.Text = "Risk Score > $($script:Config.RiskColors.Medium.Threshold)"
+
+        # AutoFit the legend table
+        $legendTable.AutoFitBehavior(1)  # 1 = wdAutoFitContent (fit to content)
 
         $selection.EndKey(6)  # Move to end of document
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
+        $selection.InsertBreak(7)  # Page break before Top 10 table
+
         # --- Top 10 Vulnerabilities Table ---
         Write-Log "Creating top 10 vulnerabilities table..."
-        $selection.Font.Size = 16
-        $selection.Font.Bold = $true
+        $selection.Style = "Heading 1"
         $selection.TypeText("Top 10 Vulnerabilities by Risk Score")
         $selection.TypeParagraph()
+
+        $selection.Style = "Normal"
         $selection.TypeParagraph()
 
         # Create table
@@ -837,30 +888,42 @@ function New-WordReport {
             $rank++
         }
 
+        # AutoFit the table for better appearance
+        $table.AutoFitBehavior(2)  # 2 = wdAutoFitWindow (fit to window)
+
         $selection.EndKey(6)
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
+        $selection.InsertBreak(7)  # Page break before Detailed Findings
+
         # --- Detailed Findings ---
         Write-Log "Creating detailed findings section..."
-        $selection.Font.Size = 16
-        $selection.Font.Bold = $true
+        $selection.Style = "Heading 1"
         $selection.Font.Color = 0  # Black
         $selection.TypeText("Detailed Findings and Remediation Guidance")
         $selection.TypeParagraph()
+
+        $selection.Style = "Normal"
         $selection.TypeParagraph()
 
         $rank = 1
         foreach ($item in $Top10Data) {
-            $selection.Font.Size = 14
-            $selection.Font.Bold = $true
+            # Vulnerability title
+            $selection.Style = "Heading 2"
             $selection.TypeText("$rank. $($item.Product)")
             $selection.TypeParagraph()
 
+            $selection.Style = "Normal"
             $selection.Font.Size = 11
+
+            # Risk metrics in a more compact format
+            $selection.Font.Bold = $true
+            $selection.TypeText("Risk Metrics:")
+            $selection.TypeParagraph()
             $selection.Font.Bold = $false
 
-            # Risk metrics
+            $selection.ParagraphFormat.LeftIndent = 36  # Indent for better readability
             $selection.TypeText("Risk Score: $($item.RiskScore.ToString('N2'))")
             $selection.TypeParagraph()
             $selection.TypeText("EPSS Score: $($item.EPSSScore.ToString('N4'))")
@@ -871,6 +934,7 @@ function New-WordReport {
             $selection.TypeParagraph()
             $selection.TypeText("Affected Systems: $($item.AffectedSystems.Count)")
             $selection.TypeParagraph()
+            $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
 
             # Affected systems list
@@ -879,10 +943,12 @@ function New-WordReport {
             $selection.TypeParagraph()
             $selection.Font.Bold = $false
 
-            # Display systems as comma-separated list
+            # Display systems as comma-separated list with indent
+            $selection.ParagraphFormat.LeftIndent = 36
             $systemsList = ($item.AffectedSystems | Select-Object -Unique) -join ", "
             $selection.TypeText($systemsList)
             $selection.TypeParagraph()
+            $selection.ParagraphFormat.LeftIndent = 0
             $selection.TypeParagraph()
 
             # Remediation guidance
@@ -890,6 +956,8 @@ function New-WordReport {
             $selection.TypeText("Remediation Guidance:")
             $selection.TypeParagraph()
             $selection.Font.Bold = $false
+
+            $selection.ParagraphFormat.LeftIndent = 36
 
             # Determine remediation type
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
@@ -910,8 +978,18 @@ function New-WordReport {
                 $selection.TypeText("Otherwise, manual updates may be required on affected systems.")
             }
 
+            $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
             $selection.TypeParagraph()
+
+            # Add a subtle separator between items (except after the last one)
+            if ($rank -lt $Top10Data.Count) {
+                $selection.ParagraphFormat.Borders.Item(3).LineStyle = 1  # Bottom border
+                $selection.ParagraphFormat.Borders.Item(3).LineWidth = 1
+                $selection.ParagraphFormat.Borders.Item(3).Color = 12632256  # Light gray
+                $selection.TypeParagraph()
+                $selection.ParagraphFormat.Borders.Item(3).LineStyle = 0  # Reset border
+            }
 
             $rank++
         }
