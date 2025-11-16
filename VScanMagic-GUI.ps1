@@ -755,11 +755,10 @@ function New-WordReport {
         }
 
         # Set page margins (in points: 1 inch = 72 points)
-        # Default margins are usually 1 inch (72 points)
-        # Setting to 0.5 inch (36 points) for left and right
+        # Default 1 inch margins for non-table pages
         Write-Log "Setting page margins..."
-        $doc.PageSetup.LeftMargin = 36    # 0.5 inch
-        $doc.PageSetup.RightMargin = 36   # 0.5 inch
+        $doc.PageSetup.LeftMargin = 72    # 1 inch
+        $doc.PageSetup.RightMargin = 72   # 1 inch
         $doc.PageSetup.TopMargin = 72     # 1 inch
         $doc.PageSetup.BottomMargin = 72  # 1 inch
 
@@ -970,6 +969,11 @@ function New-WordReport {
         # Insert page break before Top 10 table
         $selection.InsertBreak(7)
 
+        # Set narrower margins for table page (0.5 inch)
+        $currentSection = $selection.Sections.Item(1)
+        $currentSection.PageSetup.LeftMargin = 36    # 0.5 inch
+        $currentSection.PageSetup.RightMargin = 36   # 0.5 inch
+
         # --- Top 10 Vulnerabilities Table ---
         Write-Log "Creating top 10 vulnerabilities table..."
         $selection.Style = "Heading 1"
@@ -1034,13 +1038,26 @@ function New-WordReport {
             $rank++
         }
 
-        # AutoFit the table for better appearance
-        $table.AutoFitBehavior(2)  # 2 = wdAutoFitWindow (fit to window)
+        # Set custom column widths for better appearance
+        # Column widths in points (1 inch = 72 points)
+        $table.Columns(1).SetWidth(36, 0)   # Rank: 0.5 inch (narrow)
+        $table.Columns(2).PreferredWidthType = 2  # wdPreferredWidthPoints
+        $table.Columns(2).PreferredWidth = 180    # Product/System: 2.5 inches max
+
+        # Auto-fit remaining columns to content
+        $table.Columns(3).AutoFit()  # Risk Score
+        $table.Columns(4).AutoFit()  # EPSS
+        $table.Columns(5).AutoFit()  # Avg CVSS
+        $table.Columns(6).AutoFit()  # Total Vulns
+        $table.Columns(7).AutoFit()  # Affected Systems
 
         $selection.EndKey(6)
 
-        # Insert page break before Detailed Findings
-        $selection.InsertBreak(7)
+        # Insert page break and restore normal margins for Detailed Findings
+        $selection.InsertBreak(7)  # Page break
+        $detailedSection = $selection.Sections.Item(1)
+        $detailedSection.PageSetup.LeftMargin = 72    # 1 inch
+        $detailedSection.PageSetup.RightMargin = 72   # 1 inch
 
         # --- Detailed Findings ---
         Write-Log "Creating detailed findings section..."
