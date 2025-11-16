@@ -1,6 +1,20 @@
-# VScanMagic v2
+# VScanMagic
 
-A PowerShell script that automates the processing of vulnerability report Excel files, performing data consolidation, formatting, and pivot table creation with conditional formatting.
+A suite of PowerShell tools for vulnerability management and security alert processing.
+
+## Tools Included
+
+### 1. VScanMagic v2 - Vulnerability Report Processor (`vscanmagicv2.ps1`)
+Automates the processing of vulnerability report Excel files, performing data consolidation, formatting, and pivot table creation with conditional formatting.
+
+### 2. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`) ⭐ NEW
+A GUI application that processes Barracuda XDR security alerts and generates professional, client-facing DOCX reports with automated threat classification.
+
+---
+
+## VScanMagic v2 - Vulnerability Report Processor
+
+A PowerShell script that automates the processing of vulnerability report Excel files.
 
 ## Features
 
@@ -108,11 +122,55 @@ The script adds a color-coded key indicating remediation status:
 
 This script is provided as-is for use in vulnerability reporting workflows.
 
+## VScanMagic Alert Processor v3 - Security Alert Analysis Tool
+
+**For detailed documentation on the Alert Processor, see [ALERT_PROCESSOR_README.md](ALERT_PROCESSOR_README.md)**
+
+### Quick Start
+
+The Alert Processor is a GUI application for analyzing Barracuda XDR security alerts:
+
+```powershell
+.\VScanAlertProcessor.ps1
+```
+
+### Key Features
+- **GUI Interface**: Easy-to-use Windows Forms application
+- **Multi-Source Analysis**: Cross-references VScan XLSX with MFA status, security groups, and sign-in logs
+- **Automated Classification**: Classifies alerts as True Positive, False Positive, or Authorized Activity
+- **DOCX Report Generation**: Creates professional, client-facing Word documents
+- **Behavioral Analysis**: Analyzes VPN usage patterns and location diversity
+
+### Required Inputs
+- VScan XLSX file (Barracuda XDR alerts)
+- MFA Status CSV (optional)
+- User Security Groups CSV (optional)
+- Interactive Sign-Ins CSV (optional)
+- Output folder for reports
+
+### Report Template
+
+The tool uses this analysis framework for each alert:
+
+1. **Investigation**: Identifies user, alert type, and observables
+2. **Cross-Reference**: Checks MFA status and administrative roles
+3. **Behavioral Analysis**: Analyzes VPN/location patterns from sign-in logs
+4. **Classification**: Determines True Positive, False Positive, or Authorized Activity
+5. **Recommendations**: Provides clear, actionable guidance for clients
+
+Each report includes:
+- Service ticket number (for internal reference)
+- Client-friendly greeting and closing
+- Plain language analysis (no technical jargon)
+- Clear classification and action items
+
+---
+
 ## Contributing
 
 Contributions, issues, and feature requests are welcome! Please feel free to submit pull requests or open issues for any problems or suggestions.
 
 ## Disclaimer
 
-This script automates Excel operations using COM objects. Ensure you have proper backups of your data before running the script. The authors are not responsible for any data loss or corruption that may occur during script execution.
+These scripts automate Office operations using COM objects. Ensure you have proper backups of your data before running the scripts. The authors are not responsible for any data loss or corruption that may occur during script execution.
 
