@@ -105,6 +105,23 @@ function Clear-ComObject {
     }
 }
 
+function Test-FileLocked {
+    param([string]$FilePath)
+
+    if (-not (Test-Path $FilePath)) {
+        return $false
+    }
+
+    try {
+        $fileStream = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $fileStream.Close()
+        $fileStream.Dispose()
+        return $false
+    } catch {
+        return $true
+    }
+}
+
 function Get-RiskScoreColor {
     param([double]$RiskScore)
 
@@ -889,6 +906,17 @@ function New-WordReport {
 
         # Save document
         Write-Log "Saving document to: $OutputPath"
+
+        # Delete existing file if present
+        if (Test-Path $OutputPath) {
+            try {
+                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Write-Log "Removed existing file: $OutputPath"
+            } catch {
+                throw "Cannot overwrite existing file '$OutputPath'. Please close it if it's open and try again."
+            }
+        }
+
         $doc.SaveAs([ref]$OutputPath, [ref]16)  # 16 = wdFormatDocumentDefault (.docx)
 
         Write-Log "Word document generated successfully" -Level Success
@@ -1245,6 +1273,17 @@ function New-ExcelReport {
 
         # --- 4. Save and Close ---
         Write-Log "Saving workbook to: $OutputPath" -Level Info
+
+        # Delete existing file if present
+        if (Test-Path $OutputPath) {
+            try {
+                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Write-Log "Removed existing file: $OutputPath" -Level Info
+            } catch {
+                throw "Cannot overwrite existing file '$OutputPath'. Please close it if it's open and try again."
+            }
+        }
+
         $workbook.SaveAs($OutputPath)
         $workbook.Close($false)
 
@@ -1457,6 +1496,34 @@ function Show-VScanMagicGUI {
         if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked) {
             [System.Windows.Forms.MessageBox]::Show("Please select at least one output option.", "Validation Error",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        # Check if output files are locked before starting
+        $baseFileName = [System.IO.Path]::GetFileNameWithoutExtension($textBoxInputFile.Text)
+        $lockedFiles = @()
+
+        if ($checkBoxWord.Checked) {
+            $wordOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Report.docx"
+            if (Test-FileLocked -FilePath $wordOutputPath) {
+                $lockedFiles += "Word Report: $wordOutputPath"
+            }
+        }
+
+        if ($checkBoxExcel.Checked) {
+            $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
+            if (Test-FileLocked -FilePath $excelOutputPath) {
+                $lockedFiles += "Excel Report: $excelOutputPath"
+            }
+        }
+
+        if ($lockedFiles.Count -gt 0) {
+            $lockedFilesList = $lockedFiles -join "`n"
+            [System.Windows.Forms.MessageBox]::Show(
+                "The following output file(s) are currently open or locked:`n`n$lockedFilesList`n`nPlease close these files and try again.",
+                "Files Are Locked",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
