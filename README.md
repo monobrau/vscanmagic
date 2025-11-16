@@ -1,8 +1,36 @@
-# VScanMagic v2
+# VScanMagic
 
-A PowerShell script that automates the processing of vulnerability report Excel files, performing data consolidation, formatting, and pivot table creation with conditional formatting.
+A PowerShell automation suite for processing vulnerability scan Excel files and generating professional security assessment reports.
 
-## Features
+## Versions
+
+- **VScanMagic v2** (`vscanmagicv2.ps1`) - Original command-line script for Excel processing
+- **VScanMagic v3 GUI** (`VScanMagic-GUI.ps1`) - Modern GUI application with Word report generation
+
+## VScanMagic v3 GUI Features
+
+The new GUI version offers enhanced functionality for vulnerability reporting:
+
+- **Graphical User Interface**: User-friendly Windows Forms interface
+- **Risk Score Calculation**: Automatic computation of composite risk scores using EPSS and CVSS data
+- **Word Report Generation**: Professional DOCX reports with:
+  - Executive summary with client name and scan date
+  - Scoring methodology documentation
+  - Color-coded Top 10 vulnerability table
+  - Risk score legend
+  - Detailed findings with remediation guidance
+- **Windows Version Consolidation**: Automatically groups Windows versions (Server 2012, Win 10, Win 11)
+- **Smart Filtering**: Excludes auto-updating browsers and duplicate entries
+- **Remediation Intelligence**: Context-aware guidance for different vulnerability types
+- **ConnectWise Automate Integration**: Recommendations aligned with CW Automate patch management
+
+### Color-Coded Risk Levels
+
+- **Red (Critical)**: Risk Score ≥ 7,500
+- **Orange (High)**: Risk Score ≥ 1,000
+- **Yellow (Medium)**: Risk Score > 0
+
+## VScanMagic v2 Features
 
 - **Automatic Formatting**: Auto-fits columns and rows for all worksheets (except specified exclusions)
 - **Data Consolidation**: Consolidates data from multiple "Remediation" sheets into a single "Source Data" sheet
@@ -14,20 +42,73 @@ A PowerShell script that automates the processing of vulnerability report Excel 
 
 ## Requirements
 
+### For VScanMagic v3 GUI
+- Windows PowerShell 5.1 or later
+- Microsoft Excel installed and properly registered
+- Microsoft Word installed (for DOCX report generation)
+- .NET Framework (included with Windows)
+- PowerShell execution policy that allows script execution
+
+### For VScanMagic v2
 - Windows PowerShell 5.1 or later
 - Microsoft Excel installed and properly registered
 - PowerShell execution policy that allows script execution
 
 ## Installation
 
-1. Clone this repository or download the `vscanmagicv2.ps1` file
-2. Ensure Microsoft Excel is installed on your system
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/monobrau/vscanmagic.git
+   cd vscanmagic
+   ```
+   Or download the scripts directly:
+   - `VScanMagic-GUI.ps1` (recommended for most users)
+   - `vscanmagicv2.ps1` (command-line version)
+
+2. Ensure Microsoft Excel and Word are installed on your system (for v3 GUI)
+
 3. If needed, adjust your PowerShell execution policy:
    ```powershell
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
 
 ## Usage
+
+### VScanMagic v3 GUI
+
+1. Run the GUI script:
+   ```powershell
+   .\VScanMagic-GUI.ps1
+   ```
+
+2. In the GUI window:
+   - **Browse** for your input XLSX vulnerability scan file (must contain "Source Data" sheet)
+   - Enter the **Client Name**
+   - Select the **Scan Date**
+   - Choose output options (Excel Report and/or Word Report)
+   - Select the **Output Directory**
+   - Click **Generate**
+
+3. The application will:
+   - Read and analyze vulnerability data
+   - Calculate composite risk scores
+   - Identify top 10 vulnerabilities
+   - Generate professional Word report with color-coded tables
+   - Provide detailed remediation guidance
+
+4. View the processing log in real-time within the GUI
+
+### Required Excel Structure
+
+Your input XLSX file must have a sheet named "Source Data" with these columns:
+- Host Name
+- IP
+- Product
+- Critical, High, Medium, Low (vulnerability counts)
+- Vulnerability Count
+- EPSS Score
+
+### VScanMagic v2 (Command Line)
 
 1. Run the script:
    ```powershell
