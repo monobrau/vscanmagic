@@ -703,15 +703,29 @@ function New-WordReport {
 
     Write-Log "Generating Word document report..."
 
+    # Validate configuration before starting
+    Write-Log "DEBUG: Validating RiskColors configuration..."
+    if (-not $script:Config) {
+        throw "FATAL: script:Config is null!"
+    }
+    if (-not $script:Config.RiskColors) {
+        throw "FATAL: script:Config.RiskColors is null!"
+    }
+    Write-Log "DEBUG: RiskColors keys: $($script:Config.RiskColors.Keys -join ', ')"
+    Write-Log "DEBUG: Critical threshold: $($script:Config.RiskColors.Critical.Threshold)"
+
     $word = $null
     $doc = $null
 
     try {
+        Write-Log "Creating Word application..."
         $word = New-Object -ComObject Word.Application
         $word.Visible = $false
+        Write-Log "Adding new document..."
         $doc = $word.Documents.Add()
 
         # Set document properties
+        Write-Log "Setting document properties..."
         $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
         $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
         $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
@@ -720,6 +734,7 @@ function New-WordReport {
         # Set page margins (in points: 1 inch = 72 points)
         # Default margins are usually 1 inch (72 points)
         # Setting to 0.5 inch (36 points) for left and right
+        Write-Log "Setting page margins..."
         $doc.PageSetup.LeftMargin = 36    # 0.5 inch
         $doc.PageSetup.RightMargin = 36   # 0.5 inch
         $doc.PageSetup.TopMargin = 72     # 1 inch
@@ -728,6 +743,7 @@ function New-WordReport {
         # --- Title Page ---
         Write-Log "Creating title page..."
         $selection = $word.Selection
+        Write-Log "Selection object created"
 
         # Add some top spacing for title page
         $selection.TypeParagraph()
@@ -852,9 +868,11 @@ function New-WordReport {
         $selection.TypeParagraph()
 
         # Validate RiskColors configuration
+        Write-Log "Validating RiskColors before legend table..."
         if (-not $script:Config.RiskColors) {
             throw "RiskColors configuration is null or not defined"
         }
+        Write-Log "DEBUG: About to access Critical.Name = $($script:Config.RiskColors.Critical.Name)"
 
         # Create legend table with heatmap gradient (7 levels)
         Write-Log "Adding legend table..."
@@ -862,12 +880,20 @@ function New-WordReport {
         if (-not $legendTable) {
             throw "Failed to create legend table"
         }
+        Write-Log "Legend table created successfully"
         $legendTable.Borders.Enable = $true
         $legendTable.Range.Font.Size = 10
 
         # Row 1: Critical
         Write-Log "Populating legend table - Critical"
-        $legendTable.Cell(1, 1).Range.Text = $script:Config.RiskColors.Critical.Name
+        try {
+            $criticalName = $script:Config.RiskColors.Critical.Name
+            Write-Log "DEBUG: Critical.Name retrieved: $criticalName"
+            $legendTable.Cell(1, 1).Range.Text = $criticalName
+        } catch {
+            Write-Log "ERROR: Failed to set Critical name: $($_.Exception.Message)"
+            throw
+        }
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.Color
         $legendTable.Cell(1, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.TextColor
         $legendTable.Cell(1, 1).Range.Font.Bold = $true
