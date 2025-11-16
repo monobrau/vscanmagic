@@ -100,13 +100,30 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 
 ### Required Excel Structure
 
-Your input XLSX file must have a sheet named "Source Data" with these columns:
-- Host Name
-- IP
-- Product
-- Critical, High, Medium, Low (vulnerability counts)
-- Vulnerability Count
-- EPSS Score
+**Flexible Column Detection:**
+VScanMagic v3 uses intelligent column mapping and can detect variations of common column names:
+
+**Minimum Required:**
+- **Product/Software** column (required) - Variations recognized:
+  - Product, Software, Application, App, Program, Title, Product Name, Software Name
+
+**Optional Columns** (with multiple name variations recognized):
+- **Host Name**: Host Name, Hostname, Computer, Computer Name, Device, System, Machine
+- **IP Address**: IP, IP Address, IPAddress, Address
+- **Critical**: Critical, Crit, Critical Count, Critical Vulnerabilities
+- **High**: High, High Count, High Vulnerabilities
+- **Medium**: Medium, Med, Medium Count, Medium Vulnerabilities
+- **Low**: Low, Low Count, Low Vulnerabilities
+- **Vulnerability Count**: Vulnerability Count, Vuln Count, Total Vulnerabilities, Total Vulns, Count
+- **EPSS Score**: EPSS Score, EPSS, Exploit Prediction Score, Max EPSS Score
+
+**Smart Features:**
+- Case-insensitive column matching
+- Partial column name matching
+- Automatic vulnerability count calculation if not provided (sums Critical + High + Medium + Low)
+- Handles missing columns gracefully (uses defaults)
+- Filters out rows with no product name or zero vulnerabilities
+- Sheet name selector (auto-detects "Source Data" or allows manual selection)
 
 ### VScanMagic v2 (Command Line)
 
