@@ -129,22 +129,42 @@ function Test-FileLocked {
 function Get-RiskScoreColor {
     param([double]$RiskScore)
 
+    # Validate RiskColors configuration exists
+    if (-not $script:Config.RiskColors) {
+        Write-Log "ERROR: RiskColors configuration is null!" -Level Error
+        return @{ Color = 'FFFF00'; TextColor = '000000'; Name = 'Unknown' }
+    }
+
     # Check heatmap levels from highest to lowest
     if ($RiskScore -ge $script:Config.RiskColors.Critical.Threshold) {
-        return $script:Config.RiskColors.Critical
+        $result = $script:Config.RiskColors.Critical
     } elseif ($RiskScore -ge $script:Config.RiskColors.VeryHigh.Threshold) {
-        return $script:Config.RiskColors.VeryHigh
+        $result = $script:Config.RiskColors.VeryHigh
     } elseif ($RiskScore -ge $script:Config.RiskColors.High.Threshold) {
-        return $script:Config.RiskColors.High
+        $result = $script:Config.RiskColors.High
     } elseif ($RiskScore -ge $script:Config.RiskColors.MediumHigh.Threshold) {
-        return $script:Config.RiskColors.MediumHigh
+        $result = $script:Config.RiskColors.MediumHigh
     } elseif ($RiskScore -ge $script:Config.RiskColors.Medium.Threshold) {
-        return $script:Config.RiskColors.Medium
+        $result = $script:Config.RiskColors.Medium
     } elseif ($RiskScore -ge $script:Config.RiskColors.Low.Threshold) {
-        return $script:Config.RiskColors.Low
+        $result = $script:Config.RiskColors.Low
     } else {
-        return $script:Config.RiskColors.VeryLow
+        $result = $script:Config.RiskColors.VeryLow
     }
+
+    # Validate the result has required properties
+    if (-not $result) {
+        Write-Log "ERROR: Get-RiskScoreColor returned null for score $RiskScore" -Level Error
+        return @{ Color = 'FFFF00'; TextColor = '000000'; Name = 'Unknown' }
+    }
+
+    if (-not $result.Color -or -not $result.TextColor) {
+        Write-Log "ERROR: Color object missing properties. Color=$($result.Color), TextColor=$($result.TextColor)" -Level Error
+        if (-not $result.Color) { $result.Color = 'FFFF00' }
+        if (-not $result.TextColor) { $result.TextColor = '000000' }
+    }
+
+    return $result
 }
 
 function ConvertTo-HexColor {
@@ -931,6 +951,20 @@ function New-WordReport {
 
             # Apply color coding based on risk score
             $colorInfo = Get-RiskScoreColor -RiskScore $item.RiskScore
+            if (-not $colorInfo) {
+                Write-Log "Warning: Get-RiskScoreColor returned null for score $($item.RiskScore)" -Level Warning
+                # Use default color (yellow/black)
+                $colorInfo = @{ Color = 'FFFF00'; TextColor = '000000' }
+            }
+            if (-not $colorInfo.Color) {
+                Write-Log "Warning: colorInfo.Color is null for score $($item.RiskScore)" -Level Warning
+                $colorInfo.Color = 'FFFF00'
+            }
+            if (-not $colorInfo.TextColor) {
+                Write-Log "Warning: colorInfo.TextColor is null for score $($item.RiskScore)" -Level Warning
+                $colorInfo.TextColor = '000000'
+            }
+
             $bgColor = ConvertTo-HexColor -HexColor $colorInfo.Color
             $textColor = ConvertTo-HexColor -HexColor $colorInfo.TextColor
 
