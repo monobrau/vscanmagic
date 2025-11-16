@@ -37,14 +37,14 @@ $script:Config = @{
     }
 
     # Heatmap Color Thresholds for Risk Scores (Low to High gradient)
-    RiskColors = @{
-        Critical = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }  # Crimson Red
-        VeryHigh = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }  # Orange Red
-        High = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }  # Dark Orange
-        MediumHigh = @{ Threshold = 500; Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }  # Orange
-        Medium = @{ Threshold = 100; Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }  # Yellow
-        Low = @{ Threshold = 10; Color = 'ADFF2F'; Name = 'Low'; TextColor = '000000' }  # Green Yellow
-        VeryLow = @{ Threshold = 0; Color = '90EE90'; Name = 'Very Low'; TextColor = '000000' }  # Light Green
+    RiskColors = [ordered]@{
+        Critical   = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }
+        VeryHigh   = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }
+        High       = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }
+        MediumHigh = @{ Threshold = 500;  Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }
+        Medium     = @{ Threshold = 100;  Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }
+        Low        = @{ Threshold = 10;   Color = 'ADFF2F'; Name = 'Low'; TextColor = '000000' }
+        VeryLow    = @{ Threshold = 0;    Color = '90EE90'; Name = 'Very Low'; TextColor = '000000' }
     }
 
     # Products to Filter Out
@@ -819,12 +819,22 @@ function New-WordReport {
         $selection.Style = "Normal"
         $selection.TypeParagraph()
 
+        # Validate RiskColors configuration
+        if (-not $script:Config.RiskColors) {
+            throw "RiskColors configuration is null or not defined"
+        }
+
         # Create legend table with heatmap gradient (7 levels)
+        Write-Log "Adding legend table..."
         $legendTable = $doc.Tables.Add($selection.Range, 7, 2)
+        if (-not $legendTable) {
+            throw "Failed to create legend table"
+        }
         $legendTable.Borders.Enable = $true
         $legendTable.Range.Font.Size = 10
 
         # Row 1: Critical
+        Write-Log "Populating legend table - Critical"
         $legendTable.Cell(1, 1).Range.Text = $script:Config.RiskColors.Critical.Name
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.Color
         $legendTable.Cell(1, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.TextColor
