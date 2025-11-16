@@ -296,90 +296,108 @@ function Read-SheetData {
         [hashtable]$ColumnIndices
     )
 
-    $data = @()
     $usedRange = $Worksheet.UsedRange
     $rowCount = $usedRange.Rows.Count
 
     if ($rowCount -le 1) {
-        return $data
+        return @()
     }
 
-    # Read data rows with flexible parsing
+    Write-Log "  Reading $rowCount rows into memory (bulk read)..."
+
+    # PERFORMANCE OPTIMIZATION: Read entire range into memory with single COM call
+    # This is 10-100x faster than reading cells individually
+    $rangeValues = $usedRange.Value2
+
+    if ($null -eq $rangeValues) {
+        return @()
+    }
+
+    Write-Log "  Processing data in memory..."
+
+    # Use ArrayList for better performance than array append
+    $data = [System.Collections.ArrayList]::new()
+
+    # Process rows in memory (no COM calls)
     for ($row = 2; $row -le $rowCount; $row++) {
         # Show progress for large datasets
-        if ($row % 100 -eq 0) {
-            Write-Log "  Processing row $row of $rowCount..."
+        if ($row % 500 -eq 0) {
+            Write-Log "  Processed $row of $rowCount rows..."
         }
 
-        $rowData = @{
-            'Host Name' = ''
-            'IP' = ''
-            'Product' = ''
-            'Critical' = 0
-            'High' = 0
-            'Medium' = 0
-            'Low' = 0
-            'Vulnerability Count' = 0
-            'EPSS Score' = 0.0
-        }
-
-        # Read HostName
-        if ($columnIndices.ContainsKey('HostName')) {
-            $rowData['Host Name'] = $Worksheet.Cells.Item($row, $columnIndices['HostName']).Text
-        }
-
-        # Read IP
-        if ($columnIndices.ContainsKey('IP')) {
-            $rowData['IP'] = $Worksheet.Cells.Item($row, $columnIndices['IP']).Text
-        }
-
-        # Read Product (required)
+        # Get values from 2D array (row, column) - fast, no COM calls
+        $product = ''
         if ($columnIndices.ContainsKey('Product')) {
-            $rowData['Product'] = $Worksheet.Cells.Item($row, $columnIndices['Product']).Text
+            $product = [string]$rangeValues[$row, $columnIndices['Product']]
         }
 
         # Skip rows with no product name
-        if ([string]::IsNullOrWhiteSpace($rowData['Product'])) {
+        if ([string]::IsNullOrWhiteSpace($product)) {
             continue
         }
 
-        # Read severity counts
+        # Build row data from in-memory array
+        $hostName = ''
+        if ($columnIndices.ContainsKey('HostName')) {
+            $hostName = [string]$rangeValues[$row, $columnIndices['HostName']]
+        }
+
+        $ip = ''
+        if ($columnIndices.ContainsKey('IP')) {
+            $ip = [string]$rangeValues[$row, $columnIndices['IP']]
+        }
+
+        $critical = 0
         if ($columnIndices.ContainsKey('Critical')) {
-            $rowData['Critical'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Critical']).Text
+            $critical = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['Critical']])
         }
 
+        $high = 0
         if ($columnIndices.ContainsKey('High')) {
-            $rowData['High'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['High']).Text
+            $high = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['High']])
         }
 
+        $medium = 0
         if ($columnIndices.ContainsKey('Medium')) {
-            $rowData['Medium'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Medium']).Text
+            $medium = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['Medium']])
         }
 
+        $low = 0
         if ($columnIndices.ContainsKey('Low')) {
-            $rowData['Low'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['Low']).Text
+            $low = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['Low']])
         }
 
-        # Read Vulnerability Count
+        $vulnCount = 0
         if ($columnIndices.ContainsKey('VulnCount')) {
-            $rowData['Vulnerability Count'] = Get-SafeNumericValue -Value $Worksheet.Cells.Item($row, $columnIndices['VulnCount']).Text
+            $vulnCount = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['VulnCount']])
         } else {
             # Calculate from severity counts if not provided
-            $rowData['Vulnerability Count'] = $rowData['Critical'] + $rowData['High'] + $rowData['Medium'] + $rowData['Low']
+            $vulnCount = $critical + $high + $medium + $low
         }
 
-        # Read EPSS Score
+        $epssScore = 0.0
         if ($columnIndices.ContainsKey('EPSS')) {
-            $rowData['EPSS Score'] = Get-SafeDoubleValue -Value $Worksheet.Cells.Item($row, $columnIndices['EPSS']).Text
+            $epssScore = Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $columnIndices['EPSS']])
         }
 
         # Only add rows that have at least one vulnerability
-        if ($rowData['Vulnerability Count'] -gt 0) {
-            $data += [PSCustomObject]$rowData
+        if ($vulnCount -gt 0) {
+            $null = $data.Add([PSCustomObject]@{
+                'Host Name' = $hostName
+                'IP' = $ip
+                'Product' = $product
+                'Critical' = $critical
+                'High' = $high
+                'Medium' = $medium
+                'Low' = $low
+                'Vulnerability Count' = $vulnCount
+                'EPSS Score' = $epssScore
+            })
         }
     }
 
-    return $data
+    Write-Log "  Completed processing $($data.Count) vulnerability records"
+    return $data.ToArray()
 }
 
 function Get-VulnerabilityData {
