@@ -36,11 +36,15 @@ $script:Config = @{
         Low = 3.0
     }
 
-    # Color Thresholds for Risk Scores
+    # Heatmap Color Thresholds for Risk Scores (Low to High gradient)
     RiskColors = @{
-        Critical = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Crimson'; TextColor = 'FFFFFF' }
-        High = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'Dark Orange'; TextColor = 'FFFFFF' }
-        Medium = @{ Threshold = 0; Color = 'FFFF00'; Name = 'Yellow'; TextColor = '000000' }
+        Critical = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }  # Crimson Red
+        VeryHigh = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }  # Orange Red
+        High = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }  # Dark Orange
+        MediumHigh = @{ Threshold = 500; Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }  # Orange
+        Medium = @{ Threshold = 100; Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }  # Yellow
+        Low = @{ Threshold = 10; Color = 'ADFF2F'; Name = 'Low'; TextColor = '000000' }  # Green Yellow
+        VeryLow = @{ Threshold = 0; Color = '90EE90'; Name = 'Very Low'; TextColor = '000000' }  # Light Green
     }
 
     # Products to Filter Out
@@ -125,12 +129,21 @@ function Test-FileLocked {
 function Get-RiskScoreColor {
     param([double]$RiskScore)
 
+    # Check heatmap levels from highest to lowest
     if ($RiskScore -ge $script:Config.RiskColors.Critical.Threshold) {
         return $script:Config.RiskColors.Critical
+    } elseif ($RiskScore -ge $script:Config.RiskColors.VeryHigh.Threshold) {
+        return $script:Config.RiskColors.VeryHigh
     } elseif ($RiskScore -ge $script:Config.RiskColors.High.Threshold) {
         return $script:Config.RiskColors.High
-    } else {
+    } elseif ($RiskScore -ge $script:Config.RiskColors.MediumHigh.Threshold) {
+        return $script:Config.RiskColors.MediumHigh
+    } elseif ($RiskScore -ge $script:Config.RiskColors.Medium.Threshold) {
         return $script:Config.RiskColors.Medium
+    } elseif ($RiskScore -ge $script:Config.RiskColors.Low.Threshold) {
+        return $script:Config.RiskColors.Low
+    } else {
+        return $script:Config.RiskColors.VeryLow
     }
 }
 
@@ -806,28 +819,59 @@ function New-WordReport {
         $selection.Style = "Normal"
         $selection.TypeParagraph()
 
-        # Create legend table
-        $legendTable = $doc.Tables.Add($selection.Range, 3, 2)
+        # Create legend table with heatmap gradient (7 levels)
+        $legendTable = $doc.Tables.Add($selection.Range, 7, 2)
         $legendTable.Borders.Enable = $true
         $legendTable.Range.Font.Size = 10
 
-        $legendTable.Cell(1, 1).Range.Text = "Critical"
+        # Row 1: Critical
+        $legendTable.Cell(1, 1).Range.Text = $script:Config.RiskColors.Critical.Name
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.Color
         $legendTable.Cell(1, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.TextColor
         $legendTable.Cell(1, 1).Range.Font.Bold = $true
         $legendTable.Cell(1, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.Critical.Threshold)"
 
-        $legendTable.Cell(2, 1).Range.Text = "High"
-        $legendTable.Cell(2, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.Color
-        $legendTable.Cell(2, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.TextColor
+        # Row 2: Very High
+        $legendTable.Cell(2, 1).Range.Text = $script:Config.RiskColors.VeryHigh.Name
+        $legendTable.Cell(2, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.VeryHigh.Color
+        $legendTable.Cell(2, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.VeryHigh.TextColor
         $legendTable.Cell(2, 1).Range.Font.Bold = $true
-        $legendTable.Cell(2, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.High.Threshold)"
+        $legendTable.Cell(2, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.VeryHigh.Threshold)"
 
-        $legendTable.Cell(3, 1).Range.Text = "Medium"
-        $legendTable.Cell(3, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.Color
-        $legendTable.Cell(3, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.TextColor
+        # Row 3: High
+        $legendTable.Cell(3, 1).Range.Text = $script:Config.RiskColors.High.Name
+        $legendTable.Cell(3, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.Color
+        $legendTable.Cell(3, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.High.TextColor
         $legendTable.Cell(3, 1).Range.Font.Bold = $true
-        $legendTable.Cell(3, 2).Range.Text = "Risk Score > $($script:Config.RiskColors.Medium.Threshold)"
+        $legendTable.Cell(3, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.High.Threshold)"
+
+        # Row 4: Medium-High
+        $legendTable.Cell(4, 1).Range.Text = $script:Config.RiskColors.MediumHigh.Name
+        $legendTable.Cell(4, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.MediumHigh.Color
+        $legendTable.Cell(4, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.MediumHigh.TextColor
+        $legendTable.Cell(4, 1).Range.Font.Bold = $true
+        $legendTable.Cell(4, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.MediumHigh.Threshold)"
+
+        # Row 5: Medium
+        $legendTable.Cell(5, 1).Range.Text = $script:Config.RiskColors.Medium.Name
+        $legendTable.Cell(5, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.Color
+        $legendTable.Cell(5, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Medium.TextColor
+        $legendTable.Cell(5, 1).Range.Font.Bold = $true
+        $legendTable.Cell(5, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.Medium.Threshold)"
+
+        # Row 6: Low
+        $legendTable.Cell(6, 1).Range.Text = $script:Config.RiskColors.Low.Name
+        $legendTable.Cell(6, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Low.Color
+        $legendTable.Cell(6, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Low.TextColor
+        $legendTable.Cell(6, 1).Range.Font.Bold = $true
+        $legendTable.Cell(6, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.Low.Threshold)"
+
+        # Row 7: Very Low
+        $legendTable.Cell(7, 1).Range.Text = $script:Config.RiskColors.VeryLow.Name
+        $legendTable.Cell(7, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.VeryLow.Color
+        $legendTable.Cell(7, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $script:Config.RiskColors.VeryLow.TextColor
+        $legendTable.Cell(7, 1).Range.Font.Bold = $true
+        $legendTable.Cell(7, 2).Range.Text = "Risk Score >= $($script:Config.RiskColors.VeryLow.Threshold)"
 
         # AutoFit the legend table
         $legendTable.AutoFitBehavior(1)  # 1 = wdAutoFitContent (fit to content)
