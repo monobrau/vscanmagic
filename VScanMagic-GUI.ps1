@@ -1276,10 +1276,14 @@ function New-ExcelReport {
 # --- GUI Functions ---
 
 function Show-VScanMagicGUI {
+    # Initialize script-level variables for output file paths
+    $script:WordReportPath = $null
+    $script:ExcelReportPath = $null
+
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 610)
+    $form.Size = New-Object System.Drawing.Size(700, 620)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -1308,6 +1312,10 @@ function Show-VScanMagicGUI {
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $textBoxInputFile.Text = $openFileDialog.FileName
+
+            # Automatically set output directory to input file's directory
+            $inputDirectory = [System.IO.Path]::GetDirectoryName($openFileDialog.FileName)
+            $textBoxOutputDir.Text = $inputDirectory
         }
     })
     $form.Controls.Add($buttonBrowseInput)
@@ -1395,16 +1403,41 @@ function Show-VScanMagicGUI {
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
     $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 330)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 180)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 160)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
     $script:LogTextBox.Font = New-Object System.Drawing.Font("Consolas", 9)
     $form.Controls.Add($script:LogTextBox)
 
+    # --- Open Report Buttons ---
+    $script:buttonOpenWord = New-Object System.Windows.Forms.Button
+    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 500)
+    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenWord.Text = "Open Word Report"
+    $script:buttonOpenWord.Enabled = $false
+    $script:buttonOpenWord.Add_Click({
+        if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
+            Start-Process $script:WordReportPath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenWord)
+
+    $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(180, 500)
+    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenExcel.Text = "Open Excel Report"
+    $script:buttonOpenExcel.Enabled = $false
+    $script:buttonOpenExcel.Add_Click({
+        if ($script:ExcelReportPath -and (Test-Path $script:ExcelReportPath)) {
+            Start-Process $script:ExcelReportPath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenExcel)
+
     # --- Action Buttons ---
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 525)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 535)
     $buttonGenerate.Size = New-Object System.Drawing.Size(100, 30)
     $buttonGenerate.Text = "Generate"
     $buttonGenerate.Add_Click({
@@ -1431,6 +1464,10 @@ function Show-VScanMagicGUI {
         $buttonGenerate.Enabled = $false
         $script:LogTextBox.Clear()
 
+        # Disable open buttons at start
+        $script:buttonOpenWord.Enabled = $false
+        $script:buttonOpenExcel.Enabled = $false
+
         try {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
             Write-Log "Input File: $($textBoxInputFile.Text)"
@@ -1453,6 +1490,10 @@ function Show-VScanMagicGUI {
                               -ScanDate $datePickerScanDate.Value.ToShortDateString() `
                               -Top10Data $top10
 
+                # Store path and enable open button
+                $script:WordReportPath = $wordOutputPath
+                $script:buttonOpenWord.Enabled = $true
+
                 Write-Log "Word report saved to: $wordOutputPath" -Level Success
             }
 
@@ -1462,6 +1503,10 @@ function Show-VScanMagicGUI {
                 $excelOutputPath = Join-Path $textBoxOutputDir.Text "$baseFileName`_Processed.xlsx"
 
                 New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
+
+                # Store path and enable open button
+                $script:ExcelReportPath = $excelOutputPath
+                $script:buttonOpenExcel.Enabled = $true
 
                 Write-Log "Excel report saved to: $excelOutputPath" -Level Success
             }
@@ -1482,7 +1527,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(560, 525)
+    $buttonClose.Location = New-Object System.Drawing.Point(560, 535)
     $buttonClose.Size = New-Object System.Drawing.Size(90, 30)
     $buttonClose.Text = "Close"
     $buttonClose.Add_Click({ $form.Close() })
