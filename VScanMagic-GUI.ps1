@@ -666,6 +666,14 @@ function New-WordReport {
         $word.Visible = $false
         $doc = $word.Documents.Add()
 
+        # Set page margins (in points: 1 inch = 72 points)
+        # Default margins are usually 1 inch (72 points)
+        # Setting to 0.5 inch (36 points) for left and right
+        $doc.PageSetup.LeftMargin = 36    # 0.5 inch
+        $doc.PageSetup.RightMargin = 36   # 0.5 inch
+        $doc.PageSetup.TopMargin = 72     # 1 inch
+        $doc.PageSetup.BottomMargin = 72  # 1 inch
+
         # --- Title Page ---
         Write-Log "Creating title page..."
         $selection = $word.Selection
@@ -759,6 +767,7 @@ function New-WordReport {
         # Create legend table
         $legendTable = $doc.Tables.Add($selection.Range, 3, 2)
         $legendTable.Borders.Enable = $true
+        $legendTable.Range.Font.Size = 10
 
         $legendTable.Cell(1, 1).Range.Text = "Critical"
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $script:Config.RiskColors.Critical.Color
@@ -791,6 +800,9 @@ function New-WordReport {
         $table = $doc.Tables.Add($selection.Range, ($Top10Data.Count + 1), 7)
         $table.Borders.Enable = $true
         $table.Style = "Grid Table 4 - Accent 1"
+
+        # Set table font size to 9 points for better fit
+        $table.Range.Font.Size = 9
 
         # Headers
         $headers = @("Rank", "Product/System", "Risk Score", "EPSS", "Avg CVSS", "Total Vulns", "Affected Systems")
