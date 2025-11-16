@@ -19,6 +19,12 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
   - Color-coded Top 10 vulnerability table
   - Risk score legend
   - Detailed findings with remediation guidance
+- **Excel Report Generation**: Processed XLSX files with:
+  - Auto-fitted columns and rows
+  - Consolidated "Source Data" sheet from all remediation sheets
+  - Pivot table with vulnerability analysis
+  - Conditional formatting for high-risk items (EPSS > 0.075)
+  - Color-coded remediation status key
 - **Windows Version Consolidation**: Automatically groups Windows versions (Server 2012, Win 10, Win 11)
 - **Smart Filtering**: Excludes auto-updating browsers and duplicate entries
 - **Remediation Intelligence**: Context-aware guidance for different vulnerability types
@@ -95,7 +101,8 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    - Read and analyze vulnerability data
    - Calculate composite risk scores
    - Identify top 10 vulnerabilities
-   - Generate professional Word report with color-coded tables
+   - Generate professional Word report with color-coded tables and detailed remediation guidance (if selected)
+   - Generate processed Excel file with pivot tables and conditional formatting (if selected)
    - Provide detailed remediation guidance
 
 4. View the processing log in real-time within the GUI
