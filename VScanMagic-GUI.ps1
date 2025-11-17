@@ -1148,34 +1148,18 @@ function New-WordReport {
             $lastRow = $row - 1
             Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow, sorted by vulnerability count descending)"
 
-            # Update the existing series (don't delete/recreate - keep it simple)
+            # Update the existing series with direct range assignment
             try {
                 $series = $chart.SeriesCollection(1)
-
-                # Build the worksheet name for the formula
                 $sheetName = $worksheet.Name
 
-                # Set series formula to explicitly reference all 10 data points
-                # Formula format: =SERIES(name, xvalues, yvalues, plotorder)
-                $seriesFormula = "=SERIES(""Vulnerabilities"",'$sheetName'!`$A`$2:`$A`$$lastRow,'$sheetName'!`$B`$2:`$B`$$lastRow,1)"
-                $series.Formula = $seriesFormula
+                # Use direct XValues/Values assignment (most reliable for embedded Word charts)
+                $series.XValues = "='$sheetName'!`$A`$2:`$A`$$lastRow"
+                $series.Values = "='$sheetName'!`$B`$2:`$B`$$lastRow"
                 $series.HasDataLabels = $false
-
-                Write-Log "Series formula set to: $seriesFormula"
-                Write-Log "Chart configured with all $($lastRow - 1) items"
+                Write-Log "Chart series configured with all $($lastRow - 1) items"
             } catch {
-                Write-Log "Error setting series formula: $($_.Exception.Message)" -Level Warning
-                # Try direct property assignment as fallback
-                try {
-                    Write-Log "Attempting fallback: direct XValues/Values assignment" -Level Warning
-                    $series = $chart.SeriesCollection(1)
-                    $series.XValues = "='$sheetName'!`$A`$2:`$A`$$lastRow"
-                    $series.Values = "='$sheetName'!`$B`$2:`$B`$$lastRow"
-                    $series.HasDataLabels = $false
-                    Write-Log "Fallback succeeded with direct assignment"
-                } catch {
-                    Write-Log "Fallback also failed: $($_.Exception.Message)" -Level Warning
-                }
+                Write-Log "Warning: Could not update chart series: $($_.Exception.Message)" -Level Warning
             }
 
             # Basic chart formatting
