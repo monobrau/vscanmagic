@@ -36,15 +36,14 @@ $script:Config = @{
         Low = 3.0
     }
 
-    # Heatmap Color Thresholds for Risk Scores (Low to High gradient)
+    # Heatmap Color Thresholds for Risk Scores (Yellow to Red gradient - no greens)
+    # Starts at yellow to emphasize all Top 10 items need attention
     RiskColors = [ordered]@{
-        Critical   = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }
-        VeryHigh   = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }
-        High       = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }
-        MediumHigh = @{ Threshold = 500;  Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }
-        Medium     = @{ Threshold = 100;  Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }
-        Low        = @{ Threshold = 10;   Color = 'ADFF2F'; Name = 'Low'; TextColor = '000000' }
-        VeryLow    = @{ Threshold = 0;    Color = '90EE90'; Name = 'Very Low'; TextColor = '000000' }
+        Critical   = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }      # Crimson red
+        VeryHigh   = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }     # Orange-red
+        High       = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }          # Dark orange
+        MediumHigh = @{ Threshold = 500;  Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }   # Orange
+        Medium     = @{ Threshold = 0;    Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }        # Yellow (baseline)
     }
 
     # Products to Filter Out
@@ -162,12 +161,9 @@ function Get-RiskScoreColor {
         $result = $thresholds.High
     } elseif ($RiskScore -ge $thresholds.MediumHigh.Threshold) {
         $result = $thresholds.MediumHigh
-    } elseif ($RiskScore -ge $thresholds.Medium.Threshold) {
-        $result = $thresholds.Medium
-    } elseif ($RiskScore -ge $thresholds.Low.Threshold) {
-        $result = $thresholds.Low
     } else {
-        $result = $thresholds.VeryLow
+        # Everything else is Medium (yellow) - all Top 10 items need attention
+        $result = $thresholds.Medium
     }
 
     # Validate the result has required properties
@@ -735,14 +731,13 @@ function New-WordReport {
     Write-Log "Maximum risk score in data: $($maxRiskScore.ToString('N2'))"
 
     # Create proportional thresholds (as percentages of max score)
+    # Yellow to Red gradient - no greens to emphasize all items need attention
     $dynamicThresholds = @{
         Critical   = @{ Threshold = $maxRiskScore * 1.00; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF'; Percent = '100%' }
-        VeryHigh   = @{ Threshold = $maxRiskScore * 0.60; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF'; Percent = '60%' }
-        High       = @{ Threshold = $maxRiskScore * 0.40; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF'; Percent = '40%' }
-        MediumHigh = @{ Threshold = $maxRiskScore * 0.25; Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000'; Percent = '25%' }
-        Medium     = @{ Threshold = $maxRiskScore * 0.15; Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000'; Percent = '15%' }
-        Low        = @{ Threshold = $maxRiskScore * 0.05; Color = 'ADFF2F'; Name = 'Low'; TextColor = '000000'; Percent = '5%' }
-        VeryLow    = @{ Threshold = 0;                    Color = '90EE90'; Name = 'Very Low'; TextColor = '000000'; Percent = '0%' }
+        VeryHigh   = @{ Threshold = $maxRiskScore * 0.70; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF'; Percent = '70%' }
+        High       = @{ Threshold = $maxRiskScore * 0.50; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF'; Percent = '50%' }
+        MediumHigh = @{ Threshold = $maxRiskScore * 0.30; Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000'; Percent = '30%' }
+        Medium     = @{ Threshold = 0;                    Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000'; Percent = '0%' }
     }
     Write-Log "Dynamic thresholds created based on max score"
 
@@ -906,9 +901,9 @@ function New-WordReport {
             throw "RiskColors configuration is null or not defined"
         }
 
-        # Create legend table with heatmap gradient (7 levels)
+        # Create legend table with heatmap gradient (5 levels: Yellow to Red)
         Write-Log "Adding legend table..."
-        $legendTable = $doc.Tables.Add($selection.Range, 7, 2)
+        $legendTable = $doc.Tables.Add($selection.Range, 5, 2)
         if (-not $legendTable) {
             throw "Failed to create legend table"
         }
@@ -916,7 +911,7 @@ function New-WordReport {
         $legendTable.Borders.Enable = $true
         $legendTable.Range.Font.Size = 10
 
-        # Row 1: Critical
+        # Row 1: Critical (Red)
         Write-Log "Populating legend table with dynamic thresholds"
         $legendTable.Cell(1, 1).Range.Text = $dynamicThresholds.Critical.Name
         $legendTable.Cell(1, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.Critical.Color
@@ -924,47 +919,33 @@ function New-WordReport {
         $legendTable.Cell(1, 1).Range.Font.Bold = $true
         $legendTable.Cell(1, 2).Range.Text = "Risk Score >= $($dynamicThresholds.Critical.Threshold.ToString('N2')) ($($dynamicThresholds.Critical.Percent) of max)"
 
-        # Row 2: Very High
+        # Row 2: Very High (Orange-Red)
         $legendTable.Cell(2, 1).Range.Text = $dynamicThresholds.VeryHigh.Name
         $legendTable.Cell(2, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.VeryHigh.Color
         $legendTable.Cell(2, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.VeryHigh.TextColor
         $legendTable.Cell(2, 1).Range.Font.Bold = $true
         $legendTable.Cell(2, 2).Range.Text = "Risk Score >= $($dynamicThresholds.VeryHigh.Threshold.ToString('N2')) ($($dynamicThresholds.VeryHigh.Percent) of max)"
 
-        # Row 3: High
+        # Row 3: High (Dark Orange)
         $legendTable.Cell(3, 1).Range.Text = $dynamicThresholds.High.Name
         $legendTable.Cell(3, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.High.Color
         $legendTable.Cell(3, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.High.TextColor
         $legendTable.Cell(3, 1).Range.Font.Bold = $true
         $legendTable.Cell(3, 2).Range.Text = "Risk Score >= $($dynamicThresholds.High.Threshold.ToString('N2')) ($($dynamicThresholds.High.Percent) of max)"
 
-        # Row 4: Medium-High
+        # Row 4: Medium-High (Orange)
         $legendTable.Cell(4, 1).Range.Text = $dynamicThresholds.MediumHigh.Name
         $legendTable.Cell(4, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.MediumHigh.Color
         $legendTable.Cell(4, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.MediumHigh.TextColor
         $legendTable.Cell(4, 1).Range.Font.Bold = $true
         $legendTable.Cell(4, 2).Range.Text = "Risk Score >= $($dynamicThresholds.MediumHigh.Threshold.ToString('N2')) ($($dynamicThresholds.MediumHigh.Percent) of max)"
 
-        # Row 5: Medium
+        # Row 5: Medium (Yellow - baseline)
         $legendTable.Cell(5, 1).Range.Text = $dynamicThresholds.Medium.Name
         $legendTable.Cell(5, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.Medium.Color
         $legendTable.Cell(5, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.Medium.TextColor
         $legendTable.Cell(5, 1).Range.Font.Bold = $true
         $legendTable.Cell(5, 2).Range.Text = "Risk Score >= $($dynamicThresholds.Medium.Threshold.ToString('N2')) ($($dynamicThresholds.Medium.Percent) of max)"
-
-        # Row 6: Low
-        $legendTable.Cell(6, 1).Range.Text = $dynamicThresholds.Low.Name
-        $legendTable.Cell(6, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.Low.Color
-        $legendTable.Cell(6, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.Low.TextColor
-        $legendTable.Cell(6, 1).Range.Font.Bold = $true
-        $legendTable.Cell(6, 2).Range.Text = "Risk Score >= $($dynamicThresholds.Low.Threshold.ToString('N2')) ($($dynamicThresholds.Low.Percent) of max)"
-
-        # Row 7: Very Low
-        $legendTable.Cell(7, 1).Range.Text = $dynamicThresholds.VeryLow.Name
-        $legendTable.Cell(7, 1).Shading.BackgroundPatternColor = ConvertTo-HexColor -HexColor $dynamicThresholds.VeryLow.Color
-        $legendTable.Cell(7, 1).Range.Font.Color = ConvertTo-HexColor -HexColor $dynamicThresholds.VeryLow.TextColor
-        $legendTable.Cell(7, 1).Range.Font.Bold = $true
-        $legendTable.Cell(7, 2).Range.Text = "Risk Score >= $($dynamicThresholds.VeryLow.Threshold.ToString('N2')) ($($dynamicThresholds.VeryLow.Percent) of max)"
 
         # AutoFit the legend table
         $legendTable.AutoFitBehavior(1)  # 1 = wdAutoFitContent (fit to content)
@@ -1071,7 +1052,11 @@ function New-WordReport {
             Write-Log "Adding chart object..."
             $chartShape = $selection.InlineShapes.AddChart(5)  # 5 = xlPie
             $chart = $chartShape.Chart
-            Write-Log "Chart object created"
+
+            # Make chart twice as wide for better visibility
+            $currentWidth = $chartShape.Width
+            $chartShape.Width = $currentWidth * 2
+            Write-Log "Chart object created (width doubled to $($chartShape.Width) points)"
 
             # Access chart data without calling Activate() to avoid COM disconnection
             $chartData = $chart.ChartData
