@@ -1053,10 +1053,11 @@ function New-WordReport {
             $chartShape = $selection.InlineShapes.AddChart(5)  # 5 = xlPie
             $chart = $chartShape.Chart
 
-            # Make chart twice as wide for better visibility
-            $currentWidth = $chartShape.Width
-            $chartShape.Width = $currentWidth * 2
-            Write-Log "Chart object created (width doubled to $($chartShape.Width) points)"
+            # Make pie chart area twice as large, with legend below
+            # Set appropriate dimensions for larger pie with room for legend below
+            $chartShape.Width = 432  # 6 inches (72 points per inch)
+            $chartShape.Height = 360  # 5 inches (extra height for legend below)
+            Write-Log "Chart dimensions set: $($chartShape.Width)w x $($chartShape.Height)h points"
 
             # Access chart data without calling Activate() to avoid COM disconnection
             $chartData = $chart.ChartData
@@ -1102,8 +1103,8 @@ function New-WordReport {
             $chart.HasTitle = $true
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
-            $chart.Legend.Position = -4107  # xlLegendPositionRight
-            Write-Log "Chart formatting applied"
+            $chart.Legend.Position = -4107  # xlLegendPositionBottom - legend below pie
+            Write-Log "Chart formatting applied (legend positioned below pie)"
 
             # Remove data labels to avoid overlapping numbers - legend shows the info
             try {
