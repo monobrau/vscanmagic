@@ -1153,20 +1153,33 @@ function New-WordReport {
             $lastRow = $row - 1
             Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow)"
 
-            # Update chart series data range FIRST before other formatting
+            # Delete existing series and create new one with correct range
             try {
-                # Set the source data range for the entire chart
-                $dataRange = $worksheet.Range("A1:B$lastRow")
-                $chart.SetSourceData($dataRange)
-                Write-Log "Chart source data set to A1:B$lastRow"
+                # Remove all existing series (default chart has 1 series with limited data)
+                while ($chart.SeriesCollection().Count -gt 0) {
+                    $chart.SeriesCollection(1).Delete()
+                }
+                Write-Log "Deleted existing chart series"
 
-                # Ensure data labels are off
-                $series = $chart.SeriesCollection(1)
-                $series.HasDataLabels = $false
-                Write-Log "Chart configured with all $($lastRow - 1) items"
+                # Create new series with all 10 data points
+                $newSeries = $chart.SeriesCollection().NewSeries()
+                $newSeries.Name = "Vulnerabilities"
+                $newSeries.XValues = $worksheet.Range("A2:A$lastRow")
+                $newSeries.Values = $worksheet.Range("B2:B$lastRow")
+                $newSeries.HasDataLabels = $false
+                Write-Log "Created new series with data range A2:A$lastRow (categories) and B2:B$lastRow (values)"
+                Write-Log "Chart now configured with all $($lastRow - 1) items"
             } catch {
-                Write-Log "Warning: Could not update chart data range: $($_.Exception.Message)" -Level Warning
-                # Chart may show fewer items than expected
+                Write-Log "Error creating chart series: $($_.Exception.Message)" -Level Error
+                # Try fallback approach
+                try {
+                    Write-Log "Attempting fallback: SetSourceData method" -Level Warning
+                    $dataRange = $worksheet.Range("A1:B$lastRow")
+                    $chart.SetSourceData($dataRange)
+                    $chart.SeriesCollection(1).HasDataLabels = $false
+                } catch {
+                    Write-Log "Fallback also failed: $($_.Exception.Message)" -Level Warning
+                }
             }
 
             # Basic chart formatting
