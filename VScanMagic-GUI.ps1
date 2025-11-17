@@ -1758,6 +1758,7 @@ We are pleased to inform you that your quarterly vulnerability scan report has b
 
 The main list of items I recommend remediating can be found here:
 <link to top ten report from onedrive>
+*Note that not all vulnerabilities may be feasible to remediate depending on business need.
 
 You can access and view the full reports using the link below:
 <onedrive link to folder containing reports>
