@@ -1901,7 +1901,9 @@ function Show-VScanMagicGUI {
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
                 }
-                $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report.docx"
+                # Add timestamp to filename to avoid duplicate name conflicts
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report_$timestamp.docx"
 
                 New-WordReport -OutputPath $wordOutputPath `
                               -ClientName $textBoxClientName.Text `
@@ -1921,7 +1923,9 @@ function Show-VScanMagicGUI {
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
                 }
-                $excelOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Pending EPSS Report.xlsx"
+                # Add timestamp to filename to avoid duplicate name conflicts
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $excelOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Pending EPSS Report_$timestamp.xlsx"
 
                 New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
 
