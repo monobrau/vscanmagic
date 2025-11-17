@@ -1180,8 +1180,8 @@ function New-WordReport {
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
             $chart.Legend.Position = -4152  # xlLegendPositionRight - legend to the right of pie
-            $chart.Legend.Font.Size = 16  # Larger swatches but sized to fit all 10 entries
-            Write-Log "Chart formatting applied (legend positioned right of pie with larger swatches)"
+            $chart.Legend.Font.Size = 11  # Reduced size to fit all 10 entries (1/3 smaller than 16)
+            Write-Log "Chart formatting applied (legend positioned right of pie, font size 11)"
 
             Write-Log "Pie chart created successfully"
 
