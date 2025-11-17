@@ -1131,8 +1131,16 @@ function New-WordReport {
             $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
-            # Overwrite default chart data (don't clear - causes chart to lose reference)
-            # Populate data row by row with explicit type conversion
+            # Clear existing data beyond headers to ensure clean slate
+            # Default chart has 4 data rows, we need to clear and repopulate with 10
+            try {
+                $clearRange = $worksheet.Range("A1:B20")  # Clear more than enough rows
+                $clearRange.Clear()
+            } catch {
+                # If clear fails, continue anyway
+            }
+
+            # Populate headers and all 10 data rows
             $worksheet.Cells.Item(1, 1) = "Product/System"
             $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
 
@@ -1142,7 +1150,24 @@ function New-WordReport {
                 $worksheet.Cells.Item($row, 2) = [int]$item.VulnCount
                 $row++
             }
-            Write-Log "Chart data populated ($($row - 2) items)"
+            $lastRow = $row - 1
+            Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow)"
+
+            # Update chart series data range FIRST before other formatting
+            try {
+                # Set the source data range for the entire chart
+                $dataRange = $worksheet.Range("A1:B$lastRow")
+                $chart.SetSourceData($dataRange)
+                Write-Log "Chart source data set to A1:B$lastRow"
+
+                # Ensure data labels are off
+                $series = $chart.SeriesCollection(1)
+                $series.HasDataLabels = $false
+                Write-Log "Chart configured with all $($lastRow - 1) items"
+            } catch {
+                Write-Log "Warning: Could not update chart data range: $($_.Exception.Message)" -Level Warning
+                # Chart may show fewer items than expected
+            }
 
             # Basic chart formatting
             $chart.HasTitle = $true
@@ -1151,21 +1176,6 @@ function New-WordReport {
             $chart.Legend.Position = -4152  # xlLegendPositionRight - legend to the right of pie
             $chart.Legend.Font.Size = 16  # Larger swatches but sized to fit all 10 entries
             Write-Log "Chart formatting applied (legend positioned right of pie with larger swatches)"
-
-            # Update chart series data range to include all 10 items
-            try {
-                $series = $chart.SeriesCollection(1)
-                $series.HasDataLabels = $false
-                # Set the data range for the series to include all rows
-                $categoryRange = $worksheet.Range("A2:A$($row - 1)")
-                $valueRange = $worksheet.Range("B2:B$($row - 1)")
-                $series.XValues = $categoryRange
-                $series.Values = $valueRange
-                Write-Log "Chart series data range updated to include all $($row - 2) items"
-            } catch {
-                Write-Log "Warning: Could not update series data range: $($_.Exception.Message)" -Level Warning
-                # Chart may show fewer items than expected
-            }
 
             Write-Log "Pie chart created successfully"
 
