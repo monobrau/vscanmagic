@@ -1066,40 +1066,34 @@ function New-WordReport {
         $selection.TypeText("Vulnerability Distribution by Product/System")
         $selection.TypeParagraph()
 
-        $chartWorkbook = $null
         try {
-            # Create simple pie chart (5 = wdChartPie)
+            # Create simple pie chart using older AddChart method for better compatibility
             Write-Log "Adding chart object..."
-            $chartShape = $selection.InlineShapes.AddChart2(-1, 5)
+            $chartShape = $selection.InlineShapes.AddChart(5)  # 5 = xlPie
             $chart = $chartShape.Chart
             Write-Log "Chart object created"
 
-            # Get chart data workbook
+            # Access chart data without calling Activate() to avoid COM disconnection
             $chartData = $chart.ChartData
-            $chartData.Activate()
             $chartWorkbook = $chartData.Workbook
-            $worksheet = $chartWorkbook.Worksheets.Item(1)
+            $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
-            # Build data in memory first to minimize COM calls
-            $dataRows = [System.Collections.ArrayList]::new()
-            $null = $dataRows.Add(@("Product/System", "Vulnerabilities"))
+            # Populate data row by row (more reliable for charts)
+            $worksheet.Cells(1, 1).Value2 = "Product/System"
+            $worksheet.Cells(1, 2).Value2 = "Vulnerabilities"
+
+            $row = 2
             foreach ($item in $Top10Data) {
-                $null = $dataRows.Add(@($item.Product, $item.VulnCount))
+                $worksheet.Cells($row, 1).Value2 = $item.Product
+                $worksheet.Cells($row, 2).Value2 = $item.VulnCount
+                $row++
             }
-            Write-Log "Prepared $($dataRows.Count - 1) data rows for chart"
+            Write-Log "Chart data populated ($($row - 2) items)"
 
-            # Clear and populate worksheet efficiently
-            $worksheet.UsedRange.Clear()
-            $endRow = $dataRows.Count
-            $targetRange = $worksheet.Range("A1:B$endRow")
-
-            # Write all data at once
-            $targetRange.Value2 = $dataRows.ToArray()
-            Write-Log "Chart data written to worksheet"
-
-            # Set data source
-            $chart.SetSourceData($targetRange)
+            # Set chart range
+            $dataRange = $worksheet.Range("A1:B$($row - 1)")
+            $chart.SetSourceData($dataRange)
             Write-Log "Chart source data set"
 
             # Basic chart formatting
@@ -1109,9 +1103,12 @@ function New-WordReport {
             $chart.Legend.Position = -4107  # xlLegendPositionRight
             Write-Log "Chart formatting applied"
 
-            # Add percentage labels (simpler approach)
+            # Add data labels showing values
             try {
-                $chart.SeriesCollection(1).ApplyDataLabels(4)  # xlDataLabelsShowValue = 4
+                $series = $chart.SeriesCollection(1)
+                $series.HasDataLabels = $true
+                $series.DataLabels.ShowValue = $true
+                Write-Log "Data labels applied"
             } catch {
                 Write-Log "Warning: Could not apply data labels: $($_.Exception.Message)" -Level Warning
             }
@@ -1119,16 +1116,7 @@ function New-WordReport {
             Write-Log "Pie chart created successfully"
         } catch {
             Write-Log "Warning: Could not create pie chart: $($_.Exception.Message)" -Level Warning
-        } finally {
-            # Ensure workbook cleanup
-            if ($chartWorkbook) {
-                try {
-                    $chartWorkbook.Close($false)
-                    Write-Log "Chart workbook closed"
-                } catch {
-                    Write-Log "Warning: Could not close chart workbook: $($_.Exception.Message)" -Level Warning
-                }
-            }
+            # Chart creation is optional, continue with report generation
         }
 
         $selection.TypeParagraph()
