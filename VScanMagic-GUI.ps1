@@ -1052,9 +1052,11 @@ function New-WordReport {
         $table.Columns(7).SetWidth(90, 0)   # Affected Systems: 1.25 inch
 
         $selection.EndKey(6)
+        $selection.TypeParagraph()
+        $selection.TypeParagraph()
 
-        # Insert page break and restore normal margins for Detailed Findings
-        $selection.InsertBreak(7)  # Page break
+        # Insert continuous section break to restore normal margins without page break
+        $selection.InsertBreak(3)  # 3 = wdSectionBreakContinuous
         $detailedSection = $selection.Sections.Item(1)
         $detailedSection.PageSetup.LeftMargin = 72    # 1 inch
         $detailedSection.PageSetup.RightMargin = 72   # 1 inch
