@@ -1719,6 +1719,174 @@ function New-ExcelReport {
     }
 }
 
+# --- New-EmailTemplate Function ---
+function New-EmailTemplate {
+    <#
+    .SYNOPSIS
+        Generates a client email template with vulnerability scan report information
+    .PARAMETER OutputPath
+        Path where the text file will be saved
+    .PARAMETER ClientName
+        Name of the client company
+    .PARAMETER ScanDate
+        Date of the vulnerability scan
+    #>
+    param(
+        [string]$OutputPath,
+        [string]$ClientName,
+        [string]$ScanDate
+    )
+
+    Write-Log "Generating email template..." -Level Info
+
+    # Determine current quarter
+    $currentMonth = (Get-Date).Month
+    $currentYear = (Get-Date).Year
+    $quarter = [Math]::Ceiling($currentMonth / 3)
+
+    # Determine time of day
+    $currentHour = (Get-Date).Hour
+    if ($currentHour -lt 12) {
+        $timeOfDay = "morning"
+    } elseif ($currentHour -lt 17) {
+        $timeOfDay = "afternoon"
+    } else {
+        $timeOfDay = "evening"
+    }
+
+    # Build email template content
+    $emailContent = @"
+Subject: $currentYear Q$quarter Vulnerability Scan Follow Up
+
+Good $timeOfDay,
+
+We are pleased to inform you that your quarterly vulnerability scan report has been completed and added to your client folder.
+
+The main list of items I recommend remediating can be found here:
+
+<link to top ten report from onedrive>
+
+You can access and view the full reports using the link below:
+
+<onedrive link to folder containing reports>
+
+In this folder you will find:
+
+Pending Remediation EPSS Score Report: This report classifies vulnerabilities by the "EPSS Score." This is a measure of the likelihood that an attacker will exploit a particular vulnerability within 30 days. The scale ranges from 0 to 1.0, with 1.0 being the most critical. <--- look in "Proposed Remediations (all)" for items that require your attention.
+
+All Vulnerabilities Report: This spreadsheet contains a list of all vulnerabilities (including internal and external) that were detected, ranging from critical to low
+
+Executive Summary Report: A high-level overview of your security "grade" as well as some information about your network
+
+External Scan: Any detected vulnerabilities or services that are exposed to the outside Internet
+
+Note: If you would like to discuss the report further, please contact your TSL or vCIO and we will coordinate a meeting. We will not begin remediation without your approval.
+
+We appreciate your commitment to security, as addressing these vulnerabilities is essential for maintaining the ongoing protection of your systems.
+
+Sincerely,
+
+Chris Knospe
+"@
+
+    # Write to file
+    try {
+        $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
+        Write-Log "Email template saved successfully" -Level Success
+    } catch {
+        Write-Log "Failed to save email template: $($_.Exception.Message)" -Level Error
+        throw
+    }
+}
+
+# --- New-TicketInstructions Function ---
+function New-TicketInstructions {
+    <#
+    .SYNOPSIS
+        Generates ticket instructions with detailed information for each top ten vulnerability
+    .PARAMETER OutputPath
+        Path where the text file will be saved
+    .PARAMETER ClientName
+        Name of the client company
+    .PARAMETER ScanDate
+        Date of the vulnerability scan
+    .PARAMETER Top10Data
+        Array of top 10 vulnerability objects
+    #>
+    param(
+        [string]$OutputPath,
+        [string]$ClientName,
+        [string]$ScanDate,
+        [array]$Top10Data
+    )
+
+    Write-Log "Generating ticket instructions..." -Level Info
+
+    # Build header
+    $content = @"
+TOP TEN VULNERABILITIES - TICKET INSTRUCTIONS
+Client: $ClientName
+Scan Date: $ScanDate
+Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+================================================================================
+
+"@
+
+    # Process each vulnerability
+    $rank = 1
+    foreach ($vuln in $Top10Data) {
+        $divider = "=" * 80
+
+        $content += @"
+$divider
+ITEM #$rank - $($vuln.Product)
+$divider
+
+Risk Score: $([math]::Round($vuln.RiskScore, 2))
+EPSS Score: $([math]::Round($vuln.EPSSScore, 4)) (Probability of exploit within 30 days)
+Average CVSS: $([math]::Round($vuln.AvgCVSS, 2))
+
+Vulnerability Breakdown:
+  - Critical: $($vuln.Critical)
+  - High: $($vuln.High)
+  - Medium: $($vuln.Medium)
+  - Low: $($vuln.Low)
+  Total Vulnerabilities: $($vuln.VulnCount)
+
+Affected Systems ($($vuln.AffectedSystems.Count)):
+$($vuln.AffectedSystems | ForEach-Object { "  - $_" } | Out-String)
+
+Recommended Action:
+  Review and apply available security patches or updates for $($vuln.Product).
+  Verify patching across all affected systems listed above.
+  Test in non-production environment if possible before deploying to production.
+
+
+"@
+        $rank++
+    }
+
+    # Add footer
+    $content += @"
+$("=" * 80)
+END OF TICKET INSTRUCTIONS
+$("=" * 80)
+
+Note: Copy each section above into individual service tickets as needed.
+      Prioritize remediation based on Risk Score (highest first).
+"@
+
+    # Write to file
+    try {
+        $content | Out-File -FilePath $OutputPath -Encoding UTF8
+        Write-Log "Ticket instructions saved successfully" -Level Success
+    } catch {
+        Write-Log "Failed to save ticket instructions: $($_.Exception.Message)" -Level Error
+        throw
+    }
+}
+
 # --- GUI Functions ---
 
 function Show-SettingsDialog {
@@ -1867,7 +2035,7 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 620)
+    $form.Size = New-Object System.Drawing.Size(700, 640)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -1987,7 +2155,7 @@ function Show-VScanMagicGUI {
     # --- Output Options ---
     $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
     $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 145)
-    $groupBoxOutput.Size = New-Object System.Drawing.Size(630, 80)
+    $groupBoxOutput.Size = New-Object System.Drawing.Size(630, 130)
     $groupBoxOutput.Text = "Output Options"
     $form.Controls.Add($groupBoxOutput)
 
@@ -2005,21 +2173,35 @@ function Show-VScanMagicGUI {
     $checkBoxWord.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxWord)
 
+    $checkBoxEmail = New-Object System.Windows.Forms.CheckBox
+    $checkBoxEmail.Location = New-Object System.Drawing.Point(20, 75)
+    $checkBoxEmail.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxEmail.Text = "Generate Client Email Template (Text)"
+    $checkBoxEmail.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxEmail)
+
+    $checkBoxTicket = New-Object System.Windows.Forms.CheckBox
+    $checkBoxTicket.Location = New-Object System.Drawing.Point(20, 100)
+    $checkBoxTicket.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxTicket.Text = "Generate Ticket Instructions (Text)"
+    $checkBoxTicket.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxTicket)
+
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 240)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 290)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 265)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 315)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(520, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 263)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 313)
     $buttonBrowseOutput.Size = New-Object System.Drawing.Size(100, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
@@ -2035,14 +2217,14 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 305)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 355)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 330)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 160)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 380)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 140)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
@@ -2051,9 +2233,9 @@ function Show-VScanMagicGUI {
 
     # --- Open Report Buttons ---
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
-    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 500)
-    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(200, 25)
-    $script:buttonOpenWord.Text = "Open Top Ten Vulnerabilities"
+    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 530)
+    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenWord.Text = "Open Top Ten Report"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
         if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
@@ -2063,9 +2245,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenWord)
 
     $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(230, 500)
-    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(180, 25)
-    $script:buttonOpenExcel.Text = "Open Pending EPSS Report"
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(180, 530)
+    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenExcel.Text = "Open EPSS Report"
     $script:buttonOpenExcel.Enabled = $false
     $script:buttonOpenExcel.Add_Click({
         if ($script:ExcelReportPath -and (Test-Path $script:ExcelReportPath)) {
@@ -2074,9 +2256,33 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($script:buttonOpenExcel)
 
+    $script:buttonOpenEmail = New-Object System.Windows.Forms.Button
+    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(340, 530)
+    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenEmail.Text = "Open Email Template"
+    $script:buttonOpenEmail.Enabled = $false
+    $script:buttonOpenEmail.Add_Click({
+        if ($script:EmailReportPath -and (Test-Path $script:EmailReportPath)) {
+            Start-Process $script:EmailReportPath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenEmail)
+
+    $script:buttonOpenTicket = New-Object System.Windows.Forms.Button
+    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(500, 530)
+    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenTicket.Text = "Open Ticket Instructions"
+    $script:buttonOpenTicket.Enabled = $false
+    $script:buttonOpenTicket.Add_Click({
+        if ($script:TicketReportPath -and (Test-Path $script:TicketReportPath)) {
+            Start-Process $script:TicketReportPath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenTicket)
+
     # --- Action Buttons ---
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 535)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 565)
     $buttonGenerate.Size = New-Object System.Drawing.Size(100, 30)
     $buttonGenerate.Text = "Generate"
     $buttonGenerate.Add_Click({
@@ -2093,7 +2299,7 @@ function Show-VScanMagicGUI {
             return
         }
 
-        if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked) {
+        if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked -and -not $checkBoxEmail.Checked -and -not $checkBoxTicket.Checked) {
             [System.Windows.Forms.MessageBox]::Show("Please select at least one output option.", "Validation Error",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
@@ -2106,6 +2312,8 @@ function Show-VScanMagicGUI {
         # Disable open buttons at start
         $script:buttonOpenWord.Enabled = $false
         $script:buttonOpenExcel.Enabled = $false
+        $script:buttonOpenEmail.Enabled = $false
+        $script:buttonOpenTicket.Enabled = $false
 
         try {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
@@ -2160,6 +2368,49 @@ function Show-VScanMagicGUI {
                 Write-Log "Pending EPSS Report saved to: $excelOutputPath" -Level Success
             }
 
+            # Generate Email Template
+            if ($checkBoxEmail.Checked) {
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                # Add timestamp to filename to avoid duplicate name conflicts
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $emailOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Email Template_$timestamp.txt"
+
+                New-EmailTemplate -OutputPath $emailOutputPath `
+                                 -ClientName $textBoxClientName.Text `
+                                 -ScanDate $datePickerScanDate.Value.ToShortDateString()
+
+                # Store path and enable open button
+                $script:EmailReportPath = $emailOutputPath
+                $script:buttonOpenEmail.Enabled = $true
+
+                Write-Log "Email Template saved to: $emailOutputPath" -Level Success
+            }
+
+            # Generate Ticket Instructions
+            if ($checkBoxTicket.Checked) {
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                # Add timestamp to filename to avoid duplicate name conflicts
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $ticketOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Ticket Instructions_$timestamp.txt"
+
+                New-TicketInstructions -OutputPath $ticketOutputPath `
+                                      -ClientName $textBoxClientName.Text `
+                                      -ScanDate $datePickerScanDate.Value.ToShortDateString() `
+                                      -Top10Data $top10
+
+                # Store path and enable open button
+                $script:TicketReportPath = $ticketOutputPath
+                $script:buttonOpenTicket.Enabled = $true
+
+                Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
+            }
+
             Write-Log "=== Processing Complete ===" -Level Success
 
             [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
@@ -2176,7 +2427,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(560, 535)
+    $buttonClose.Location = New-Object System.Drawing.Point(560, 565)
     $buttonClose.Size = New-Object System.Drawing.Size(90, 30)
     $buttonClose.Text = "Close"
     $buttonClose.Add_Click({ $form.Close() })
