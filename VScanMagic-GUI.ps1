@@ -1109,10 +1109,10 @@ function New-WordReport {
             $chartShape = $selection.InlineShapes.AddChart(5)  # 5 = xlPie
             $chart = $chartShape.Chart
 
-            # Make pie chart area twice as large, with legend below
-            # Set appropriate dimensions for larger pie with room for legend below
-            $chartShape.Width = 432  # 6 inches (72 points per inch)
-            $chartShape.Height = 360  # 5 inches (extra height for legend below)
+            # Make pie chart area large with legend on the right
+            # Set appropriate dimensions for larger pie with legend to the right
+            $chartShape.Width = 540  # 7.5 inches (72 points per inch) - extra width for legend on right
+            $chartShape.Height = 400  # 5.5 inches - taller to accommodate all 10 legend entries
             Write-Log "Chart dimensions set: $($chartShape.Width)w x $($chartShape.Height)h points"
 
             # Access chart data without calling Activate() to avoid COM disconnection
@@ -1148,9 +1148,9 @@ function New-WordReport {
             $chart.HasTitle = $true
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
-            $chart.Legend.Position = -4107  # xlLegendPositionBottom - legend below pie
-            $chart.Legend.Font.Size = 18  # Double the default size for larger swatches
-            Write-Log "Chart formatting applied (legend positioned below pie with larger swatches)"
+            $chart.Legend.Position = -4152  # xlLegendPositionRight - legend to the right of pie
+            $chart.Legend.Font.Size = 16  # Larger swatches but sized to fit all 10 entries
+            Write-Log "Chart formatting applied (legend positioned right of pie with larger swatches)"
 
             # Update chart series data range to include all 10 items
             try {
