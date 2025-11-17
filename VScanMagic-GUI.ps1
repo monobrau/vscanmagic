@@ -73,7 +73,25 @@ $script:Config = @{
 }
 
 # --- User Settings Persistence ---
-$script:SettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+# Handle both script and EXE execution
+if ([string]::IsNullOrEmpty($PSScriptRoot)) {
+    # Running as EXE - use executable directory
+    try {
+        $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $exeDir = [System.IO.Path]::GetDirectoryName($exePath)
+        if ([string]::IsNullOrEmpty($exeDir)) {
+            # Fallback to current directory
+            $exeDir = Get-Location | Select-Object -ExpandProperty Path
+        }
+        $script:SettingsPath = Join-Path $exeDir "VScanMagic_Settings.json"
+    } catch {
+        # Fallback to current directory
+        $script:SettingsPath = Join-Path (Get-Location | Select-Object -ExpandProperty Path) "VScanMagic_Settings.json"
+    }
+} else {
+    # Running as script
+    $script:SettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+}
 $script:UserSettings = @{
     PreparedBy = "River Run MSP"
     CompanyName = ""
@@ -84,7 +102,7 @@ $script:UserSettings = @{
 }
 
 function Load-UserSettings {
-    if (Test-Path $script:SettingsPath) {
+    if (-not [string]::IsNullOrEmpty($script:SettingsPath) -and (Test-Path $script:SettingsPath)) {
         try {
             $json = Get-Content $script:SettingsPath -Raw | ConvertFrom-Json
             $script:UserSettings.PreparedBy = $json.PreparedBy
@@ -101,6 +119,10 @@ function Load-UserSettings {
 }
 
 function Save-UserSettings {
+    if ([string]::IsNullOrEmpty($script:SettingsPath)) {
+        Write-Warning "Settings path is not set. Cannot save settings."
+        return $false
+    }
     try {
         $script:UserSettings | ConvertTo-Json | Set-Content $script:SettingsPath -Encoding UTF8
         Write-Host "User settings saved to $script:SettingsPath"

@@ -6,6 +6,7 @@ A PowerShell automation suite for processing vulnerability scan Excel files and 
 
 - **VScanMagic v2** (`vscanmagicv2.ps1`) - Original command-line script for Excel processing
 - **VScanMagic v3 GUI** (`VScanMagic-GUI.ps1`) - Modern GUI application with Word report generation
+- **VScanMagic v3 EXE** (`VScanMagic.exe`) - Standalone executable version (no PowerShell required)
 
 ## VScanMagic v3 GUI Features
 
@@ -62,6 +63,16 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 
 ## Installation
 
+### Option 1: Standalone Executable (Recommended)
+
+1. Download `VScanMagic.zip` from the repository
+2. Extract `VScanMagic.exe` to your desired location
+3. Double-click to run - no PowerShell installation required!
+
+**Note:** Microsoft Excel and Word must still be installed on the system for the application to function.
+
+### Option 2: PowerShell Script
+
 1. Clone this repository:
    ```bash
    git clone https://github.com/monobrau/vscanmagic.git
@@ -78,10 +89,30 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
 
+### Building the Executable
+
+To build your own executable from the PowerShell script:
+
+1. Install the `ps2exe` PowerShell module:
+   ```powershell
+   Install-Module -Name ps2exe -Scope CurrentUser
+   ```
+
+2. Run the build script:
+   ```powershell
+   .\BuildExeFinal.ps1
+   ```
+
+This will create `VScanMagic.exe` with the custom icon (`VScanMagic.ico`) and package it in `VScanMagic.zip`.
+
 ## Usage
 
-### VScanMagic v3 GUI
+### VScanMagic v3 (EXE or GUI Script)
 
+**Using the Executable:**
+1. Double-click `VScanMagic.exe` to launch the application
+
+**Using the PowerShell Script:**
 1. Run the GUI script:
    ```powershell
    .\VScanMagic-GUI.ps1
@@ -221,6 +252,8 @@ The script adds a color-coded key indicating remediation status:
 ## License
 
 This script is provided as-is for use in vulnerability reporting workflows.
+
+**Copyright (c) 2025 Chris Knospe**
 
 ## Contributing
 
