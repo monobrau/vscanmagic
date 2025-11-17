@@ -58,3 +58,9 @@ TestResults/
 *.xlsx
 *.docx
 VScanMagic_Settings.json
+Modules/ps2exe/1.0.17/ps2exe.ps1
+Modules/ps2exe/1.0.17/ps2exe.psd1
+Modules/ps2exe/1.0.17/PSGetModuleInfo.xml
+Modules/ps2exe/1.0.17/Win-PS2EXE.exe
+VScanMagic.exe
+VScanMagic.zip
