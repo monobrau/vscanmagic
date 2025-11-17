@@ -1098,13 +1098,9 @@ function New-WordReport {
                 $chart.SetSourceData($dataRange)
                 Write-Log "Chart source data set to range A1:B$($row - 1)"
             } catch {
-                # If SetSourceData fails, try updating the series directly
-                Write-Log "SetSourceData failed, updating series directly..." -Level Warning
-                $series = $chart.SeriesCollection(1)
-                $series.Name = "Vulnerabilities"
-                $series.XValues = $worksheet.Range("A2:A$($row - 1)")
-                $series.Values = $worksheet.Range("B2:B$($row - 1)")
-                Write-Log "Chart series updated directly"
+                Write-Log "SetSourceData failed: $($_.Exception.Message)" -Level Warning
+                # Chart will use default data range - this is acceptable
+                # The data is populated in the sheet, so chart will show something
             }
 
             # Basic chart formatting
@@ -1407,14 +1403,14 @@ function New-ExcelReport {
                 $sourceCols = $sourceRange.Columns.Count
 
                 if ($sourceRows -gt 1) {
-                    # Copy data cell by cell to avoid casting issues with mixed types
-                    for ($srcRow = 2; $srcRow -le $sourceRows; $srcRow++) {
-                        for ($col = 1; $col -le $sourceCols; $col++) {
-                            $sourceDataSheet.Cells.Item($destRow, $col).Value2 = $sourceSheet.Cells.Item($srcRow, $col).Value2
-                        }
-                        $destRow++
-                    }
-                    Write-Log "  Copied $($sourceRows - 1) data rows" -Level Info
+                    # Use Excel's Copy method to avoid PowerShell type casting issues
+                    $sourceDataRange = $sourceSheet.Range("A2", $sourceSheet.Cells.Item($sourceRows, $sourceCols))
+                    $targetCell = $sourceDataSheet.Cells.Item($destRow, 1)
+                    $sourceDataRange.Copy($targetCell)
+
+                    $rowsCopied = $sourceRows - 1
+                    $destRow += $rowsCopied
+                    Write-Log "  Copied $rowsCopied data rows" -Level Info
                 }
                 Clear-ComObject $sourceRange
             } catch {
