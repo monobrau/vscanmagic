@@ -1136,14 +1136,17 @@ function New-WordReport {
             $worksheet.Cells.Item(1, 1) = "Product/System"
             $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
 
+            # Sort by VulnCount descending for pie chart (largest percentage first)
+            $sortedChartData = $Top10Data | Sort-Object -Property VulnCount -Descending
+
             $row = 2
-            foreach ($item in $Top10Data) {
+            foreach ($item in $sortedChartData) {
                 $worksheet.Cells.Item($row, 1) = [string]$item.Product
                 $worksheet.Cells.Item($row, 2) = [int]$item.VulnCount
                 $row++
             }
             $lastRow = $row - 1
-            Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow)"
+            Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow, sorted by vulnerability count descending)"
 
             # Update the existing series (don't delete/recreate - keep it simple)
             try {
