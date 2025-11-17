@@ -1120,22 +1120,20 @@ function New-WordReport {
             $chart.Legend.Position = -4107  # xlLegendPositionRight
             Write-Log "Chart formatting applied"
 
-            # Add data labels showing values (optional - chart works without them)
+            # Remove data labels to avoid overlapping numbers - legend shows the info
             try {
                 $series = $chart.SeriesCollection(1)
-                $series.HasDataLabels = $true
-                # Note: ShowValue property may not exist on all chart versions
-                # If it fails, labels will just show category names which is acceptable
-                if ($series.DataLabels | Get-Member -Name "ShowValue" -ErrorAction SilentlyContinue) {
-                    $series.DataLabels.ShowValue = $true
-                }
-                Write-Log "Data labels configured"
+                $series.HasDataLabels = $false
+                Write-Log "Data labels disabled (using legend only)"
             } catch {
-                # Data labels are optional, chart will work without them
-                Write-Log "Note: Data labels not configured (chart will show without values)" -Level Info
+                # Not critical if this fails
             }
 
             Write-Log "Pie chart created successfully"
+
+            # Move selection to after the chart so subsequent content appears below it
+            $selection.MoveDown(5, 1)  # wdLine = 5, move 1 line down
+            $selection.EndKey(6)       # wdLine = 6, move to end of line
         } catch {
             Write-Log "Warning: Could not create pie chart: $($_.Exception.Message)" -Level Warning
             # Chart creation is optional, continue with report generation
