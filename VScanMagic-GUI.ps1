@@ -1672,20 +1672,36 @@ function Show-VScanMagicGUI {
             Write-Log "Attempting to extract company name from filename: $fileName"
 
             $companyName = $null
-            # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Reports-{CompanyName}_..."
+            # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Report-{CompanyName}_..."
             if ($fileName -match 'Reports?-([^_-]+)(?:_|$)') {
-                $companyName = $matches[1]
-                Write-Log "Matched Pattern 1 (Reports-Company_): $companyName"
+                $rawName = $matches[1]
+                # Skip if it's a report-related keyword
+                if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
+                    $companyName = $rawName
+                    Write-Log "Matched Pattern 1 (Reports-Company_): $companyName"
+                } else {
+                    Write-Log "Pattern 1 matched but result was report keyword: $rawName" -Level Warning
+                }
             }
-            # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports"
-            elseif ($fileName -match '^([^_-]+)[-_]Reports?') {
-                $companyName = $matches[1]
-                Write-Log "Matched Pattern 2 (Company-Reports): $companyName"
+            # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports" (but not report keywords)
+            if (-not $companyName -and $fileName -match '^([^_-]+)[-_]Reports?') {
+                $rawName = $matches[1]
+                if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
+                    $companyName = $rawName
+                    Write-Log "Matched Pattern 2 (Company-Reports): $companyName"
+                } else {
+                    Write-Log "Pattern 2 matched but result was report keyword: $rawName" -Level Warning
+                }
             }
-            # Pattern 3: Any text before first underscore or hyphen (fallback)
-            elseif ($fileName -match '^([^_-]+)') {
-                $companyName = $matches[1]
-                Write-Log "Matched Pattern 3 (fallback - first segment): $companyName"
+            # Pattern 3: Any text before first underscore, but exclude report-related keywords
+            if (-not $companyName -and $fileName -match '^([^_-]+)') {
+                $rawName = $matches[1]
+                if ($rawName -notmatch '(Pending|EPSS|Report|Reports?|Vulnerability|Security)') {
+                    $companyName = $rawName
+                    Write-Log "Matched Pattern 3 (first segment, not keyword): $companyName"
+                } else {
+                    Write-Log "Pattern 3 matched but result contained report keyword: $rawName" -Level Warning
+                }
             }
 
             if ($companyName) {
