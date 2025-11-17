@@ -1041,15 +1041,15 @@ function New-WordReport {
         # Set custom column widths for better appearance
         # Column widths in points (1 inch = 72 points)
         $table.Columns(1).SetWidth(36, 0)   # Rank: 0.5 inch (narrow)
-        $table.Columns(2).PreferredWidthType = 2  # wdPreferredWidthPoints
+        $table.Columns(2).PreferredWidthType = 3  # wdPreferredWidthPoints (3, not 2)
         $table.Columns(2).PreferredWidth = 180    # Product/System: 2.5 inches max
 
-        # Auto-fit remaining columns to content
-        $table.Columns(3).AutoFit()  # Risk Score
-        $table.Columns(4).AutoFit()  # EPSS
-        $table.Columns(5).AutoFit()  # Avg CVSS
-        $table.Columns(6).AutoFit()  # Total Vulns
-        $table.Columns(7).AutoFit()  # Affected Systems
+        # Auto-fit other columns - use table AutoFitBehavior after setting column 1 & 2
+        $table.Columns(3).SetWidth(72, 0)   # Risk Score: 1 inch
+        $table.Columns(4).SetWidth(54, 0)   # EPSS: 0.75 inch
+        $table.Columns(5).SetWidth(72, 0)   # Avg CVSS: 1 inch
+        $table.Columns(6).SetWidth(72, 0)   # Total Vulns: 1 inch
+        $table.Columns(7).SetWidth(90, 0)   # Affected Systems: 1.25 inch
 
         $selection.EndKey(6)
 
