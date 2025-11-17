@@ -1810,10 +1810,29 @@ function New-TicketInstructions {
             $item = $TopTenData[$i]
             $num = $i + 1
 
+            # Generate ticket subject based on product type
+            $ticketSubject = "Vulnerability Scan - "
+            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
+                $ticketSubject += "$($item.Product) - End of Support Migration Required"
+            } elseif ($item.Product -like "*Windows Server*") {
+                $ticketSubject += "$($item.Product) - Updates Required"
+            } elseif ($item.Product -like "*Windows*") {
+                $ticketSubject += "$($item.Product) - Patch Management Required"
+            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
+                $ticketSubject += "$($item.Product) - Firmware Update Required"
+            } elseif ($item.Product -like "*Microsoft Teams*") {
+                $ticketSubject += "$($item.Product) - Application Update Required"
+            } else {
+                $ticketSubject += "$($item.Product) - Update Required"
+            }
+
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("-".PadRight(100, '-'))
             [void]$sb.AppendLine("VULNERABILITY #$num")
             [void]$sb.AppendLine("-".PadRight(100, '-'))
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine("TICKET SUBJECT:")
+            [void]$sb.AppendLine("  $ticketSubject")
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Product/System:          $($item.Product)")
             [void]$sb.AppendLine("Risk Score:              $($item.RiskScore.ToString('N2'))")
