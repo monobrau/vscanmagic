@@ -1739,9 +1739,7 @@ function Get-TimeOfDayGreeting {
 
 function New-EmailTemplate {
     param(
-        [string]$OutputPath,
-        [string]$TopTenLink,
-        [string]$FolderLink
+        [string]$OutputPath
     )
 
     try {
@@ -1759,10 +1757,10 @@ Good $greeting,
 We are pleased to inform you that your quarterly vulnerability scan report has been completed and added to your client folder.
 
 The main list of items I recommend remediating can be found here:
-$TopTenLink
+<link to top ten report from onedrive>
 
 You can access and view the full reports using the link below:
-$FolderLink
+<onedrive link to folder containing reports>
 
 In this folder you will find:
 
@@ -2166,38 +2164,6 @@ function Show-VScanMagicGUI {
     $checkBoxTicketInstructions.Checked = $false
     $groupBoxOutput.Controls.Add($checkBoxTicketInstructions)
 
-    # OneDrive Links Section (for Email Template)
-    $labelOneDriveLinks = New-Object System.Windows.Forms.Label
-    $labelOneDriveLinks.Location = New-Object System.Drawing.Point(20, 130)
-    $labelOneDriveLinks.Size = New-Object System.Drawing.Size(200, 20)
-    $labelOneDriveLinks.Text = "OneDrive Links (for Email Template):"
-    $labelOneDriveLinks.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-    $groupBoxOutput.Controls.Add($labelOneDriveLinks)
-
-    $labelTopTenLink = New-Object System.Windows.Forms.Label
-    $labelTopTenLink.Location = New-Object System.Drawing.Point(30, 155)
-    $labelTopTenLink.Size = New-Object System.Drawing.Size(80, 20)
-    $labelTopTenLink.Text = "Top Ten:"
-    $groupBoxOutput.Controls.Add($labelTopTenLink)
-
-    $script:textBoxTopTenLink = New-Object System.Windows.Forms.TextBox
-    $script:textBoxTopTenLink.Location = New-Object System.Drawing.Point(110, 153)
-    $script:textBoxTopTenLink.Size = New-Object System.Drawing.Size(500, 20)
-    $script:textBoxTopTenLink.Text = ""
-    $groupBoxOutput.Controls.Add($script:textBoxTopTenLink)
-
-    $labelFolderLink = New-Object System.Windows.Forms.Label
-    $labelFolderLink.Location = New-Object System.Drawing.Point(30, 180)
-    $labelFolderLink.Size = New-Object System.Drawing.Size(80, 20)
-    $labelFolderLink.Text = "Folder:"
-    $groupBoxOutput.Controls.Add($labelFolderLink)
-
-    $script:textBoxFolderLink = New-Object System.Windows.Forms.TextBox
-    $script:textBoxFolderLink.Location = New-Object System.Drawing.Point(110, 178)
-    $script:textBoxFolderLink.Size = New-Object System.Drawing.Size(500, 20)
-    $script:textBoxFolderLink.Text = ""
-    $groupBoxOutput.Controls.Add($script:textBoxFolderLink)
-
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
     $labelOutputDir.Location = New-Object System.Drawing.Point(20, 370)
@@ -2389,20 +2355,7 @@ function Show-VScanMagicGUI {
                 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                 $emailOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Email Template_$timestamp.txt"
 
-                # Get OneDrive links from text boxes
-                $topTenLink = if ([string]::IsNullOrWhiteSpace($script:textBoxTopTenLink.Text)) {
-                    "<link to top ten report from onedrive>"
-                } else {
-                    $script:textBoxTopTenLink.Text
-                }
-
-                $folderLink = if ([string]::IsNullOrWhiteSpace($script:textBoxFolderLink.Text)) {
-                    "<onedrive link to folder containing reports>"
-                } else {
-                    $script:textBoxFolderLink.Text
-                }
-
-                New-EmailTemplate -OutputPath $emailOutputPath -TopTenLink $topTenLink -FolderLink $folderLink
+                New-EmailTemplate -OutputPath $emailOutputPath
 
                 # Store path and enable open button
                 $script:EmailTemplatePath = $emailOutputPath
