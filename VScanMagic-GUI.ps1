@@ -1131,15 +1131,7 @@ function New-WordReport {
             $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
-            # Clear existing data beyond headers to ensure clean slate
-            # Default chart has 4 data rows, we need to clear and repopulate with 10
-            try {
-                $clearRange = $worksheet.Range("A1:B20")  # Clear more than enough rows
-                $clearRange.Clear()
-            } catch {
-                # If clear fails, continue anyway
-            }
-
+            # Don't clear - just overwrite the cells directly
             # Populate headers and all 10 data rows
             $worksheet.Cells.Item(1, 1) = "Product/System"
             $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
@@ -1153,30 +1145,31 @@ function New-WordReport {
             $lastRow = $row - 1
             Write-Log "Chart data populated ($($lastRow - 1) items in rows 2-$lastRow)"
 
-            # Delete existing series and create new one with correct range
+            # Update the existing series (don't delete/recreate - keep it simple)
             try {
-                # Remove all existing series (default chart has 1 series with limited data)
-                while ($chart.SeriesCollection().Count -gt 0) {
-                    $chart.SeriesCollection(1).Delete()
-                }
-                Write-Log "Deleted existing chart series"
+                $series = $chart.SeriesCollection(1)
 
-                # Create new series with all 10 data points
-                $newSeries = $chart.SeriesCollection().NewSeries()
-                $newSeries.Name = "Vulnerabilities"
-                $newSeries.XValues = $worksheet.Range("A2:A$lastRow")
-                $newSeries.Values = $worksheet.Range("B2:B$lastRow")
-                $newSeries.HasDataLabels = $false
-                Write-Log "Created new series with data range A2:A$lastRow (categories) and B2:B$lastRow (values)"
-                Write-Log "Chart now configured with all $($lastRow - 1) items"
+                # Build the worksheet name for the formula
+                $sheetName = $worksheet.Name
+
+                # Set series formula to explicitly reference all 10 data points
+                # Formula format: =SERIES(name, xvalues, yvalues, plotorder)
+                $seriesFormula = "=SERIES(""Vulnerabilities"",'$sheetName'!`$A`$2:`$A`$$lastRow,'$sheetName'!`$B`$2:`$B`$$lastRow,1)"
+                $series.Formula = $seriesFormula
+                $series.HasDataLabels = $false
+
+                Write-Log "Series formula set to: $seriesFormula"
+                Write-Log "Chart configured with all $($lastRow - 1) items"
             } catch {
-                Write-Log "Error creating chart series: $($_.Exception.Message)" -Level Error
-                # Try fallback approach
+                Write-Log "Error setting series formula: $($_.Exception.Message)" -Level Warning
+                # Try direct property assignment as fallback
                 try {
-                    Write-Log "Attempting fallback: SetSourceData method" -Level Warning
-                    $dataRange = $worksheet.Range("A1:B$lastRow")
-                    $chart.SetSourceData($dataRange)
-                    $chart.SeriesCollection(1).HasDataLabels = $false
+                    Write-Log "Attempting fallback: direct XValues/Values assignment" -Level Warning
+                    $series = $chart.SeriesCollection(1)
+                    $series.XValues = "='$sheetName'!`$A`$2:`$A`$$lastRow"
+                    $series.Values = "='$sheetName'!`$B`$2:`$B`$$lastRow"
+                    $series.HasDataLabels = $false
+                    Write-Log "Fallback succeeded with direct assignment"
                 } catch {
                     Write-Log "Fallback also failed: $($_.Exception.Message)" -Level Warning
                 }
