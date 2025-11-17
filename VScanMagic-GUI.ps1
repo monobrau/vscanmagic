@@ -795,7 +795,7 @@ function New-WordReport {
         # Set document properties (optional - may fail on some systems)
         Write-Log "Setting document properties..."
         try {
-            $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
+            $doc.BuiltInDocumentProperties.Item("Title").Value = "Top Ten Vulnerabilities Report - $ClientName"
             $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
             $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
             $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
@@ -827,7 +827,7 @@ function New-WordReport {
         $selection.Font.Bold = $true
         $selection.Font.Color = 5855577  # Dark blue color
         $selection.ParagraphFormat.Alignment = 1  # Center
-        $selection.TypeText("Vulnerability Assessment Report")
+        $selection.TypeText("Top Ten Vulnerabilities Report")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
@@ -1165,7 +1165,8 @@ function New-WordReport {
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
             $chart.Legend.Position = -4107  # xlLegendPositionBottom - legend below pie
-            Write-Log "Chart formatting applied (legend positioned below pie)"
+            $chart.Legend.Font.Size = 18  # Double the default size for larger swatches
+            Write-Log "Chart formatting applied (legend positioned below pie with larger swatches)"
 
             # Remove data labels to avoid overlapping numbers - legend shows the info
             try {
