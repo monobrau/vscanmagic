@@ -37,12 +37,12 @@ $script:Config = @{
     }
 
     # Heatmap Color Thresholds for Risk Scores (Yellow to Red gradient - no greens)
-    # Starts at yellow to emphasize all Top 10 items need attention
+    # Risk Score = EPSS × Average CVSS (max theoretical: 1.0 × 10.0 = 10.0)
     RiskColors = [ordered]@{
-        Critical   = @{ Threshold = 7500; Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }      # Crimson red
-        VeryHigh   = @{ Threshold = 3000; Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }     # Orange-red
-        High       = @{ Threshold = 1000; Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }          # Dark orange
-        MediumHigh = @{ Threshold = 500;  Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }   # Orange
+        Critical   = @{ Threshold = 8.0;  Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }      # Crimson red
+        VeryHigh   = @{ Threshold = 6.0;  Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }     # Orange-red
+        High       = @{ Threshold = 4.0;  Color = 'FF8C00'; Name = 'High'; TextColor = 'FFFFFF' }          # Dark orange
+        MediumHigh = @{ Threshold = 2.0;  Color = 'FFA500'; Name = 'Medium-High'; TextColor = '000000' }   # Orange
         Medium     = @{ Threshold = 0;    Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }        # Yellow (baseline)
     }
 
@@ -615,12 +615,14 @@ function Get-AverageCVSS {
 
 function Get-CompositeRiskScore {
     param(
-        [int]$VulnCount,
+        [int]$VulnCount,  # Not used in calculation, kept for compatibility
         [double]$EPSSScore,
         [double]$AvgCVSS
     )
 
-    return [Math]::Round($VulnCount * $EPSSScore * $AvgCVSS, 2)
+    # Simplified risk score: EPSS × Average CVSS
+    # Max theoretical score: 1.0 × 10.0 = 10.0
+    return [Math]::Round($EPSSScore * $AvgCVSS, 2)
 }
 
 function Get-Top10Vulnerabilities {
@@ -726,7 +728,7 @@ function New-WordReport {
     # Calculate dynamic thresholds based on maximum risk score
     $maxRiskScore = ($Top10Data | Measure-Object -Property RiskScore -Maximum).Maximum
     if ($maxRiskScore -le 0) {
-        $maxRiskScore = 1000  # Default fallback
+        $maxRiskScore = 10  # Default fallback (max theoretical: 1.0 × 10.0)
     }
     Write-Log "Maximum risk score in data: $($maxRiskScore.ToString('N2'))"
 
@@ -867,7 +869,7 @@ function New-WordReport {
         $selection.Font.Name = "Courier New"
         $selection.Font.Bold = $true
         $selection.Font.Size = 10
-        $selection.TypeText("Risk Score = Vulnerability Count x EPSS Score x Average CVSS Equivalent")
+        $selection.TypeText("Risk Score = EPSS Score x Average CVSS")
         $selection.TypeParagraph()
 
         $selection.Font.Bold = $false
