@@ -1120,14 +1120,19 @@ function New-WordReport {
             $chart.Legend.Position = -4107  # xlLegendPositionRight
             Write-Log "Chart formatting applied"
 
-            # Add data labels showing values
+            # Add data labels showing values (optional - chart works without them)
             try {
                 $series = $chart.SeriesCollection(1)
                 $series.HasDataLabels = $true
-                $series.DataLabels.ShowValue = $true
-                Write-Log "Data labels applied"
+                # Note: ShowValue property may not exist on all chart versions
+                # If it fails, labels will just show category names which is acceptable
+                if ($series.DataLabels | Get-Member -Name "ShowValue" -ErrorAction SilentlyContinue) {
+                    $series.DataLabels.ShowValue = $true
+                }
+                Write-Log "Data labels configured"
             } catch {
-                Write-Log "Warning: Could not apply data labels: $($_.Exception.Message)" -Level Warning
+                # Data labels are optional, chart will work without them
+                Write-Log "Note: Data labels not configured (chart will show without values)" -Level Info
             }
 
             Write-Log "Pie chart created successfully"
@@ -1420,7 +1425,7 @@ function New-ExcelReport {
                     # Copy and paste values only (not formulas/formatting)
                     $sourceDataRange.Copy()
                     $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
-                    $excel.CutCopyMode = $false  # Clear clipboard
+                    $excel.CutCopyMode = 0  # xlCutCopyModeOff = 0 (not $false)
 
                     $rowsCopied = $sourceRows - 1
                     $destRow += $rowsCopied
