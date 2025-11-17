@@ -1861,7 +1861,7 @@ function Show-VScanMagicGUI {
     $buttonSettings = New-Object System.Windows.Forms.Button
     $buttonSettings.Location = New-Object System.Drawing.Point(580, 10)
     $buttonSettings.Size = New-Object System.Drawing.Size(90, 25)
-    $buttonSettings.Text = "⚙ Settings"
+    $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
         Show-SettingsDialog
     })
