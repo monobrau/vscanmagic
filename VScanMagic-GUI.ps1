@@ -1691,7 +1691,7 @@ function Show-VScanMagicGUI {
 
             $companyName = $null
             # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Report-{CompanyName}_..."
-            if ($fileName -match 'Reports?-([^_-]+)(?:_|$)') {
+            if ($fileName -match 'Reports?-([^\s_-]+)(?:_|$)') {
                 $rawName = $matches[1]
                 # Skip if it's a report-related keyword
                 if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
@@ -1702,7 +1702,7 @@ function Show-VScanMagicGUI {
                 }
             }
             # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports" (but not report keywords)
-            if (-not $companyName -and $fileName -match '^([^_-]+)[-_]Reports?') {
+            if (-not $companyName -and $fileName -match '^([^\s_-]+)[-_]Reports?') {
                 $rawName = $matches[1]
                 if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
                     $companyName = $rawName
@@ -1711,8 +1711,8 @@ function Show-VScanMagicGUI {
                     Write-Log "Pattern 2 matched but result was report keyword: $rawName" -Level Warning
                 }
             }
-            # Pattern 3: Any text before first underscore, but exclude report-related keywords
-            if (-not $companyName -and $fileName -match '^([^_-]+)') {
+            # Pattern 3: Any text before first delimiter (space, underscore, hyphen), but exclude report-related keywords
+            if (-not $companyName -and $fileName -match '^([^\s_-]+)') {
                 $rawName = $matches[1]
                 if ($rawName -notmatch '(Pending|EPSS|Report|Reports?|Vulnerability|Security)') {
                     $companyName = $rawName
