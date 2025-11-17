@@ -72,6 +72,45 @@ $script:Config = @{
     ExcelPathLimit = 200
 }
 
+# --- User Settings Persistence ---
+$script:SettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+$script:UserSettings = @{
+    PreparedBy = "River Run MSP"
+    CompanyName = ""
+    CompanyAddress = ""
+    Email = ""
+    PhoneNumber = ""
+    CompanyPhoneNumber = ""
+}
+
+function Load-UserSettings {
+    if (Test-Path $script:SettingsPath) {
+        try {
+            $json = Get-Content $script:SettingsPath -Raw | ConvertFrom-Json
+            $script:UserSettings.PreparedBy = $json.PreparedBy
+            $script:UserSettings.CompanyName = $json.CompanyName
+            $script:UserSettings.CompanyAddress = $json.CompanyAddress
+            $script:UserSettings.Email = $json.Email
+            $script:UserSettings.PhoneNumber = $json.PhoneNumber
+            $script:UserSettings.CompanyPhoneNumber = $json.CompanyPhoneNumber
+            Write-Host "User settings loaded from $script:SettingsPath"
+        } catch {
+            Write-Warning "Could not load settings: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Save-UserSettings {
+    try {
+        $script:UserSettings | ConvertTo-Json | Set-Content $script:SettingsPath -Encoding UTF8
+        Write-Host "User settings saved to $script:SettingsPath"
+        return $true
+    } catch {
+        Write-Warning "Could not save settings: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # --- Helper Functions ---
 
 function Write-Log {
@@ -816,8 +855,30 @@ function New-WordReport {
         $selection.TypeParagraph()
 
         $selection.Font.Size = 12
-        $selection.TypeText("Prepared by: $($script:Config.Author)")
+        $selection.TypeText("Prepared by: $($script:UserSettings.PreparedBy)")
         $selection.TypeParagraph()
+
+        # Add company contact information if available
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.CompanyName)) {
+            $selection.TypeText($script:UserSettings.CompanyName)
+            $selection.TypeParagraph()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.CompanyAddress)) {
+            $selection.TypeText($script:UserSettings.CompanyAddress)
+            $selection.TypeParagraph()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.Email)) {
+            $selection.TypeText("Email: $($script:UserSettings.Email)")
+            $selection.TypeParagraph()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.PhoneNumber)) {
+            $selection.TypeText("Phone: $($script:UserSettings.PhoneNumber)")
+            $selection.TypeParagraph()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.CompanyPhoneNumber)) {
+            $selection.TypeText("Company Phone: $($script:UserSettings.CompanyPhoneNumber)")
+            $selection.TypeParagraph()
+        }
 
         $selection.InsertBreak(7)  # Page break
 
@@ -954,9 +1015,7 @@ function New-WordReport {
 
         $selection.EndKey(6)  # Move to end of document
 
-        # Insert page break before Top 10 table
-        $selection.InsertBreak(7)
-
+        # No page break - let content flow naturally from legend to Top 10 table
         # Set narrower margins for table page (0.5 inch)
         $currentSection = $selection.Sections.Item(1)
         $currentSection.PageSetup.LeftMargin = 36    # 0.5 inch
@@ -1646,10 +1705,148 @@ function New-ExcelReport {
 
 # --- GUI Functions ---
 
+function Show-SettingsDialog {
+    $settingsForm = New-Object System.Windows.Forms.Form
+    $settingsForm.Text = "User Settings"
+    $settingsForm.Size = New-Object System.Drawing.Size(500, 400)
+    $settingsForm.StartPosition = "CenterParent"
+    $settingsForm.FormBorderStyle = "FixedDialog"
+    $settingsForm.MaximizeBox = $false
+    $settingsForm.MinimizeBox = $false
+
+    $y = 20
+
+    # Prepared By
+    $lblPreparedBy = New-Object System.Windows.Forms.Label
+    $lblPreparedBy.Location = New-Object System.Drawing.Point(20, $y)
+    $lblPreparedBy.Size = New-Object System.Drawing.Size(150, 20)
+    $lblPreparedBy.Text = "Prepared By:"
+    $settingsForm.Controls.Add($lblPreparedBy)
+
+    $txtPreparedBy = New-Object System.Windows.Forms.TextBox
+    $txtPreparedBy.Location = New-Object System.Drawing.Point(180, $y)
+    $txtPreparedBy.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPreparedBy.Text = $script:UserSettings.PreparedBy
+    $settingsForm.Controls.Add($txtPreparedBy)
+    $y += 35
+
+    # Company Name
+    $lblCompanyName = New-Object System.Windows.Forms.Label
+    $lblCompanyName.Location = New-Object System.Drawing.Point(20, $y)
+    $lblCompanyName.Size = New-Object System.Drawing.Size(150, 20)
+    $lblCompanyName.Text = "Company Name:"
+    $settingsForm.Controls.Add($lblCompanyName)
+
+    $txtCompanyName = New-Object System.Windows.Forms.TextBox
+    $txtCompanyName.Location = New-Object System.Drawing.Point(180, $y)
+    $txtCompanyName.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyName.Text = $script:UserSettings.CompanyName
+    $settingsForm.Controls.Add($txtCompanyName)
+    $y += 35
+
+    # Company Address
+    $lblCompanyAddress = New-Object System.Windows.Forms.Label
+    $lblCompanyAddress.Location = New-Object System.Drawing.Point(20, $y)
+    $lblCompanyAddress.Size = New-Object System.Drawing.Size(150, 20)
+    $lblCompanyAddress.Text = "Company Address:"
+    $settingsForm.Controls.Add($lblCompanyAddress)
+
+    $txtCompanyAddress = New-Object System.Windows.Forms.TextBox
+    $txtCompanyAddress.Location = New-Object System.Drawing.Point(180, $y)
+    $txtCompanyAddress.Size = New-Object System.Drawing.Size(280, 40)
+    $txtCompanyAddress.Multiline = $true
+    $txtCompanyAddress.Text = $script:UserSettings.CompanyAddress
+    $settingsForm.Controls.Add($txtCompanyAddress)
+    $y += 55
+
+    # Email
+    $lblEmail = New-Object System.Windows.Forms.Label
+    $lblEmail.Location = New-Object System.Drawing.Point(20, $y)
+    $lblEmail.Size = New-Object System.Drawing.Size(150, 20)
+    $lblEmail.Text = "Email:"
+    $settingsForm.Controls.Add($lblEmail)
+
+    $txtEmail = New-Object System.Windows.Forms.TextBox
+    $txtEmail.Location = New-Object System.Drawing.Point(180, $y)
+    $txtEmail.Size = New-Object System.Drawing.Size(280, 20)
+    $txtEmail.Text = $script:UserSettings.Email
+    $settingsForm.Controls.Add($txtEmail)
+    $y += 35
+
+    # Phone Number
+    $lblPhoneNumber = New-Object System.Windows.Forms.Label
+    $lblPhoneNumber.Location = New-Object System.Drawing.Point(20, $y)
+    $lblPhoneNumber.Size = New-Object System.Drawing.Size(150, 20)
+    $lblPhoneNumber.Text = "Phone Number:"
+    $settingsForm.Controls.Add($lblPhoneNumber)
+
+    $txtPhoneNumber = New-Object System.Windows.Forms.TextBox
+    $txtPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
+    $txtPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPhoneNumber.Text = $script:UserSettings.PhoneNumber
+    $settingsForm.Controls.Add($txtPhoneNumber)
+    $y += 35
+
+    # Company Phone Number
+    $lblCompanyPhoneNumber = New-Object System.Windows.Forms.Label
+    $lblCompanyPhoneNumber.Location = New-Object System.Drawing.Point(20, $y)
+    $lblCompanyPhoneNumber.Size = New-Object System.Drawing.Size(150, 20)
+    $lblCompanyPhoneNumber.Text = "Company Phone:"
+    $settingsForm.Controls.Add($lblCompanyPhoneNumber)
+
+    $txtCompanyPhoneNumber = New-Object System.Windows.Forms.TextBox
+    $txtCompanyPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
+    $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyPhoneNumber.Text = $script:UserSettings.CompanyPhoneNumber
+    $settingsForm.Controls.Add($txtCompanyPhoneNumber)
+    $y += 50
+
+    # Save Button
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Location = New-Object System.Drawing.Point(280, $y)
+    $btnSave.Size = New-Object System.Drawing.Size(90, 30)
+    $btnSave.Text = "Save"
+    $btnSave.Add_Click({
+        $script:UserSettings.PreparedBy = $txtPreparedBy.Text
+        $script:UserSettings.CompanyName = $txtCompanyName.Text
+        $script:UserSettings.CompanyAddress = $txtCompanyAddress.Text
+        $script:UserSettings.Email = $txtEmail.Text
+        $script:UserSettings.PhoneNumber = $txtPhoneNumber.Text
+        $script:UserSettings.CompanyPhoneNumber = $txtCompanyPhoneNumber.Text
+
+        if (Save-UserSettings) {
+            [System.Windows.Forms.MessageBox]::Show("Settings saved successfully!", "Success",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $settingsForm.Close()
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Failed to save settings.", "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $settingsForm.Controls.Add($btnSave)
+
+    # Cancel Button
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(380, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Add_Click({
+        $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $settingsForm.Close()
+    })
+    $settingsForm.Controls.Add($btnCancel)
+
+    $settingsForm.ShowDialog() | Out-Null
+}
+
 function Show-VScanMagicGUI {
     # Initialize script-level variables for output file paths
     $script:WordReportPath = $null
     $script:ExcelReportPath = $null
+
+    # Load user settings from disk
+    Load-UserSettings
 
     # Create main form
     $form = New-Object System.Windows.Forms.Form
@@ -1658,6 +1855,16 @@ function Show-VScanMagicGUI {
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
+
+    # --- Settings Button (Top Right) ---
+    $buttonSettings = New-Object System.Windows.Forms.Button
+    $buttonSettings.Location = New-Object System.Drawing.Point(580, 10)
+    $buttonSettings.Size = New-Object System.Drawing.Size(90, 25)
+    $buttonSettings.Text = "⚙ Settings"
+    $buttonSettings.Add_Click({
+        Show-SettingsDialog
+    })
+    $form.Controls.Add($buttonSettings)
 
     # --- Input File Section ---
     $labelInputFile = New-Object System.Windows.Forms.Label
