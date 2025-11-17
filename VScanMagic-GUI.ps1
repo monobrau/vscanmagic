@@ -1066,51 +1066,69 @@ function New-WordReport {
         $selection.TypeText("Vulnerability Distribution by Product/System")
         $selection.TypeParagraph()
 
+        $chartWorkbook = $null
         try {
-            # Create pie chart (wdChartPie = 5)
-            $chart = $selection.InlineShapes.AddChart2(-1, 5).Chart
+            # Create simple pie chart (5 = wdChartPie)
+            Write-Log "Adding chart object..."
+            $chartShape = $selection.InlineShapes.AddChart2(-1, 5)
+            $chart = $chartShape.Chart
+            Write-Log "Chart object created"
 
-            # Prepare chart data
+            # Get chart data workbook
             $chartData = $chart.ChartData
             $chartData.Activate()
+            $chartWorkbook = $chartData.Workbook
+            $worksheet = $chartWorkbook.Worksheets.Item(1)
+            Write-Log "Chart data workbook accessed"
 
-            $workbook = $chartData.Workbook
-            $worksheet = $workbook.Worksheets.Item(1)
-
-            # Clear default data
-            $worksheet.UsedRange.Clear()
-
-            # Set headers
-            $worksheet.Cells.Item(1, 1).Value2 = "Product/System"
-            $worksheet.Cells.Item(1, 2).Value2 = "Vulnerabilities"
-
-            # Populate data from Top10Data
-            $row = 2
+            # Build data in memory first to minimize COM calls
+            $dataRows = [System.Collections.ArrayList]::new()
+            $null = $dataRows.Add(@("Product/System", "Vulnerabilities"))
             foreach ($item in $Top10Data) {
-                $worksheet.Cells.Item($row, 1).Value2 = $item.Product
-                $worksheet.Cells.Item($row, 2).Value2 = $item.VulnCount
-                $row++
+                $null = $dataRows.Add(@($item.Product, $item.VulnCount))
             }
+            Write-Log "Prepared $($dataRows.Count - 1) data rows for chart"
 
-            # Set chart data range
-            $dataRange = $worksheet.Range("A1:B$($row - 1)")
-            $chart.SetSourceData($dataRange)
+            # Clear and populate worksheet efficiently
+            $worksheet.UsedRange.Clear()
+            $endRow = $dataRows.Count
+            $targetRange = $worksheet.Range("A1:B$endRow")
 
-            # Configure chart appearance
+            # Write all data at once
+            $targetRange.Value2 = $dataRows.ToArray()
+            Write-Log "Chart data written to worksheet"
+
+            # Set data source
+            $chart.SetSourceData($targetRange)
+            Write-Log "Chart source data set"
+
+            # Basic chart formatting
             $chart.HasTitle = $true
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
             $chart.Legend.Position = -4107  # xlLegendPositionRight
+            Write-Log "Chart formatting applied"
 
-            # Show data labels with percentages
-            $chart.ApplyDataLabels(5, $true, $true, $false, $false, $false, $false)  # xlDataLabelsShowPercent = 5
-
-            # Close chart data
-            $workbook.Close($false)
+            # Add percentage labels (simpler approach)
+            try {
+                $chart.SeriesCollection(1).ApplyDataLabels(4)  # xlDataLabelsShowValue = 4
+            } catch {
+                Write-Log "Warning: Could not apply data labels: $($_.Exception.Message)" -Level Warning
+            }
 
             Write-Log "Pie chart created successfully"
         } catch {
             Write-Log "Warning: Could not create pie chart: $($_.Exception.Message)" -Level Warning
+        } finally {
+            # Ensure workbook cleanup
+            if ($chartWorkbook) {
+                try {
+                    $chartWorkbook.Close($false)
+                    Write-Log "Chart workbook closed"
+                } catch {
+                    Write-Log "Warning: Could not close chart workbook: $($_.Exception.Message)" -Level Warning
+                }
+            }
         }
 
         $selection.TypeParagraph()
