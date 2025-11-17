@@ -1079,10 +1079,7 @@ function New-WordReport {
             $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
-            # Clear default chart data (contains sample quarters)
-            $worksheet.UsedRange.Clear()
-            Write-Log "Default chart data cleared"
-
+            # Overwrite default chart data (don't clear - causes chart to lose reference)
             # Populate data row by row with explicit type conversion
             $worksheet.Cells.Item(1, 1) = "Product/System"
             $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
@@ -1095,10 +1092,20 @@ function New-WordReport {
             }
             Write-Log "Chart data populated ($($row - 2) items)"
 
-            # Set chart range
-            $dataRange = $worksheet.Range("A1:B$($row - 1)")
-            $chart.SetSourceData($dataRange)
-            Write-Log "Chart source data set"
+            # Update chart range to match our data
+            try {
+                $dataRange = $worksheet.Range("A1:B$($row - 1)")
+                $chart.SetSourceData($dataRange)
+                Write-Log "Chart source data set to range A1:B$($row - 1)"
+            } catch {
+                # If SetSourceData fails, try updating the series directly
+                Write-Log "SetSourceData failed, updating series directly..." -Level Warning
+                $series = $chart.SeriesCollection(1)
+                $series.Name = "Vulnerabilities"
+                $series.XValues = $worksheet.Range("A2:A$($row - 1)")
+                $series.Values = $worksheet.Range("B2:B$($row - 1)")
+                Write-Log "Chart series updated directly"
+            }
 
             # Basic chart formatting
             $chart.HasTitle = $true
@@ -1397,17 +1404,17 @@ function New-ExcelReport {
             try {
                 $sourceRange = $sourceSheet.UsedRange
                 $sourceRows = $sourceRange.Rows.Count
+                $sourceCols = $sourceRange.Columns.Count
 
                 if ($sourceRows -gt 1) {
-                    $sourceCols = $sourceRange.Columns.Count
-                    $dataRange = $sourceSheet.Range("A2", $sourceSheet.Cells.Item($sourceRows, $sourceCols))
-                    $dataValues = $dataRange.Value2
-                    $targetRowCount = $dataRange.Rows.Count
-                    $targetRange = $sourceDataSheet.Range($sourceDataSheet.Cells.Item($destRow, 1), $sourceDataSheet.Cells.Item($destRow + $targetRowCount - 1, $sourceCols))
-                    $targetRange.Value2 = $dataValues
-                    $destRow += $targetRowCount
-                    Clear-ComObject $dataRange
-                    Clear-ComObject $targetRange
+                    # Copy data cell by cell to avoid casting issues with mixed types
+                    for ($srcRow = 2; $srcRow -le $sourceRows; $srcRow++) {
+                        for ($col = 1; $col -le $sourceCols; $col++) {
+                            $sourceDataSheet.Cells.Item($destRow, $col).Value2 = $sourceSheet.Cells.Item($srcRow, $col).Value2
+                        }
+                        $destRow++
+                    }
+                    Write-Log "  Copied $($sourceRows - 1) data rows" -Level Info
                 }
                 Clear-ComObject $sourceRange
             } catch {
