@@ -1076,6 +1076,16 @@ function New-WordReport {
             # Access chart data without calling Activate() to avoid COM disconnection
             $chartData = $chart.ChartData
             $chartWorkbook = $chartData.Workbook
+
+            # Try to hide the Excel instance that Word creates for chart data
+            try {
+                $chartExcel = $chartWorkbook.Application
+                $chartExcel.Visible = $false
+                $chartExcel.ScreenUpdating = $false
+            } catch {
+                # Silently ignore if we can't hide it
+            }
+
             $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
@@ -1403,10 +1413,14 @@ function New-ExcelReport {
                 $sourceCols = $sourceRange.Columns.Count
 
                 if ($sourceRows -gt 1) {
-                    # Use Excel's Copy method to avoid PowerShell type casting issues
-                    $sourceDataRange = $sourceSheet.Range("A2", $sourceSheet.Cells.Item($sourceRows, $sourceCols))
+                    # Use Excel's Copy/PasteSpecial to avoid PowerShell type casting
+                    $sourceDataRange = $sourceSheet.Range($sourceSheet.Cells.Item(2, 1), $sourceSheet.Cells.Item($sourceRows, $sourceCols))
                     $targetCell = $sourceDataSheet.Cells.Item($destRow, 1)
-                    $sourceDataRange.Copy($targetCell)
+
+                    # Copy and paste values only (not formulas/formatting)
+                    $sourceDataRange.Copy()
+                    $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
+                    $excel.CutCopyMode = $false  # Clear clipboard
 
                     $rowsCopied = $sourceRows - 1
                     $destRow += $rowsCopied
