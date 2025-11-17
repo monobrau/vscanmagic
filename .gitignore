@@ -55,3 +55,6 @@ TestResults/
 # *.xlsx
 # *.xls
 
+*.xlsx
+*.docx
+VScanMagic_Settings.json
