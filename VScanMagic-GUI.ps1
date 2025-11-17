@@ -1060,6 +1060,62 @@ function New-WordReport {
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
+        # --- Vulnerability Distribution Chart ---
+        Write-Log "Creating vulnerability distribution pie chart..."
+        $selection.Style = "Heading 2"
+        $selection.TypeText("Vulnerability Distribution by Product/System")
+        $selection.TypeParagraph()
+
+        try {
+            # Create pie chart (wdChartPie = 5)
+            $chart = $selection.InlineShapes.AddChart2(-1, 5).Chart
+
+            # Prepare chart data
+            $chartData = $chart.ChartData
+            $chartData.Activate()
+
+            $workbook = $chartData.Workbook
+            $worksheet = $workbook.Worksheets.Item(1)
+
+            # Clear default data
+            $worksheet.UsedRange.Clear()
+
+            # Set headers
+            $worksheet.Cells.Item(1, 1).Value2 = "Product/System"
+            $worksheet.Cells.Item(1, 2).Value2 = "Vulnerabilities"
+
+            # Populate data from Top10Data
+            $row = 2
+            foreach ($item in $Top10Data) {
+                $worksheet.Cells.Item($row, 1).Value2 = $item.Product
+                $worksheet.Cells.Item($row, 2).Value2 = $item.VulnCount
+                $row++
+            }
+
+            # Set chart data range
+            $dataRange = $worksheet.Range("A1:B$($row - 1)")
+            $chart.SetSourceData($dataRange)
+
+            # Configure chart appearance
+            $chart.HasTitle = $true
+            $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
+            $chart.HasLegend = $true
+            $chart.Legend.Position = -4107  # xlLegendPositionRight
+
+            # Show data labels with percentages
+            $chart.ApplyDataLabels(5, $true, $true, $false, $false, $false, $false)  # xlDataLabelsShowPercent = 5
+
+            # Close chart data
+            $workbook.Close($false)
+
+            Write-Log "Pie chart created successfully"
+        } catch {
+            Write-Log "Warning: Could not create pie chart: $($_.Exception.Message)" -Level Warning
+        }
+
+        $selection.TypeParagraph()
+        $selection.TypeParagraph()
+
         # Insert continuous section break to restore normal margins without page break
         $selection.InsertBreak(3)  # 3 = wdSectionBreakContinuous
         $detailedSection = $selection.Sections.Item(1)
@@ -1611,11 +1667,32 @@ function Show-VScanMagicGUI {
             $textBoxOutputDir.Text = $inputDirectory
 
             # Extract company name from filename
-            # Expected format: "...Reports-{CompanyName}_{timestamp}.xlsx"
+            # Try multiple patterns to detect company name
             $fileName = [System.IO.Path]::GetFileNameWithoutExtension($openFileDialog.FileName)
-            if ($fileName -match '-([^_-]+)_') {
+            Write-Log "Attempting to extract company name from filename: $fileName"
+
+            $companyName = $null
+            # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Reports-{CompanyName}_..."
+            if ($fileName -match 'Reports?-([^_-]+)(?:_|$)') {
                 $companyName = $matches[1]
+                Write-Log "Matched Pattern 1 (Reports-Company_): $companyName"
+            }
+            # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports"
+            elseif ($fileName -match '^([^_-]+)[-_]Reports?') {
+                $companyName = $matches[1]
+                Write-Log "Matched Pattern 2 (Company-Reports): $companyName"
+            }
+            # Pattern 3: Any text before first underscore or hyphen (fallback)
+            elseif ($fileName -match '^([^_-]+)') {
+                $companyName = $matches[1]
+                Write-Log "Matched Pattern 3 (fallback - first segment): $companyName"
+            }
+
+            if ($companyName) {
                 $textBoxClientName.Text = $companyName
+                Write-Log "Company name set to: $companyName"
+            } else {
+                Write-Log "Could not extract company name from filename" -Level Warning
             }
         }
     })
