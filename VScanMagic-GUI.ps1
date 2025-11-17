@@ -1079,14 +1079,18 @@ function New-WordReport {
             $worksheet = $chartWorkbook.Worksheets(1)
             Write-Log "Chart data workbook accessed"
 
-            # Populate data row by row (more reliable for charts)
-            $worksheet.Cells(1, 1).Value2 = "Product/System"
-            $worksheet.Cells(1, 2).Value2 = "Vulnerabilities"
+            # Clear default chart data (contains sample quarters)
+            $worksheet.UsedRange.Clear()
+            Write-Log "Default chart data cleared"
+
+            # Populate data row by row with explicit type conversion
+            $worksheet.Cells.Item(1, 1) = "Product/System"
+            $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
 
             $row = 2
             foreach ($item in $Top10Data) {
-                $worksheet.Cells($row, 1).Value2 = $item.Product
-                $worksheet.Cells($row, 2).Value2 = $item.VulnCount
+                $worksheet.Cells.Item($row, 1) = [string]$item.Product
+                $worksheet.Cells.Item($row, 2) = [int]$item.VulnCount
                 $row++
             }
             Write-Log "Chart data populated ($($row - 2) items)"
@@ -1369,13 +1373,17 @@ function New-ExcelReport {
         if ($null -ne $firstValidSheet) {
             try {
                 $sourceCols = $firstValidSheet.UsedRange.Columns.Count
-                $headerRange = $firstValidSheet.Range("A1", $firstValidSheet.Cells.Item(1, $sourceCols))
-                $headerValues = $headerRange.Value2
-                $targetRange = $sourceDataSheet.Range("A1", $sourceDataSheet.Cells.Item(1, $sourceCols))
-                $targetRange.Value2 = $headerValues
-                Write-Log "Headers copied successfully" -Level Info
-                Clear-ComObject $headerRange
-                Clear-ComObject $targetRange
+                $sourceRow = $firstValidSheet.Rows(1)
+                $targetRow = $sourceDataSheet.Rows(1)
+
+                # Copy column by column to avoid type casting issues
+                for ($col = 1; $col -le $sourceCols; $col++) {
+                    $sourceDataSheet.Cells.Item(1, $col).Value2 = $firstValidSheet.Cells.Item(1, $col).Value2
+                }
+
+                Write-Log "Headers copied successfully ($sourceCols columns)" -Level Info
+                Clear-ComObject $sourceRow
+                Clear-ComObject $targetRow
             } catch {
                 throw "Failed to copy headers: $($_.Exception.Message)"
             }
