@@ -795,7 +795,7 @@ function New-WordReport {
         # Set document properties (optional - may fail on some systems)
         Write-Log "Setting document properties..."
         try {
-            $doc.BuiltInDocumentProperties.Item("Title").Value = "Vulnerability Assessment Report - $ClientName"
+            $doc.BuiltInDocumentProperties.Item("Title").Value = "Top Ten Vulnerabilities Report - $ClientName"
             $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
             $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
             $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
@@ -820,15 +820,13 @@ function New-WordReport {
         # Add some top spacing for title page
         $selection.TypeParagraph()
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Name = "Calibri"
         $selection.Font.Size = 32
         $selection.Font.Bold = $true
         $selection.Font.Color = 5855577  # Dark blue color
         $selection.ParagraphFormat.Alignment = 1  # Center
-        $selection.TypeText("Vulnerability Assessment Report")
-        $selection.TypeParagraph()
+        $selection.TypeText("Top Ten Vulnerabilities Report")
         $selection.TypeParagraph()
 
         # Add horizontal line
@@ -838,7 +836,6 @@ function New-WordReport {
         $selection.TypeParagraph()
         $selection.ParagraphFormat.Borders.Item(3).LineStyle = 0  # Reset border
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Size = 20
         $selection.Font.Bold = $true
@@ -846,12 +843,10 @@ function New-WordReport {
         $selection.TypeText($ClientName)
         $selection.TypeParagraph()
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Size = 14
         $selection.Font.Bold = $false
         $selection.TypeText("Scan Date: $ScanDate")
-        $selection.TypeParagraph()
         $selection.TypeParagraph()
 
         $selection.Font.Size = 12
@@ -1149,31 +1144,27 @@ function New-WordReport {
             }
             Write-Log "Chart data populated ($($row - 2) items)"
 
-            # Update chart range to match our data
-            try {
-                $dataRange = $worksheet.Range("A1:B$($row - 1)")
-                $chart.SetSourceData($dataRange)
-                Write-Log "Chart source data set to range A1:B$($row - 1)"
-            } catch {
-                Write-Log "SetSourceData failed: $($_.Exception.Message)" -Level Warning
-                # Chart will use default data range - this is acceptable
-                # The data is populated in the sheet, so chart will show something
-            }
-
             # Basic chart formatting
             $chart.HasTitle = $true
             $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
             $chart.HasLegend = $true
             $chart.Legend.Position = -4107  # xlLegendPositionBottom - legend below pie
-            Write-Log "Chart formatting applied (legend positioned below pie)"
+            $chart.Legend.Font.Size = 18  # Double the default size for larger swatches
+            Write-Log "Chart formatting applied (legend positioned below pie with larger swatches)"
 
-            # Remove data labels to avoid overlapping numbers - legend shows the info
+            # Update chart series data range to include all 10 items
             try {
                 $series = $chart.SeriesCollection(1)
                 $series.HasDataLabels = $false
-                Write-Log "Data labels disabled (using legend only)"
+                # Set the data range for the series to include all rows
+                $categoryRange = $worksheet.Range("A2:A$($row - 1)")
+                $valueRange = $worksheet.Range("B2:B$($row - 1)")
+                $series.XValues = $categoryRange
+                $series.Values = $valueRange
+                Write-Log "Chart series data range updated to include all $($row - 2) items"
             } catch {
-                # Not critical if this fails
+                Write-Log "Warning: Could not update series data range: $($_.Exception.Message)" -Level Warning
+                # Chart may show fewer items than expected
             }
 
             Write-Log "Pie chart created successfully"
@@ -1470,7 +1461,7 @@ function New-ExcelReport {
                     # Copy and paste values only (not formulas/formatting)
                     $sourceDataRange.Copy()
                     $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
-                    $excel.CutCopyMode = 0  # xlCutCopyModeOff = 0 (not $false)
+                    $excel.Application.CutCopyMode = $false  # Clear clipboard
 
                     $rowsCopied = $sourceRows - 1
                     $destRow += $rowsCopied
@@ -1860,7 +1851,7 @@ function Show-VScanMagicGUI {
     $buttonSettings = New-Object System.Windows.Forms.Button
     $buttonSettings.Location = New-Object System.Drawing.Point(580, 10)
     $buttonSettings.Size = New-Object System.Drawing.Size(90, 25)
-    $buttonSettings.Text = "⚙ Settings"
+    $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
         Show-SettingsDialog
     })
