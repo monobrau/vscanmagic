@@ -6,6 +6,7 @@ A PowerShell automation suite for processing vulnerability scan Excel files and 
 
 - **VScanMagic v2** (`vscanmagicv2.ps1`) - Original command-line script for Excel processing
 - **VScanMagic v3 GUI** (`VScanMagic-GUI.ps1`) - Modern GUI application with Word report generation
+- **VScanMagic v3 EXE** (`VScanMagic.exe`) - Standalone executable version (no PowerShell required)
 
 ## VScanMagic v3 GUI Features
 
@@ -19,6 +20,12 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
   - Color-coded Top 10 vulnerability table
   - Risk score legend
   - Detailed findings with remediation guidance
+- **Excel Report Generation**: Processed XLSX files with:
+  - Auto-fitted columns and rows
+  - Consolidated "Source Data" sheet from all remediation sheets
+  - Pivot table with vulnerability analysis
+  - Conditional formatting for high-risk items (EPSS > 0.075)
+  - Color-coded remediation status key
 - **Windows Version Consolidation**: Automatically groups Windows versions (Server 2012, Win 10, Win 11)
 - **Smart Filtering**: Excludes auto-updating browsers and duplicate entries
 - **Remediation Intelligence**: Context-aware guidance for different vulnerability types
@@ -56,6 +63,16 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 
 ## Installation
 
+### Option 1: Standalone Executable (Recommended)
+
+1. Download `VScanMagic.zip` from the repository
+2. Extract `VScanMagic.exe` to your desired location
+3. Double-click to run - no PowerShell installation required!
+
+**Note:** Microsoft Excel and Word must still be installed on the system for the application to function.
+
+### Option 2: PowerShell Script
+
 1. Clone this repository:
    ```bash
    git clone https://github.com/monobrau/vscanmagic.git
@@ -72,17 +89,37 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
 
+### Building the Executable
+
+To build your own executable from the PowerShell script:
+
+1. Install the `ps2exe` PowerShell module:
+   ```powershell
+   Install-Module -Name ps2exe -Scope CurrentUser
+   ```
+
+2. Run the build script:
+   ```powershell
+   .\BuildExeFinal.ps1
+   ```
+
+This will create `VScanMagic.exe` with the custom icon (`VScanMagic.ico`) and package it in `VScanMagic.zip`.
+
 ## Usage
 
-### VScanMagic v3 GUI
+### VScanMagic v3 (EXE or GUI Script)
 
+**Using the Executable:**
+1. Double-click `VScanMagic.exe` to launch the application
+
+**Using the PowerShell Script:**
 1. Run the GUI script:
    ```powershell
    .\VScanMagic-GUI.ps1
    ```
 
 2. In the GUI window:
-   - **Browse** for your input XLSX vulnerability scan file (must contain "Source Data" sheet)
+   - **Browse** for your input XLSX vulnerability scan file
    - Enter the **Client Name**
    - Select the **Scan Date**
    - Choose output options (Excel Report and/or Word Report)
@@ -90,23 +127,50 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
    - Click **Generate**
 
 3. The application will:
+   - **Auto-detect** and consolidate all "Remediate within *" and "Remediate at *" sheets
+   - Exclude "Company" and "Linux Remediations" sheets
    - Read and analyze vulnerability data
    - Calculate composite risk scores
    - Identify top 10 vulnerabilities
-   - Generate professional Word report with color-coded tables
+   - Generate professional Word report with color-coded tables and detailed remediation guidance (if selected)
+   - Generate processed Excel file with pivot tables and conditional formatting (if selected)
    - Provide detailed remediation guidance
 
 4. View the processing log in real-time within the GUI
 
 ### Required Excel Structure
 
-Your input XLSX file must have a sheet named "Source Data" with these columns:
-- Host Name
-- IP
-- Product
-- Critical, High, Medium, Low (vulnerability counts)
-- Vulnerability Count
-- EPSS Score
+**Auto-Sheet Detection:**
+VScanMagic v3 automatically finds and consolidates data from multiple sheets:
+- **Included**: All sheets matching "Remediate within *" or "Remediate at *" patterns
+- **Excluded**: "Company", "Linux Remediations"
+- No manual sheet selection needed - works just like v2!
+
+**Flexible Column Detection:**
+The script uses intelligent column mapping and can detect variations of common column names:
+
+**Minimum Required:**
+- **Product/Software** column (required) - Variations recognized:
+  - Product, Software, Application, App, Program, Title, Product Name, Software Name
+
+**Optional Columns** (with multiple name variations recognized):
+- **Host Name**: Host Name, Hostname, Computer, Computer Name, Device, System, Machine
+- **IP Address**: IP, IP Address, IPAddress, Address
+- **Critical**: Critical, Crit, Critical Count, Critical Vulnerabilities
+- **High**: High, High Count, High Vulnerabilities
+- **Medium**: Medium, Med, Medium Count, Medium Vulnerabilities
+- **Low**: Low, Low Count, Low Vulnerabilities
+- **Vulnerability Count**: Vulnerability Count, Vuln Count, Total Vulnerabilities, Total Vulns, Count
+- **EPSS Score**: EPSS Score, EPSS, Exploit Prediction Score, Max EPSS Score
+
+**Smart Features:**
+- Automatic multi-sheet consolidation (like v2)
+- Case-insensitive column matching
+- Partial column name matching
+- Automatic vulnerability count calculation if not provided (sums Critical + High + Medium + Low)
+- Handles missing columns gracefully (uses defaults)
+- Filters out rows with no product name or zero vulnerabilities
+- Progress logging for large datasets
 
 ### VScanMagic v2 (Command Line)
 
@@ -188,6 +252,8 @@ The script adds a color-coded key indicating remediation status:
 ## License
 
 This script is provided as-is for use in vulnerability reporting workflows.
+
+**Copyright (c) 2025 Chris Knospe**
 
 ## Contributing
 
