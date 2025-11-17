@@ -820,7 +820,6 @@ function New-WordReport {
         # Add some top spacing for title page
         $selection.TypeParagraph()
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Name = "Calibri"
         $selection.Font.Size = 32
@@ -828,7 +827,6 @@ function New-WordReport {
         $selection.Font.Color = 5855577  # Dark blue color
         $selection.ParagraphFormat.Alignment = 1  # Center
         $selection.TypeText("Top Ten Vulnerabilities Report")
-        $selection.TypeParagraph()
         $selection.TypeParagraph()
 
         # Add horizontal line
@@ -838,7 +836,6 @@ function New-WordReport {
         $selection.TypeParagraph()
         $selection.ParagraphFormat.Borders.Item(3).LineStyle = 0  # Reset border
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Size = 20
         $selection.Font.Bold = $true
@@ -846,12 +843,10 @@ function New-WordReport {
         $selection.TypeText($ClientName)
         $selection.TypeParagraph()
         $selection.TypeParagraph()
-        $selection.TypeParagraph()
 
         $selection.Font.Size = 14
         $selection.Font.Bold = $false
         $selection.TypeText("Scan Date: $ScanDate")
-        $selection.TypeParagraph()
         $selection.TypeParagraph()
 
         $selection.Font.Size = 12
