@@ -14,12 +14,17 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 
 - **Graphical User Interface**: User-friendly Windows Forms interface
 - **Risk Score Calculation**: Automatic computation of composite risk scores using EPSS and CVSS data
+  - Formula: **Risk Score = EPSS Score × Average CVSS**
+  - Average CVSS calculated from weighted severity counts (Critical×9.0 + High×7.0 + Medium×5.0 + Low×3.0)
+  - Dynamic severity thresholds adapt to your data (percentages of maximum risk score)
 - **Word Report Generation**: Professional DOCX reports with:
   - Executive summary with client name and scan date
   - Scoring methodology documentation
-  - Color-coded Top 10 vulnerability table
-  - Risk score legend
+  - Color-coded Top 10 vulnerability table with dynamic severity thresholds
+  - Dynamic risk score legend (thresholds adapt to your data)
+  - Pie chart showing vulnerability distribution by product/system
   - Detailed findings with remediation guidance
+  - Affected systems listing
 - **Excel Report Generation**: Processed XLSX files with:
   - Auto-fitted columns and rows
   - Consolidated "Source Data" sheet from all remediation sheets
@@ -30,12 +35,21 @@ The new GUI version offers enhanced functionality for vulnerability reporting:
 - **Smart Filtering**: Excludes auto-updating browsers and duplicate entries
 - **Remediation Intelligence**: Context-aware guidance for different vulnerability types
 - **ConnectWise Automate Integration**: Recommendations aligned with CW Automate patch management
+- **User Settings Persistence**: Save and reuse company information, contact details, and prepared-by name
+- **Real-time Processing Log**: View progress and status updates within the GUI
 
-### Color-Coded Risk Levels
+### Dynamic Color-Coded Risk Levels
 
-- **Red (Critical)**: Risk Score ≥ 7,500
-- **Orange (High)**: Risk Score ≥ 1,000
-- **Yellow (Medium)**: Risk Score > 0
+The application uses **dynamic severity thresholds** that adapt to your specific vulnerability data. Thresholds are calculated as percentages of the maximum risk score found in your dataset, ensuring appropriate color coding regardless of the data range.
+
+**Five Risk Levels** (from highest to lowest):
+- **Crimson Red (Critical)**: Risk Score ≥ 100% of maximum (top tier vulnerabilities)
+- **Orange-Red (Very High)**: Risk Score ≥ 70% of maximum
+- **Dark Orange (High)**: Risk Score ≥ 50% of maximum
+- **Orange (Medium-High)**: Risk Score ≥ 30% of maximum
+- **Yellow (Medium)**: Risk Score ≥ 0% (baseline - all items need attention)
+
+**Note**: The color gradient uses yellow-to-red (no greens) to emphasize that all vulnerabilities in the Top 10 require attention, with severity indicated by the intensity of the color.
 
 ## VScanMagic v2 Features
 
@@ -119,8 +133,9 @@ This will create `VScanMagic.exe` with the custom icon (`VScanMagic.ico`) and pa
    ```
 
 2. In the GUI window:
+   - Click **Settings** (top right) to configure your company information, contact details, and "Prepared By" name (saved for future use)
    - **Browse** for your input XLSX vulnerability scan file
-   - Enter the **Client Name**
+   - Enter the **Client Name** (auto-populated from filename if detected)
    - Select the **Scan Date**
    - Choose output options (Excel Report and/or Word Report)
    - Select the **Output Directory**
@@ -130,13 +145,21 @@ This will create `VScanMagic.exe` with the custom icon (`VScanMagic.ico`) and pa
    - **Auto-detect** and consolidate all "Remediate within *" and "Remediate at *" sheets
    - Exclude "Company" and "Linux Remediations" sheets
    - Read and analyze vulnerability data
-   - Calculate composite risk scores
-   - Identify top 10 vulnerabilities
-   - Generate professional Word report with color-coded tables and detailed remediation guidance (if selected)
+   - Calculate composite risk scores (EPSS × Average CVSS)
+   - Calculate dynamic severity thresholds based on maximum risk score
+   - Identify top 10 vulnerabilities by risk score
+   - Generate professional Word report with:
+     - Dynamic color-coded Top 10 table (thresholds adapt to your data)
+     - Risk score legend showing percentage-based thresholds
+     - Pie chart visualizing vulnerability distribution
+     - Detailed findings with remediation guidance
+     - Affected systems listing
    - Generate processed Excel file with pivot tables and conditional formatting (if selected)
    - Provide detailed remediation guidance
 
 4. View the processing log in real-time within the GUI
+
+5. After generation, use the **Open** buttons to view your reports directly from the application
 
 ### Required Excel Structure
 
@@ -244,8 +267,43 @@ The script adds a color-coded key indicating remediation status:
 - The script automatically handles paths longer than 200 characters using temporary files
 - If you encounter path issues, try using shorter directory names or moving files closer to the root
 
+## Risk Score Calculation Details
+
+### Formula
+```
+Risk Score = EPSS Score × Average CVSS
+```
+
+Where:
+- **EPSS Score**: Exploit Prediction Scoring System score (0.0 to 1.0)
+- **Average CVSS**: Weighted average CVSS equivalent score calculated as:
+  ```
+  (Critical × 9.0 + High × 7.0 + Medium × 5.0 + Low × 3.0) / Total Vulnerabilities
+  ```
+
+### Dynamic Thresholds
+The application calculates severity thresholds dynamically based on the maximum risk score in your dataset:
+- Finds the highest risk score in the Top 10 vulnerabilities
+- Calculates thresholds as percentages: 100%, 70%, 50%, 30%, 0%
+- Ensures appropriate color coding regardless of data range
+- Displays thresholds in the Word report legend with actual values and percentages
+
+**Example**: If your maximum risk score is 8.5:
+- Critical: ≥ 8.50 (100%)
+- Very High: ≥ 5.95 (70%)
+- High: ≥ 4.25 (50%)
+- Medium-High: ≥ 2.55 (30%)
+- Medium: ≥ 0.00 (0%)
+
 ## Version History
 
+- **v3.0.0**: 
+  - Added standalone executable version (VScanMagic.exe)
+  - Implemented dynamic severity thresholds
+  - Added pie chart visualization
+  - Enhanced path handling for EXE execution
+  - Added user settings persistence
+  - Improved risk score calculation and documentation
 - **v1.20.0**: Refined COM object release logic for Company sheet search and Pivot sheet placement
 - Previous versions: Initial functionality and bug fixes
 
