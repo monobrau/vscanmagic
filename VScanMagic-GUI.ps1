@@ -1882,6 +1882,41 @@ function New-TicketInstructions {
     }
 }
 
+function New-TicketNotes {
+    # Define variations for each workflow step
+    $variations = @(
+        @("Reviewed lightweight agents", "Checked lightweight agents", "Examined lightweight agents", "Verified lightweight agent configuration")
+        @("Reviewed probe", "Checked probe configuration", "Examined probe settings", "Verified probe setup")
+        @("Compared agent/probe count vs other systems", "Verified agent/probe count against other systems", "Checked agent/probe count compared to other systems", "Analyzed agent/probe count relative to other systems")
+        @("Reviewed mapped credentials", "Checked mapped credentials", "Verified mapped credentials", "Examined credential mappings")
+        @("Reviewed external assets", "Checked external assets", "Examined external assets", "Verified external asset inventory")
+        @("Reviewed nmap interface on probe", "Checked nmap interface on probe", "Examined probe nmap interface", "Verified nmap interface configuration on probe")
+        @("Reviewed deprecated items", "Checked deprecated items", "Examined deprecated items", "Verified deprecated item list")
+        @("Generated all reports", "Created all reports", "Produced all reports", "Compiled all reports")
+        @("Analyzed reports", "Reviewed reports", "Examined reports", "Assessed reports")
+        @("Made a top ten vulnerabilities docx file", "Created top ten vulnerabilities docx file", "Generated top ten vulnerabilities docx file", "Produced top ten vulnerabilities docx report")
+        @("Sent encrypted email to contact with reports", "Delivered encrypted email with reports to contact", "Transmitted encrypted email containing reports to contact", "Sent secure email with reports to contact")
+    )
+
+    # Generate random selection
+    $notes = New-Object System.Collections.ArrayList
+    foreach ($varSet in $variations) {
+        $randomIndex = Get-Random -Minimum 0 -Maximum $varSet.Count
+        [void]$notes.Add("- " + $varSet[$randomIndex])
+    }
+
+    # Join with newlines
+    $result = $notes -join "`r`n"
+
+    # Copy to clipboard
+    try {
+        [System.Windows.Forms.Clipboard]::SetText($result)
+        [System.Windows.Forms.MessageBox]::Show("Ticket notes copied to clipboard!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to copy to clipboard: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+}
+
 # --- GUI Functions ---
 
 function Show-SettingsDialog {
@@ -2036,6 +2071,16 @@ function Show-VScanMagicGUI {
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
+
+    # --- Ticket Notes Button (Top Right) ---
+    $buttonTicketNotes = New-Object System.Windows.Forms.Button
+    $buttonTicketNotes.Location = New-Object System.Drawing.Point(450, 10)
+    $buttonTicketNotes.Size = New-Object System.Drawing.Size(120, 25)
+    $buttonTicketNotes.Text = "Ticket Notes"
+    $buttonTicketNotes.Add_Click({
+        New-TicketNotes
+    })
+    $form.Controls.Add($buttonTicketNotes)
 
     # --- Settings Button (Top Right) ---
     $buttonSettings = New-Object System.Windows.Forms.Button
