@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 3.1.0
+Version: 3.1.1
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 #>
@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Drawing
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v3"
-    Version = "3.1.0"
+    Version = "3.1.1"
     Author = "River Run MSP"
 
     # Risk Score Calculation
@@ -1897,17 +1897,17 @@ function New-TicketNotes {
 
     # Steps performed variations
     $stepVariations = @(
-        @("Reviewed lightweight agents", "Checked lightweight agents", "Examined lightweight agents", "Verified lightweight agent configuration")
-        @("Reviewed probe", "Checked probe configuration", "Examined probe settings", "Verified probe setup")
-        @("Compared agent/probe count vs other systems", "Verified agent/probe count against other systems", "Checked agent/probe count compared to other systems", "Analyzed agent/probe count relative to other systems")
-        @("Reviewed mapped credentials", "Checked mapped credentials", "Verified mapped credentials", "Examined credential mappings")
-        @("Reviewed external assets", "Checked external assets", "Examined external assets", "Verified external asset inventory")
-        @("Reviewed nmap interface on probe", "Checked nmap interface on probe", "Examined probe nmap interface", "Verified nmap interface configuration on probe")
-        @("Reviewed deprecated items", "Checked deprecated items", "Examined deprecated items", "Verified deprecated item list")
-        @("Generated all reports", "Created all reports", "Produced all reports", "Compiled all reports")
-        @("Analyzed reports", "Reviewed reports", "Examined reports", "Assessed reports")
-        @("Made a top ten vulnerabilities docx file", "Created top ten vulnerabilities docx file", "Generated top ten vulnerabilities docx file", "Produced top ten vulnerabilities docx report")
-        @("Sent encrypted email to contact with reports", "Delivered encrypted email with reports to contact", "Transmitted encrypted email containing reports to contact", "Sent secure email with reports to contact")
+        ,@("Reviewed lightweight agents", "Checked lightweight agents", "Examined lightweight agents", "Verified lightweight agent configuration"),
+        ,@("Reviewed probe", "Checked probe configuration", "Examined probe settings", "Verified probe setup"),
+        ,@("Compared agent/probe count vs other systems", "Verified agent/probe count against other systems", "Checked agent/probe count compared to other systems", "Analyzed agent/probe count relative to other systems"),
+        ,@("Reviewed mapped credentials", "Checked mapped credentials", "Verified mapped credentials", "Examined credential mappings"),
+        ,@("Reviewed external assets", "Checked external assets", "Examined external assets", "Verified external asset inventory"),
+        ,@("Reviewed nmap interface on probe", "Checked nmap interface on probe", "Examined probe nmap interface", "Verified nmap interface configuration on probe"),
+        ,@("Reviewed deprecated items", "Checked deprecated items", "Examined deprecated items", "Verified deprecated item list"),
+        ,@("Generated all reports", "Created all reports", "Produced all reports", "Compiled all reports"),
+        ,@("Analyzed reports", "Reviewed reports", "Examined reports", "Assessed reports"),
+        ,@("Made a top ten vulnerabilities docx file", "Created top ten vulnerabilities docx file", "Generated top ten vulnerabilities docx file", "Produced top ten vulnerabilities docx report"),
+        ,@("Sent encrypted email to contact with reports", "Delivered encrypted email with reports to contact", "Transmitted encrypted email containing reports to contact", "Sent secure email with reports to contact")
     )
 
     # Task resolved variations
@@ -1922,11 +1922,18 @@ function New-TicketNotes {
     # Select random task
     $task = $taskVariations | Get-Random
 
-    # Generate random steps
+    # Generate random steps - select ONE random variation from each step category
     $steps = New-Object System.Collections.ArrayList
     foreach ($varSet in $stepVariations) {
-        $randomIndex = Get-Random -Minimum 0 -Maximum $varSet.Count
-        [void]$steps.Add("- " + $varSet[$randomIndex])
+        if ($varSet -is [Array] -and $varSet.Count -gt 0) {
+            # Use Get-Random directly on the array to select ONE element
+            $selectedStep = $varSet | Get-Random
+            # Ensure it's a string and not an array
+            $selectedStep = [string]$selectedStep
+            if ($selectedStep -and $selectedStep.Trim().Length -gt 0) {
+                [void]$steps.Add("- " + $selectedStep.Trim())
+            }
+        }
     }
     $stepsText = $steps -join "`r`n"
 
@@ -1935,26 +1942,26 @@ function New-TicketNotes {
 
     # Build full ticket notes
     $result = @"
-Task -
+**Task**
 
 $task
 
 
-Steps performed -
+**Steps performed**
 
 $stepsText
 
 
-Is the task resolved -
+**Is the task resolved?**
 
 $taskResolved
 
 
-Next step(s) -
+**Next step(s)**
 
 
 
-Special note or recommendation(s) -
+**Special note or recommendation(s)**
 
 
 "@

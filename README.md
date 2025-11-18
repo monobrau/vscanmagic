@@ -7,7 +7,10 @@ A suite of PowerShell tools for vulnerability management and security alert proc
 ### 1. VScanMagic v2 - Vulnerability Report Processor (`vscanmagicv2.ps1`)
 Automates the processing of vulnerability report Excel files, performing data consolidation, formatting, and pivot table creation with conditional formatting.
 
-### 2. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`) ⭐ NEW
+### 2. VScanMagic v3 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`) ⭐ NEW
+A GUI application that processes vulnerability scan Excel files and generates professional Word and Excel reports with dynamic severity thresholds, email templates, and ticket notes.
+
+### 3. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`) ⭐ NEW
 A GUI application that processes Barracuda XDR security alerts and generates professional, client-facing DOCX reports with automated threat classification.
 
 ---
@@ -121,6 +124,119 @@ The script adds a color-coded key indicating remediation status:
 ## License
 
 This script is provided as-is for use in vulnerability reporting workflows.
+
+## VScanMagic v3 - Vulnerability Report Generator
+
+A GUI application that processes vulnerability scan Excel files and generates professional Word and Excel reports with dynamic severity thresholds, email templates, and ticket notes.
+
+### Features
+
+- **Professional Word Reports**: Generates color-coded Top Ten vulnerabilities reports with dynamic severity thresholds
+- **Excel Spreadsheets**: Creates detailed vulnerability spreadsheets with risk scoring
+- **Email Templates**: Generates professional email templates for client communication
+- **Ticket Notes**: Creates ConnectWise-compatible ticket notes with randomized content
+- **Dynamic Severity Thresholds**: Automatically adapts risk score thresholds based on your data
+- **Risk Score Calculation**: Uses EPSS scores and CVSS equivalents for accurate risk assessment
+
+### Requirements
+
+- **Windows PowerShell 5.1 or later**
+- **Microsoft Excel** installed and properly registered
+- **Microsoft Word** installed and properly registered
+- **PowerShell execution policy** that allows script execution
+- **Input File**: **Pending EPSS report** exported from the **ConnectSecure portal** (Excel `.xlsx` format)
+
+### Installation
+
+#### Option 1: Standalone Executable (Recommended)
+
+1. Download `VScanMagic.zip` from the latest release
+2. Extract `VScanMagic.exe` to your desired location
+3. Double-click `VScanMagic.exe` to launch
+
+#### Option 2: PowerShell Script
+
+1. Clone this repository or download `VScanMagic-GUI.ps1`
+2. Ensure Microsoft Excel and Word are installed
+3. If needed, adjust your PowerShell execution policy:
+   ```powershell
+   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+   ```
+4. Run the script:
+   ```powershell
+   .\VScanMagic-GUI.ps1
+   ```
+
+### Usage
+
+1. **Export the Pending EPSS report** from the ConnectSecure portal
+2. Launch VScanMagic v3 (run `VScanMagic.exe` or `VScanMagic-GUI.ps1`)
+3. **Select the Pending EPSS report** Excel file using the "Browse..." button
+4. Enter the **Client Name** and **Output Directory**
+5. Choose your **Output Options**:
+   - Generate Word Report (Top Ten vulnerabilities)
+   - Generate Excel Spreadsheet
+   - Generate Email Template
+   - Generate Ticket Instructions
+   - Generate Ticket Notes (ConnectWise format)
+6. Click **Generate** to create the reports
+7. Use the **Open** buttons to view generated files
+
+### Input File Requirements
+
+**Important**: VScanMagic v3 requires the **Pending EPSS report** exported from the **ConnectSecure portal**.
+
+The Excel file must contain the following columns:
+- Product/Software
+- EPSS Score
+- CVSS Severity (Critical, High, Medium, Low)
+- Host Name
+- IP Address
+- Additional vulnerability details
+
+### Dynamic Severity Thresholds
+
+The application uses **dynamic severity thresholds** that adapt to your specific vulnerability data. Thresholds are calculated as percentages of the maximum risk score found in your dataset:
+
+- **Crimson Red (Critical)**: Risk Score ≥ 100% of maximum
+- **Orange-Red (Very High)**: Risk Score ≥ 70% of maximum
+- **Dark Orange (High)**: Risk Score ≥ 50% of maximum
+- **Orange (Medium-High)**: Risk Score ≥ 30% of maximum
+- **Yellow (Medium)**: Risk Score ≥ 0% (baseline)
+
+### Risk Score Calculation
+
+Risk Score = EPSS Score × Average CVSS
+
+Where Average CVSS is calculated as:
+```
+(Critical × 9.0 + High × 7.0 + Medium × 5.0 + Low × 3.0) / Total Vulnerabilities
+```
+
+### Ticket Notes Feature
+
+Generate ConnectWise-compatible ticket notes with:
+- Randomized task descriptions (5-8 variations)
+- Randomized steps performed (11 categories with 4 variations each)
+- Professional formatting with bold markdown headers
+- One-click generation and clipboard copy
+
+### Troubleshooting
+
+#### Excel/Word COM Object Errors
+- Ensure Excel and Word are not already running when you start the application
+- Verify Microsoft Office is properly installed and licensed
+- Check that file paths don't contain special characters
+
+#### File Access Issues
+- Ensure the input Excel file is not open in Excel or another program
+- Check file permissions for both input and output locations
+- If using OneDrive, ensure files are synced locally
+
+#### Missing Columns Error
+- Verify you're using the **Pending EPSS report** from ConnectSecure portal
+- Ensure the Excel file contains required columns (Product, EPSS Score, CVSS Severity, etc.)
+- Check that the file hasn't been modified or corrupted
 
 ## VScanMagic Alert Processor v3 - Security Alert Analysis Tool
 
