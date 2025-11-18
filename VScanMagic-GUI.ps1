@@ -1883,8 +1883,20 @@ function New-TicketInstructions {
 }
 
 function New-TicketNotes {
-    # Define variations for each workflow step
-    $variations = @(
+    # Task variations
+    $taskVariations = @(
+        "Set up and pull vulnerability scans and verify for accuracy. Send out encrypted email with reports and recommendations.",
+        "Configured and executed vulnerability scans, verified accuracy, and sent encrypted email with reports and recommendations.",
+        "Pulled vulnerability scans, verified for accuracy, and delivered encrypted email containing reports and recommendations.",
+        "Set up vulnerability scans and verified accuracy. Transmitted encrypted email with comprehensive reports and recommendations.",
+        "Executed vulnerability scans with accuracy verification. Sent secure encrypted email with reports and recommendations to contact.",
+        "Configured vulnerability scans, performed accuracy verification, and delivered encrypted email with reports and recommendations.",
+        "Set up and ran vulnerability scans with verification. Sent encrypted email containing reports and recommendations.",
+        "Initiated vulnerability scans, verified accuracy of results, and sent encrypted email with detailed reports and recommendations."
+    )
+
+    # Steps performed variations
+    $stepVariations = @(
         @("Reviewed lightweight agents", "Checked lightweight agents", "Examined lightweight agents", "Verified lightweight agent configuration")
         @("Reviewed probe", "Checked probe configuration", "Examined probe settings", "Verified probe setup")
         @("Compared agent/probe count vs other systems", "Verified agent/probe count against other systems", "Checked agent/probe count compared to other systems", "Analyzed agent/probe count relative to other systems")
@@ -1898,15 +1910,54 @@ function New-TicketNotes {
         @("Sent encrypted email to contact with reports", "Delivered encrypted email with reports to contact", "Transmitted encrypted email containing reports to contact", "Sent secure email with reports to contact")
     )
 
-    # Generate random selection
-    $notes = New-Object System.Collections.ArrayList
-    foreach ($varSet in $variations) {
-        $randomIndex = Get-Random -Minimum 0 -Maximum $varSet.Count
-        [void]$notes.Add("- " + $varSet[$randomIndex])
-    }
+    # Task resolved variations
+    $taskResolvedVariations = @(
+        "Task complete",
+        "Completed",
+        "Task completed",
+        "Yes - task complete",
+        "Yes - completed"
+    )
 
-    # Join with newlines
-    $result = $notes -join "`r`n"
+    # Select random task
+    $task = $taskVariations | Get-Random
+
+    # Generate random steps
+    $steps = New-Object System.Collections.ArrayList
+    foreach ($varSet in $stepVariations) {
+        $randomIndex = Get-Random -Minimum 0 -Maximum $varSet.Count
+        [void]$steps.Add("- " + $varSet[$randomIndex])
+    }
+    $stepsText = $steps -join "`r`n"
+
+    # Select random task resolved
+    $taskResolved = $taskResolvedVariations | Get-Random
+
+    # Build full ticket notes
+    $result = @"
+Task -
+
+$task
+
+
+Steps performed -
+
+$stepsText
+
+
+Is the task resolved -
+
+$taskResolved
+
+
+Next step(s) -
+
+
+
+Special note or recommendation(s) -
+
+
+"@
 
     # Copy to clipboard
     try {
