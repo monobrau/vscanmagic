@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 3.0.0
+Version: 3.1.0
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 #>
@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Drawing
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v3"
-    Version = "3.0.0"
+    Version = "3.1.0"
     Author = "River Run MSP"
 
     # Risk Score Calculation
