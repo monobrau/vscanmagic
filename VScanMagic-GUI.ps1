@@ -1317,7 +1317,9 @@ function New-WordReport {
                 $selection.TypeText("Network printers and IoT devices require manual firmware updates via manufacturer-provided tools and interfaces. ")
                 $selection.TypeText("Consult the manufacturer's documentation for firmware update procedures.")
             } elseif ($item.Product -like "*Microsoft Teams*") {
-                $selection.TypeText("Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate.")
+                $selection.TypeText("Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. ")
+                $selection.TypeText("This can sometimes be remediated by cleaning up the unused user profile installed versions using: ")
+                $selection.TypeText("Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM.")
             } else {
                 $selection.TypeText("This application should be updated to the latest version. ")
                 $selection.TypeText("If available via ConnectWise Automate/RMM, deploy updates using the patch management system. ")
@@ -1902,6 +1904,8 @@ function New-TicketInstructions {
                 [void]$sb.AppendLine("  - Consult manufacturer documentation for update procedures")
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 [void]$sb.AppendLine("  - Update via RMM script deployed through ConnectWise Automate")
+                [void]$sb.AppendLine("  - Can sometimes be remediated by cleaning up unused user profile installed versions")
+                [void]$sb.AppendLine("  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM")
             } else {
                 [void]$sb.AppendLine("  - Update to latest version")
                 [void]$sb.AppendLine("  - Deploy via ConnectWise Automate/RMM if available")
