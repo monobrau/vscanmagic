@@ -1667,7 +1667,7 @@ function New-ExcelReport {
 
                 $keyCurrentRow = $keyStartRow + 1
                 $keyData = @(
-                    @{Text = "Do not touch"; BgColorIndex = 3; FontColorIndex = 2; Strikethrough = $false}
+                    @{Text = "Do not touch"; BgColorIndex = 46; FontColorIndex = 2; Strikethrough = $false}
                     @{Text = "No action needed - auto updates"; BgColorIndex = 4; FontColorIndex = 2; Strikethrough = $false}
                     @{Text = "Update or patch"; BgColorIndex = 5; FontColorIndex = 2; Strikethrough = $false}
                     @{Text = "Uninstall"; BgColorIndex = 16; FontColorIndex = 1; Strikethrough = $false}
