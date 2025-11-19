@@ -410,6 +410,11 @@ function Read-SheetData {
             $ip = [string]$rangeValues[$row, $columnIndices['IP']]
         }
 
+        $username = ''
+        if ($columnIndices.ContainsKey('Username')) {
+            $username = [string]$rangeValues[$row, $columnIndices['Username']]
+        }
+
         $critical = 0
         if ($columnIndices.ContainsKey('Critical')) {
             $critical = Get-SafeNumericValue -Value ([string]$rangeValues[$row, $columnIndices['Critical']])
@@ -448,6 +453,7 @@ function Read-SheetData {
             $null = $data.Add([PSCustomObject]@{
                 'Host Name' = $hostName
                 'IP' = $ip
+                'Username' = $username
                 'Product' = $product
                 'Critical' = $critical
                 'High' = $high
@@ -539,6 +545,7 @@ function Get-VulnerabilityData {
         $columnMappings = @{
             'HostName' = @('Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine')
             'IP' = @('IP', 'IP Address', 'IPAddress', 'Address')
+            'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name')
             'Product' = @('Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name', 'Software Name')
             'Critical' = @('Critical', 'Crit', 'Critical Count', 'Critical Vulnerabilities')
             'High' = @('High', 'High Count', 'High Vulnerabilities')
@@ -733,8 +740,14 @@ function Get-Top10Vulnerabilities {
                 $existing.EPSSScore = $maxEPSS
             }
 
-            # Add affected systems
-            $existing.AffectedSystems += $group.Group.'Host Name'
+            # Add affected systems (store objects with hostname, IP, and username)
+            foreach ($item in $group.Group) {
+                $existing.AffectedSystems += [PSCustomObject]@{
+                    HostName = $item.'Host Name'
+                    IP = $item.'IP'
+                    Username = $item.'Username'
+                }
+            }
         } else {
             # Create new entry
             $critical = ($group.Group | Measure-Object -Property Critical -Sum).Sum
@@ -747,6 +760,16 @@ function Get-Top10Vulnerabilities {
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -VulnCount $vulnCount -EPSSScore $epssScore -AvgCVSS $avgCVSS
 
+            # Create affected systems array with hostname, IP, and username
+            $affectedSystems = @()
+            foreach ($item in $group.Group) {
+                $affectedSystems += [PSCustomObject]@{
+                    HostName = $item.'Host Name'
+                    IP = $item.'IP'
+                    Username = $item.'Username'
+                }
+            }
+
             $aggregated += [PSCustomObject]@{
                 Product = $consolidatedProduct
                 Critical = $critical
@@ -757,7 +780,7 @@ function Get-Top10Vulnerabilities {
                 EPSSScore = $epssScore
                 AvgCVSS = $avgCVSS
                 RiskScore = $riskScore
-                AffectedSystems = @($group.Group.'Host Name')
+                AffectedSystems = $affectedSystems
             }
         }
     }
@@ -1258,8 +1281,17 @@ function New-WordReport {
             $selection.Font.Bold = $false
 
             # Display systems as comma-separated list with indent
+            # Format as "hostname (username)" if username is present, otherwise just "hostname"
             $selection.ParagraphFormat.LeftIndent = 36
-            $systemsList = ($item.AffectedSystems | Select-Object -Unique) -join ", "
+            $systemsList = ($item.AffectedSystems | ForEach-Object {
+                $hostname = $_.HostName
+                $username = $_.Username
+                if (-not [string]::IsNullOrWhiteSpace($username)) {
+                    "$hostname ($username)"
+                } else {
+                    $hostname
+                }
+            } | Select-Object -Unique) -join ", "
             $selection.TypeText($systemsList)
             $selection.TypeParagraph()
             $selection.ParagraphFormat.LeftIndent = 0
@@ -1843,8 +1875,17 @@ function New-TicketInstructions {
             [void]$sb.AppendLine("Affected Systems Count:  $($item.AffectedSystems.Count)")
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Affected Systems:")
-            $systemsList = ($item.AffectedSystems | Select-Object -Unique) -join ", "
-            [void]$sb.AppendLine("  $systemsList")
+            # Group by hostname and IP to get unique systems, then format as "hostname - IP"
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP -Unique
+            foreach ($sys in $uniqueSystems) {
+                $hostname = $sys.HostName
+                $ip = $sys.IP
+                if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                    [void]$sb.AppendLine("  - $hostname - $ip")
+                } else {
+                    [void]$sb.AppendLine("  - $hostname")
+                }
+            }
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Remediation Instructions:")
 
