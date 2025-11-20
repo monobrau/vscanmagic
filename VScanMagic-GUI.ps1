@@ -762,6 +762,38 @@ function Test-IsMicrosoftApplication {
     return $false
 }
 
+function Test-IsVMwareProduct {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) {
+        return $false
+    }
+
+    # List of VMware product patterns
+    $vmwarePatterns = @(
+        'VMware',
+        'VMWare',
+        'vSphere',
+        'vCenter',
+        'ESXi',
+        'VMware Tools',
+        'VMware Workstation',
+        'VMware Player',
+        'VMware Horizon',
+        'vRealize',
+        'vCloud',
+        'NSX'
+    )
+
+    foreach ($pattern in $vmwarePatterns) {
+        if ($ProductName -like "*$pattern*") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-AverageCVSS {
     param(
         [int]$Critical,
@@ -1366,6 +1398,12 @@ function New-WordReport {
             $isMicrosoftApp = Test-IsMicrosoftApplication -ProductName $item.Product
             if ($isMicrosoftApp) {
                 $title += " - RMM+ ticketed"
+            }
+
+            # Add after-hours ticket note for VMware products
+            $isVMwareProduct = Test-IsVMwareProduct -ProductName $item.Product
+            if ($isVMwareProduct) {
+                $title += " - RMM+ after-hours ticket created if we maintain this"
             }
 
             $selection.TypeText($title)
@@ -1985,6 +2023,8 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - Application Update Required"
             } elseif (Test-IsMicrosoftApplication -ProductName $item.Product) {
                 $ticketSubject += "$($item.Product) - RMM+ ticketed"
+            } elseif (Test-IsVMwareProduct -ProductName $item.Product) {
+                $ticketSubject += "$($item.Product) - RMM+ after-hours ticket created if we maintain this"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
