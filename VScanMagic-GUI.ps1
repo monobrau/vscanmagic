@@ -48,8 +48,6 @@ $script:Config = @{
 
     # Products to Filter Out
     FilteredProducts = @(
-        'Google Chrome',
-        'Mozilla Firefox',
         'OS-OUT-OF-SUPPORT'
     )
 
@@ -821,6 +819,28 @@ function Test-IsVMwareProduct {
     return $false
 }
 
+function Test-IsAutoUpdatingSoftware {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) {
+        return $false
+    }
+
+    # List of software that auto-updates
+    $autoUpdatePatterns = @(
+        'Google Chrome',
+        'Mozilla Firefox'
+    )
+
+    foreach ($pattern in $autoUpdatePatterns) {
+        if ($ProductName -like "*$pattern*") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-AverageCVSS {
     param(
         [int]$Critical,
@@ -1431,6 +1451,12 @@ function New-WordReport {
             $isVMwareProduct = Test-IsVMwareProduct -ProductName $item.Product
             if ($isVMwareProduct -and $script:IsRMITPlus) {
                 $title += " - RMIT+ after-hours ticket created if we maintain this"
+            }
+
+            # Add auto-update note for Chrome/Firefox
+            $isAutoUpdating = Test-IsAutoUpdatingSoftware -ProductName $item.Product
+            if ($isAutoUpdating) {
+                $title += " - This software updates automatically"
             }
 
             $selection.TypeText($title)
@@ -2052,6 +2078,8 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - RMIT+ ticketed"
             } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $script:IsRMITPlus) {
                 $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
+            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
+                $ticketSubject += "$($item.Product) - This software updates automatically"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
