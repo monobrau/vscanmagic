@@ -722,6 +722,46 @@ function Get-ConsolidatedProduct {
     return $ProductName
 }
 
+function Test-IsMicrosoftApplication {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) {
+        return $false
+    }
+
+    # List of Microsoft application patterns (not OS components)
+    $microsoftAppPatterns = @(
+        'Microsoft Office',
+        'Microsoft 365',
+        'Microsoft Teams',
+        'Microsoft Edge',
+        'Microsoft OneDrive',
+        'Microsoft Outlook',
+        'Microsoft Word',
+        'Microsoft Excel',
+        'Microsoft PowerPoint',
+        'Microsoft Access',
+        'Microsoft Publisher',
+        'Microsoft Visio',
+        'Microsoft Project',
+        'Microsoft SharePoint',
+        'Skype for Business',
+        'Microsoft SQL Server Management Studio',
+        'Microsoft Visual Studio Code',
+        'Microsoft .NET Framework',
+        'Microsoft .NET Core',
+        'Microsoft .NET Runtime'
+    )
+
+    foreach ($pattern in $microsoftAppPatterns) {
+        if ($ProductName -like "*$pattern*") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-AverageCVSS {
     param(
         [int]$Critical,
@@ -1005,6 +1045,10 @@ function New-WordReport {
         $selection.TypeText("This report identifies the top 10 security risks based on a composite risk score that considers vulnerability count, ")
         $selection.TypeText("EPSS (Exploit Prediction Scoring System) scores, and CVSS severity ratings. ")
         $selection.TypeText("Each finding includes specific remediation guidance appropriate for the environment.")
+        $selection.TypeParagraph()
+
+        $selection.TypeText("Please note that application vulnerabilities can be resolved either by upgrading the vulnerable application to the latest version or, ")
+        $selection.TypeText("depending on the situation, by uninstalling the application if it is no longer needed.")
         $selection.TypeParagraph()
         $selection.TypeParagraph()
 
@@ -1309,9 +1353,22 @@ function New-WordReport {
 
         $rank = 1
         foreach ($item in $Top10Data) {
-            # Vulnerability title
+            # Vulnerability title with special notes
             $selection.Style = "Heading 2"
-            $selection.TypeText("$rank. $($item.Product)")
+            $title = "$rank. $($item.Product)"
+
+            # Add End of Life note for Windows 10
+            if ($item.Product -like "*Windows 10*") {
+                $title += " - Windows 10 is End of Life"
+            }
+
+            # Add RMM+ note for Microsoft applications (not OS)
+            $isMicrosoftApp = Test-IsMicrosoftApplication -ProductName $item.Product
+            if ($isMicrosoftApp) {
+                $title += " - RMM+ ticketed"
+            }
+
+            $selection.TypeText($title)
             $selection.TypeParagraph()
 
             $selection.Style = "Normal"
@@ -1372,6 +1429,10 @@ function New-WordReport {
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
                 $selection.TypeText("This end-of-support operating system represents an infrastructure project beyond the scope of quarterly vulnerability remediation. ")
                 $selection.TypeText("Consider planning a migration to a supported operating system version.")
+            } elseif ($item.Product -like "*Windows 10*") {
+                $selection.TypeText("Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. ")
+                $selection.TypeText("If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. ")
+                $selection.TypeText("For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate.")
             } elseif ($item.Product -like "*Windows*") {
                 $selection.TypeText("Windows patch inconsistencies should be investigated via ConnectWise Automate. ")
                 $selection.TypeText("Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. ")
@@ -1912,6 +1973,8 @@ function New-TicketInstructions {
             $ticketSubject = "Vulnerability Scan - "
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
                 $ticketSubject += "$($item.Product) - End of Support Migration Required"
+            } elseif ($item.Product -like "*Windows 10*") {
+                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
             } elseif ($item.Product -like "*Windows Server*") {
                 $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ($item.Product -like "*Windows*") {
@@ -1920,6 +1983,8 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - Firmware Update Required"
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 $ticketSubject += "$($item.Product) - Application Update Required"
+            } elseif (Test-IsMicrosoftApplication -ProductName $item.Product) {
+                $ticketSubject += "$($item.Product) - RMM+ ticketed"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
@@ -1958,6 +2023,13 @@ function New-TicketInstructions {
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
                 [void]$sb.AppendLine("  - This end-of-support operating system represents an infrastructure project")
                 [void]$sb.AppendLine("  - Consider planning a migration to a supported operating system version")
+            } elseif ($item.Product -like "*Windows 10*") {
+                [void]$sb.AppendLine("  - Windows 10 reached End of Life on October 14, 2025")
+                [void]$sb.AppendLine("  - No longer supported unless you have extended support licensing")
+                [void]$sb.AppendLine("  - If Windows Updates are functional and no extension licensing in place:")
+                [void]$sb.AppendLine("    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine")
+                [void]$sb.AppendLine("  - For systems with extension licensing:")
+                [void]$sb.AppendLine("    * Continue to verify Windows Update status through ConnectWise Automate")
             } elseif ($item.Product -like "*Windows*") {
                 [void]$sb.AppendLine("  - Investigate via ConnectWise Automate")
                 [void]$sb.AppendLine("  - Verify Windows Update status on affected systems")
