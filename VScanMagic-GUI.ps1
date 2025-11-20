@@ -157,6 +157,37 @@ function Write-Log {
     }
 }
 
+function Update-Progress {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Status,
+        [Parameter(Mandatory=$false)]
+        [bool]$Show = $true
+    )
+
+    if ($script:ProgressBar) {
+        if ($Show) {
+            $script:ProgressBar.Visible = $true
+            $script:ProgressBar.Style = 'Marquee'
+            $script:ProgressBar.MarqueeAnimationSpeed = 30
+        } else {
+            $script:ProgressBar.Visible = $false
+        }
+    }
+
+    if ($script:StatusLabel) {
+        if ($Show) {
+            $script:StatusLabel.Text = $Status
+            $script:StatusLabel.Visible = $true
+        } else {
+            $script:StatusLabel.Visible = $false
+        }
+    }
+
+    # Force GUI update
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
 function Clear-ComObject {
     param([object]$ComObject)
 
@@ -165,6 +196,38 @@ function Clear-ComObject {
             [System.Runtime.InteropServices.Marshal]::ReleaseComObject($ComObject) | Out-Null
         } catch {
             Write-Log "Error releasing COM object: $($_.Exception.Message)" -Level Warning
+        }
+    }
+}
+
+function Invoke-OperationWithRetry {
+    param(
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$Operation,
+        [Parameter(Mandatory=$false)]
+        [string]$OperationName = "Operation",
+        [Parameter(Mandatory=$false)]
+        [int]$MaxRetries = 3,
+        [Parameter(Mandatory=$false)]
+        [int]$DelaySeconds = 2
+    )
+
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        try {
+            Write-Log "Attempting $OperationName (attempt $i of $MaxRetries)..." -Level Info
+            $result = & $Operation
+            Write-Log "$OperationName completed successfully" -Level Success
+            return $result
+        } catch {
+            $errorMessage = $_.Exception.Message
+
+            if ($i -eq $MaxRetries) {
+                Write-Log "$OperationName failed after $MaxRetries attempts: $errorMessage" -Level Error
+                throw
+            } else {
+                Write-Log "$OperationName failed (attempt $i): $errorMessage. Retrying in $DelaySeconds seconds..." -Level Warning
+                Start-Sleep -Seconds $DelaySeconds
+            }
         }
     }
 }
@@ -2360,16 +2423,32 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($buttonBrowseOutput)
 
+    # --- Progress Section ---
+    $script:StatusLabel = New-Object System.Windows.Forms.Label
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 430)
+    $script:StatusLabel.Size = New-Object System.Drawing.Size(630, 20)
+    $script:StatusLabel.Text = "Ready"
+    $script:StatusLabel.Visible = $false
+    $form.Controls.Add($script:StatusLabel)
+
+    $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 455)
+    $script:ProgressBar.Size = New-Object System.Drawing.Size(630, 20)
+    $script:ProgressBar.Style = 'Marquee'
+    $script:ProgressBar.MarqueeAnimationSpeed = 30
+    $script:ProgressBar.Visible = $false
+    $form.Controls.Add($script:ProgressBar)
+
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 435)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 480)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 460)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 120)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 505)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 75)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
@@ -2467,13 +2546,16 @@ function Show-VScanMagicGUI {
             Write-Log "Scan Date: $($datePickerScanDate.Value.ToShortDateString())"
 
             # Read vulnerability data from all remediation sheets
+            Update-Progress -Status "Reading vulnerability data from Excel file..." -Show $true
             $vulnData = Get-VulnerabilityData -ExcelPath $textBoxInputFile.Text
 
             # Calculate top 10 vulnerabilities
+            Update-Progress -Status "Calculating top 10 vulnerabilities..." -Show $true
             $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
 
             # Generate Word report
             if ($checkBoxWord.Checked) {
+                Update-Progress -Status "Generating Top Ten Vulnerabilities Report (Word)..." -Show $true
                 $companyName = $textBoxClientName.Text
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
@@ -2482,10 +2564,12 @@ function Show-VScanMagicGUI {
                 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                 $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report_$timestamp.docx"
 
-                New-WordReport -OutputPath $wordOutputPath `
-                              -ClientName $textBoxClientName.Text `
-                              -ScanDate $datePickerScanDate.Value.ToShortDateString() `
-                              -Top10Data $top10
+                Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
+                    New-WordReport -OutputPath $wordOutputPath `
+                                  -ClientName $textBoxClientName.Text `
+                                  -ScanDate $datePickerScanDate.Value.ToShortDateString() `
+                                  -Top10Data $top10
+                }
 
                 # Store path and enable open button
                 $script:WordReportPath = $wordOutputPath
@@ -2496,6 +2580,7 @@ function Show-VScanMagicGUI {
 
             # Generate Excel report
             if ($checkBoxExcel.Checked) {
+                Update-Progress -Status "Generating Pending EPSS Report (Excel)..." -Show $true
                 $companyName = $textBoxClientName.Text
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
@@ -2504,7 +2589,9 @@ function Show-VScanMagicGUI {
                 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                 $excelOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Pending EPSS Report_$timestamp.xlsx"
 
-                New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
+                Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
+                    New-ExcelReport -InputPath $textBoxInputFile.Text -OutputPath $excelOutputPath
+                }
 
                 # Store path and enable open button
                 $script:ExcelReportPath = $excelOutputPath
@@ -2515,6 +2602,7 @@ function Show-VScanMagicGUI {
 
             # Generate Email Template
             if ($checkBoxEmailTemplate.Checked) {
+                Update-Progress -Status "Generating Email Template..." -Show $true
                 $companyName = $textBoxClientName.Text
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
@@ -2534,6 +2622,7 @@ function Show-VScanMagicGUI {
 
             # Generate Ticket Instructions
             if ($checkBoxTicketInstructions.Checked) {
+                Update-Progress -Status "Generating Ticket Instructions..." -Show $true
                 $companyName = $textBoxClientName.Text
                 if ([string]::IsNullOrWhiteSpace($companyName)) {
                     $companyName = "Client"
@@ -2551,12 +2640,18 @@ function Show-VScanMagicGUI {
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
             }
 
+            # Hide progress bar
+            Update-Progress -Status "Complete" -Show $false
+
             Write-Log "=== Processing Complete ===" -Level Success
 
             [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
 
         } catch {
+            # Hide progress bar on error
+            Update-Progress -Status "Error" -Show $false
+
             Write-Log "Processing failed: $($_.Exception.Message)" -Level Error
             [System.Windows.Forms.MessageBox]::Show("An error occurred during processing. Check the log for details.", "Error",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
