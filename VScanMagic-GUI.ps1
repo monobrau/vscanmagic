@@ -2474,25 +2474,12 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($datePickerScanDate)
 
     # --- Client Type ---
-    $groupBoxClientType = New-Object System.Windows.Forms.GroupBox
-    $groupBoxClientType.Location = New-Object System.Drawing.Point(570, 85)
-    $groupBoxClientType.Size = New-Object System.Drawing.Size(100, 75)
-    $groupBoxClientType.Text = "Client Type"
-    $form.Controls.Add($groupBoxClientType)
-
-    $radioRMITCMIT = New-Object System.Windows.Forms.RadioButton
-    $radioRMITCMIT.Location = New-Object System.Drawing.Point(10, 20)
-    $radioRMITCMIT.Size = New-Object System.Drawing.Size(80, 20)
-    $radioRMITCMIT.Text = "RMIT/CMIT"
-    $radioRMITCMIT.Checked = $true
-    $groupBoxClientType.Controls.Add($radioRMITCMIT)
-
-    $radioRMITPlus = New-Object System.Windows.Forms.RadioButton
-    $radioRMITPlus.Location = New-Object System.Drawing.Point(10, 45)
-    $radioRMITPlus.Size = New-Object System.Drawing.Size(80, 20)
-    $radioRMITPlus.Text = "RMIT+"
-    $radioRMITPlus.Checked = $false
-    $groupBoxClientType.Controls.Add($radioRMITPlus)
+    $checkBoxRMITPlus = New-Object System.Windows.Forms.CheckBox
+    $checkBoxRMITPlus.Location = New-Object System.Drawing.Point(570, 110)
+    $checkBoxRMITPlus.Size = New-Object System.Drawing.Size(80, 20)
+    $checkBoxRMITPlus.Text = "RMIT+?"
+    $checkBoxRMITPlus.Checked = $false
+    $form.Controls.Add($checkBoxRMITPlus)
 
     # --- Output Options ---
     $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
@@ -2664,7 +2651,7 @@ function Show-VScanMagicGUI {
         }
 
         # Capture client type selection
-        $script:IsRMITPlus = $radioRMITPlus.Checked
+        $script:IsRMITPlus = $checkBoxRMITPlus.Checked
 
         # Disable button during processing
         $buttonGenerate.Enabled = $false
