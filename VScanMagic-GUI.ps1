@@ -73,24 +73,45 @@ $script:Config = @{
 }
 
 # --- User Settings Persistence ---
-# Handle both script and EXE execution
+# Use Windows LocalAppData for settings (standard Windows application data location)
+# This resolves to: C:\Users\<Username>\AppData\Local\VScanMagic\
+$script:SettingsDirectory = Join-Path $env:LOCALAPPDATA "VScanMagic"
+$script:SettingsPath = Join-Path $script:SettingsDirectory "VScanMagic_Settings.json"
+
+# Create settings directory if it doesn't exist
+if (-not (Test-Path $script:SettingsDirectory)) {
+    try {
+        New-Item -Path $script:SettingsDirectory -ItemType Directory -Force | Out-Null
+        Write-Host "Created settings directory: $script:SettingsDirectory"
+    } catch {
+        Write-Warning "Could not create settings directory: $($_.Exception.Message)"
+    }
+}
+
+# Migration: Check for old settings file in script/exe directory
+$oldSettingsPath = $null
 if ([string]::IsNullOrEmpty($PSScriptRoot)) {
-    # Running as EXE - use executable directory
+    # Running as EXE
     try {
         $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         $exeDir = [System.IO.Path]::GetDirectoryName($exePath)
-        if ([string]::IsNullOrEmpty($exeDir)) {
-            # Fallback to current directory
-            $exeDir = Get-Location | Select-Object -ExpandProperty Path
+        if (-not [string]::IsNullOrEmpty($exeDir)) {
+            $oldSettingsPath = Join-Path $exeDir "VScanMagic_Settings.json"
         }
-        $script:SettingsPath = Join-Path $exeDir "VScanMagic_Settings.json"
-    } catch {
-        # Fallback to current directory
-        $script:SettingsPath = Join-Path (Get-Location | Select-Object -ExpandProperty Path) "VScanMagic_Settings.json"
-    }
+    } catch { }
 } else {
     # Running as script
-    $script:SettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+    $oldSettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+}
+
+# Migrate old settings file if it exists and new location doesn't have settings yet
+if ($oldSettingsPath -and (Test-Path $oldSettingsPath) -and -not (Test-Path $script:SettingsPath)) {
+    try {
+        Copy-Item -Path $oldSettingsPath -Destination $script:SettingsPath -Force
+        Write-Host "Migrated settings from $oldSettingsPath to $script:SettingsPath"
+    } catch {
+        Write-Warning "Could not migrate old settings: $($_.Exception.Message)"
+    }
 }
 $script:UserSettings = @{
     PreparedBy = "River Run MSP"
@@ -124,6 +145,12 @@ function Save-UserSettings {
         return $false
     }
     try {
+        # Ensure settings directory exists before saving
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:SettingsPath)
+        if (-not (Test-Path $settingsDir)) {
+            New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        }
+
         $script:UserSettings | ConvertTo-Json | Set-Content $script:SettingsPath -Encoding UTF8
         Write-Host "User settings saved to $script:SettingsPath"
         return $true
