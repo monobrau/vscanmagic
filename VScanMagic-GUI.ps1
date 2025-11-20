@@ -1394,16 +1394,16 @@ function New-WordReport {
                 $title += " - Windows 10 is End of Life"
             }
 
-            # Add RMM+ note for Microsoft applications (not OS)
+            # Add RMIT+ note for Microsoft applications (not OS) - only for RMIT+ clients
             $isMicrosoftApp = Test-IsMicrosoftApplication -ProductName $item.Product
-            if ($isMicrosoftApp) {
-                $title += " - RMM+ ticketed"
+            if ($isMicrosoftApp -and $script:IsRMITPlus) {
+                $title += " - RMIT+ ticketed"
             }
 
-            # Add after-hours ticket note for VMware products
+            # Add after-hours ticket note for VMware products - only for RMIT+ clients
             $isVMwareProduct = Test-IsVMwareProduct -ProductName $item.Product
-            if ($isVMwareProduct) {
-                $title += " - RMM+ after-hours ticket created if we maintain this"
+            if ($isVMwareProduct -and $script:IsRMITPlus) {
+                $title += " - RMIT+ after-hours ticket created if we maintain this"
             }
 
             $selection.TypeText($title)
@@ -2021,10 +2021,10 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - Firmware Update Required"
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif (Test-IsMicrosoftApplication -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - RMM+ ticketed"
-            } elseif (Test-IsVMwareProduct -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - RMM+ after-hours ticket created if we maintain this"
+            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $script:IsRMITPlus) {
+                $ticketSubject += "$($item.Product) - RMIT+ ticketed"
+            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $script:IsRMITPlus) {
+                $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
@@ -2338,6 +2338,7 @@ function Show-VScanMagicGUI {
     $script:ExcelReportPath = $null
     $script:EmailTemplatePath = $null
     $script:TicketInstructionsPath = $null
+    $script:IsRMITPlus = $false
 
     # Load user settings from disk
     Load-UserSettings
@@ -2472,9 +2473,30 @@ function Show-VScanMagicGUI {
     $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
     $form.Controls.Add($datePickerScanDate)
 
+    # --- Client Type ---
+    $groupBoxClientType = New-Object System.Windows.Forms.GroupBox
+    $groupBoxClientType.Location = New-Object System.Drawing.Point(570, 85)
+    $groupBoxClientType.Size = New-Object System.Drawing.Size(100, 75)
+    $groupBoxClientType.Text = "Client Type"
+    $form.Controls.Add($groupBoxClientType)
+
+    $radioRMITCMIT = New-Object System.Windows.Forms.RadioButton
+    $radioRMITCMIT.Location = New-Object System.Drawing.Point(10, 20)
+    $radioRMITCMIT.Size = New-Object System.Drawing.Size(80, 20)
+    $radioRMITCMIT.Text = "RMIT/CMIT"
+    $radioRMITCMIT.Checked = $true
+    $groupBoxClientType.Controls.Add($radioRMITCMIT)
+
+    $radioRMITPlus = New-Object System.Windows.Forms.RadioButton
+    $radioRMITPlus.Location = New-Object System.Drawing.Point(10, 45)
+    $radioRMITPlus.Size = New-Object System.Drawing.Size(80, 20)
+    $radioRMITPlus.Text = "RMIT+"
+    $radioRMITPlus.Checked = $false
+    $groupBoxClientType.Controls.Add($radioRMITPlus)
+
     # --- Output Options ---
     $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
-    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 145)
+    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 170)
     $groupBoxOutput.Size = New-Object System.Drawing.Size(630, 210)
     $groupBoxOutput.Text = "Output Options"
     $form.Controls.Add($groupBoxOutput)
@@ -2509,19 +2531,19 @@ function Show-VScanMagicGUI {
 
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 370)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 395)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 395)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 420)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(520, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 393)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 418)
     $buttonBrowseOutput.Size = New-Object System.Drawing.Size(100, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
@@ -2537,14 +2559,14 @@ function Show-VScanMagicGUI {
 
     # --- Progress Section ---
     $script:StatusLabel = New-Object System.Windows.Forms.Label
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 430)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 455)
     $script:StatusLabel.Size = New-Object System.Drawing.Size(630, 20)
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Visible = $false
     $form.Controls.Add($script:StatusLabel)
 
     $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
-    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 455)
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 480)
     $script:ProgressBar.Size = New-Object System.Drawing.Size(630, 20)
     $script:ProgressBar.Style = 'Marquee'
     $script:ProgressBar.MarqueeAnimationSpeed = 30
@@ -2553,14 +2575,14 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 480)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 505)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 505)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 75)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 530)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 50)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
@@ -2641,6 +2663,9 @@ function Show-VScanMagicGUI {
             return
         }
 
+        # Capture client type selection
+        $script:IsRMITPlus = $radioRMITPlus.Checked
+
         # Disable button during processing
         $buttonGenerate.Enabled = $false
         $script:LogTextBox.Clear()
@@ -2655,6 +2680,7 @@ function Show-VScanMagicGUI {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
             Write-Log "Input File: $($textBoxInputFile.Text)"
             Write-Log "Client: $($textBoxClientName.Text)"
+            Write-Log "Client Type: $(if ($script:IsRMITPlus) { 'RMIT+' } else { 'RMIT/CMIT' })"
             Write-Log "Scan Date: $($datePickerScanDate.Value.ToShortDateString())"
 
             # Read vulnerability data from all remediation sheets
