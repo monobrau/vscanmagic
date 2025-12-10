@@ -75,6 +75,10 @@ $script:Config = @{
 # This resolves to: C:\Users\<Username>\AppData\Local\VScanMagic\
 $script:SettingsDirectory = Join-Path $env:LOCALAPPDATA "VScanMagic"
 $script:SettingsPath = Join-Path $script:SettingsDirectory "VScanMagic_Settings.json"
+$script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
+$script:RemediationRules = $null
+$script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
+$script:CoveredSoftware = $null
 
 # Create settings directory if it doesn't exist
 if (-not (Test-Path $script:SettingsDirectory)) {
@@ -156,6 +160,198 @@ function Save-UserSettings {
         Write-Warning "Could not save settings: $($_.Exception.Message)"
         return $false
     }
+}
+
+# --- Remediation Rules Persistence ---
+
+function Get-DefaultRemediationRules {
+    return @(
+        @{
+            Pattern = "*Windows Server 2012*"
+            WordText = "This end-of-support operating system represents an infrastructure project beyond the scope of quarterly vulnerability remediation. Consider planning a migration to a supported operating system version."
+            TicketText = "- This end-of-support operating system represents an infrastructure project`r`n  - Consider planning a migration to a supported operating system version"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*end-of-life*"
+            WordText = "This end-of-support operating system represents an infrastructure project beyond the scope of quarterly vulnerability remediation. Consider planning a migration to a supported operating system version."
+            TicketText = "- This end-of-support operating system represents an infrastructure project`r`n  - Consider planning a migration to a supported operating system version"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*out of support*"
+            WordText = "This end-of-support operating system represents an infrastructure project beyond the scope of quarterly vulnerability remediation. Consider planning a migration to a supported operating system version."
+            TicketText = "- This end-of-support operating system represents an infrastructure project`r`n  - Consider planning a migration to a supported operating system version"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Windows 10*"
+            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate."
+            TicketText = "- Windows 10 reached End of Life on October 14, 2025`r`n  - No longer supported unless you have extended support licensing`r`n  - If Windows Updates are functional and no extension licensing in place:`r`n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine`r`n  - For systems with extension licensing:`r`n    * Continue to verify Windows Update status through ConnectWise Automate"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Windows*"
+            WordText = "Windows patch inconsistencies should be investigated via ConnectWise Automate. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation."
+            TicketText = "- Investigate via ConnectWise Automate`r`n  - Verify Windows Update status on affected systems`r`n  - Check for any issues preventing patch installation"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*printer*"
+            WordText = "Network printers and IoT devices require manual firmware updates via manufacturer-provided tools and interfaces. Consult the manufacturer's documentation for firmware update procedures."
+            TicketText = "- Requires manual firmware updates via manufacturer tools`r`n  - Consult manufacturer documentation for update procedures"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Ripple20*"
+            WordText = "Network printers and IoT devices require manual firmware updates via manufacturer-provided tools and interfaces. Consult the manufacturer's documentation for firmware update procedures."
+            TicketText = "- Requires manual firmware updates via manufacturer tools`r`n  - Consult manufacturer documentation for update procedures"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft Teams*"
+            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can sometimes be remediated by cleaning up the unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM."
+            TicketText = "- Update via RMM script deployed through ConnectWise Automate`r`n  - Can sometimes be remediated by cleaning up unused user profile installed versions`r`n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*"
+            WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM, deploy updates using the patch management system. Otherwise, manual updates may be required on affected systems."
+            TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM if available`r`n  - Otherwise, manual updates required on affected systems"
+            IsDefault = $true
+        }
+    )
+}
+
+function Load-RemediationRules {
+    if (-not [string]::IsNullOrEmpty($script:RemediationRulesPath) -and (Test-Path $script:RemediationRulesPath)) {
+        try {
+            $json = Get-Content $script:RemediationRulesPath -Raw | ConvertFrom-Json
+            $script:RemediationRules = @()
+            foreach ($rule in $json) {
+                $script:RemediationRules += @{
+                    Pattern = $rule.Pattern
+                    WordText = $rule.WordText
+                    TicketText = $rule.TicketText
+                    IsDefault = $rule.IsDefault
+                }
+            }
+            Write-Host "Remediation rules loaded from $script:RemediationRulesPath"
+        } catch {
+            Write-Warning "Could not load remediation rules: $($_.Exception.Message). Using defaults."
+            $script:RemediationRules = Get-DefaultRemediationRules
+        }
+    } else {
+        # Initialize with default rules
+        $script:RemediationRules = Get-DefaultRemediationRules
+        Save-RemediationRules
+    }
+}
+
+function Save-RemediationRules {
+    if ([string]::IsNullOrEmpty($script:RemediationRulesPath)) {
+        Write-Warning "Remediation rules path is not set. Cannot save rules."
+        return $false
+    }
+    try {
+        # Ensure settings directory exists before saving
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:RemediationRulesPath)
+        if (-not (Test-Path $settingsDir)) {
+            New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        }
+
+        $script:RemediationRules | ConvertTo-Json -Depth 10 | Set-Content $script:RemediationRulesPath -Encoding UTF8
+        Write-Host "Remediation rules saved to $script:RemediationRulesPath"
+        return $true
+    } catch {
+        Write-Warning "Could not save remediation rules: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# --- Covered Software Persistence ---
+
+function Get-DefaultCoveredSoftware {
+    return @(
+        @{ Pattern = "*Microsoft*"; IsPattern = $true; Override = $false },
+        @{ Pattern = "*Adobe*"; IsPattern = $true; Override = $false },
+        @{ Pattern = "*Google Chrome*"; IsPattern = $true; Override = $false },
+        @{ Pattern = "*Mozilla Firefox*"; IsPattern = $true; Override = $false }
+    )
+}
+
+function Load-CoveredSoftware {
+    if (-not [string]::IsNullOrEmpty($script:CoveredSoftwarePath) -and (Test-Path $script:CoveredSoftwarePath)) {
+        try {
+            $json = Get-Content $script:CoveredSoftwarePath -Raw | ConvertFrom-Json
+            $script:CoveredSoftware = @()
+            foreach ($item in $json) {
+                $script:CoveredSoftware += @{
+                    Pattern = $item.Pattern
+                    IsPattern = $item.IsPattern
+                    Override = if ($null -ne $item.Override) { $item.Override } else { $false }
+                }
+            }
+            Write-Host "Covered software list loaded from $script:CoveredSoftwarePath"
+        } catch {
+            Write-Warning "Could not load covered software list: $($_.Exception.Message). Using defaults."
+            $script:CoveredSoftware = Get-DefaultCoveredSoftware
+            Save-CoveredSoftware
+        }
+    } else {
+        # Initialize with default list
+        $script:CoveredSoftware = Get-DefaultCoveredSoftware
+        Save-CoveredSoftware
+    }
+}
+
+function Save-CoveredSoftware {
+    if ([string]::IsNullOrEmpty($script:CoveredSoftwarePath)) {
+        Write-Warning "Covered software path is not set. Cannot save list."
+        return $false
+    }
+    try {
+        # Ensure settings directory exists before saving
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:CoveredSoftwarePath)
+        if (-not (Test-Path $settingsDir)) {
+            New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        }
+
+        $script:CoveredSoftware | ConvertTo-Json -Depth 10 | Set-Content $script:CoveredSoftwarePath -Encoding UTF8
+        Write-Host "Covered software list saved to $script:CoveredSoftwarePath"
+        return $true
+    } catch {
+        Write-Warning "Could not save covered software list: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Test-IsCoveredSoftware {
+    param(
+        [string]$ProductName
+    )
+
+    if ($null -eq $script:CoveredSoftware -or $script:CoveredSoftware.Count -eq 0) {
+        Load-CoveredSoftware
+    }
+
+    foreach ($item in $script:CoveredSoftware) {
+        if ($item.Override) {
+            continue  # Skip overridden items
+        }
+
+        if ($item.IsPattern) {
+            if ($ProductName -like $item.Pattern) {
+                return $true
+            }
+        } else {
+            if ($ProductName -eq $item.Pattern) {
+                return $true
+            }
+        }
+    }
+
+    return $false
 }
 
 # --- Helper Functions ---
@@ -981,6 +1177,50 @@ function Get-Top10Vulnerabilities {
     return $top10
 }
 
+function Get-RemediationGuidance {
+    param(
+        [string]$ProductName,
+        [ValidateSet('Word', 'Ticket')]
+        [string]$OutputType
+    )
+
+    if ($null -eq $script:RemediationRules -or $script:RemediationRules.Count -eq 0) {
+        Load-RemediationRules
+    }
+
+    # Sort rules by pattern length (descending) to prioritize specific patterns
+    # Exclude default rule (pattern "*") from sorting, handle it separately
+    $nonDefaultRules = $script:RemediationRules | Where-Object { -not $_.IsDefault -and $_.Pattern -ne "*" } | Sort-Object { $_.Pattern.Length } -Descending
+    $defaultRule = $script:RemediationRules | Where-Object { $_.IsDefault -or $_.Pattern -eq "*" } | Select-Object -First 1
+
+    # Try to match against non-default rules first (most specific first)
+    foreach ($rule in $nonDefaultRules) {
+        if ($ProductName -like $rule.Pattern) {
+            if ($OutputType -eq 'Word') {
+                return $rule.WordText
+            } else {
+                return $rule.TicketText
+            }
+        }
+    }
+
+    # If no match found, use default rule
+    if ($defaultRule) {
+        if ($OutputType -eq 'Word') {
+            return $defaultRule.WordText
+        } else {
+            return $defaultRule.TicketText
+        }
+    }
+
+    # Fallback if no rules exist
+    if ($OutputType -eq 'Word') {
+        return "This application should be updated to the latest version. If available via ConnectWise Automate/RMM, deploy updates using the patch management system. Otherwise, manual updates may be required on affected systems."
+    } else {
+        return "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM if available`r`n  - Otherwise, manual updates required on affected systems"
+    }
+}
+
 function New-WordReport {
     param(
         [string]$OutputPath,
@@ -1516,30 +1756,9 @@ function New-WordReport {
 
             $selection.ParagraphFormat.LeftIndent = 36
 
-            # Determine remediation type
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                $selection.TypeText("This end-of-support operating system represents an infrastructure project beyond the scope of quarterly vulnerability remediation. ")
-                $selection.TypeText("Consider planning a migration to a supported operating system version.")
-            } elseif ($item.Product -like "*Windows 10*") {
-                $selection.TypeText("Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. ")
-                $selection.TypeText("If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. ")
-                $selection.TypeText("For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate.")
-            } elseif ($item.Product -like "*Windows*") {
-                $selection.TypeText("Windows patch inconsistencies should be investigated via ConnectWise Automate. ")
-                $selection.TypeText("Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. ")
-                $selection.TypeText("For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation.")
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                $selection.TypeText("Network printers and IoT devices require manual firmware updates via manufacturer-provided tools and interfaces. ")
-                $selection.TypeText("Consult the manufacturer's documentation for firmware update procedures.")
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                $selection.TypeText("Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. ")
-                $selection.TypeText("This can sometimes be remediated by cleaning up the unused user profile installed versions using: ")
-                $selection.TypeText("Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM.")
-            } else {
-                $selection.TypeText("This application should be updated to the latest version. ")
-                $selection.TypeText("If available via ConnectWise Automate/RMM, deploy updates using the patch management system. ")
-                $selection.TypeText("Otherwise, manual updates may be required on affected systems.")
-            }
+            # Get remediation guidance from configurable rules
+            $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Word'
+            $selection.TypeText($remediationText)
 
             $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
@@ -2040,6 +2259,303 @@ $($script:UserSettings.PreparedBy)
     }
 }
 
+function Show-TimeEstimateEntryDialog {
+    param(
+        [array]$Top10Data,
+        [bool]$IsRMITPlus
+    )
+
+    # Create dialog
+    $timeDialog = New-Object System.Windows.Forms.Form
+    $timeDialog.Text = "Enter Time Estimates"
+    $timeDialog.Size = New-Object System.Drawing.Size(1050, 600)
+    $timeDialog.StartPosition = "CenterParent"
+    $timeDialog.FormBorderStyle = "FixedDialog"
+    $timeDialog.MaximizeBox = $false
+    $timeDialog.MinimizeBox = $false
+
+    # Create DataGridView
+    $dataGridView = New-Object System.Windows.Forms.DataGridView
+    $dataGridView.Location = New-Object System.Drawing.Point(20, 20)
+    $dataGridView.Size = New-Object System.Drawing.Size(950, 450)
+    $dataGridView.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+    $dataGridView.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+    $dataGridView.MultiSelect = $false
+    $dataGridView.AllowUserToAddRows = $false
+    $timeDialog.Controls.Add($dataGridView)
+
+    # Add columns
+    $colProduct = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colProduct.Name = "Product"
+    $colProduct.HeaderText = "Product"
+    $colProduct.Width = 250
+    $colProduct.ReadOnly = $true
+    $dataGridView.Columns.Add($colProduct) | Out-Null
+
+    $colHostnames = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colHostnames.Name = "Hostnames"
+    $colHostnames.HeaderText = "Hostnames"
+    $colHostnames.Width = 80
+    $colHostnames.ReadOnly = $true
+    $dataGridView.Columns.Add($colHostnames) | Out-Null
+
+    $colTimeEstimate = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colTimeEstimate.Name = "TimeEstimate"
+    $colTimeEstimate.HeaderText = "Time Estimate (hours)"
+    $colTimeEstimate.Width = 150
+    $dataGridView.Columns.Add($colTimeEstimate) | Out-Null
+
+    $colAfterHours = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colAfterHours.Name = "AfterHours"
+    $colAfterHours.HeaderText = "After Hours"
+    $colAfterHours.Width = 100
+    $dataGridView.Columns.Add($colAfterHours) | Out-Null
+
+    if ($IsRMITPlus) {
+        $colThirdParty = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+        $colThirdParty.Name = "ThirdParty"
+        $colThirdParty.HeaderText = "3rd Party"
+        $colThirdParty.Width = 100
+        $dataGridView.Columns.Add($colThirdParty) | Out-Null
+
+        $colTicketGenerated = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+        $colTicketGenerated.Name = "TicketGenerated"
+        $colTicketGenerated.HeaderText = "Ticket Generated"
+        $colTicketGenerated.Width = 120
+        $dataGridView.Columns.Add($colTicketGenerated) | Out-Null
+    }
+
+    # Populate grid with top 10 data
+    foreach ($item in $Top10Data) {
+        $row = $dataGridView.Rows.Add()
+        $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
+        $hostnameCount = if ($item.AffectedSystems) { $item.AffectedSystems.Count } else { 0 }
+        $dataGridView.Rows[$row].Cells["Hostnames"].Value = $hostnameCount
+        $dataGridView.Rows[$row].Cells["TimeEstimate"].Value = ""
+        $dataGridView.Rows[$row].Cells["AfterHours"].Value = $false
+        if ($IsRMITPlus) {
+            # Default 3rd party status based on covered software list
+            $isThirdPartyDefault = Test-IsCoveredSoftware -ProductName $item.Product
+            $dataGridView.Rows[$row].Cells["ThirdParty"].Value = $isThirdPartyDefault
+            $dataGridView.Rows[$row].Cells["TicketGenerated"].Value = $false
+        }
+    }
+
+    # Buttons
+    $y = 480
+
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Location = New-Object System.Drawing.Point(800, $y)
+    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
+    $btnOK.Text = "OK"
+    $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $timeDialog.Controls.Add($btnOK)
+    $timeDialog.AcceptButton = $btnOK
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(890, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $timeDialog.Controls.Add($btnCancel)
+    $timeDialog.CancelButton = $btnCancel
+
+    # Validation on OK
+    $btnOK.Add_Click({
+        # Validate all time estimates are filled
+        foreach ($row in $dataGridView.Rows) {
+            if ($row.IsNewRow) { continue }
+            $timeEstimate = [string]$row.Cells["TimeEstimate"].Value
+            if ([string]::IsNullOrWhiteSpace($timeEstimate)) {
+                [System.Windows.Forms.MessageBox]::Show("Please enter a time estimate for all items.", "Validation Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                $timeDialog.DialogResult = [System.Windows.Forms.DialogResult]::None
+                return
+            }
+            # Validate it's a valid number
+            $timeValue = 0
+            if (-not [double]::TryParse($timeEstimate, [ref]$timeValue) -or $timeValue -lt 0) {
+                [System.Windows.Forms.MessageBox]::Show("Time estimate must be a valid positive number (hours).", "Validation Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                $timeDialog.DialogResult = [System.Windows.Forms.DialogResult]::None
+                return
+            }
+        }
+    })
+
+    $result = $timeDialog.ShowDialog()
+
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        # Build result array
+        $timeEstimates = @()
+        foreach ($row in $dataGridView.Rows) {
+            if ($row.IsNewRow) { continue }
+            $timeEstimates += [PSCustomObject]@{
+                Product = $row.Cells["Product"].Value
+                TimeEstimate = [double]$row.Cells["TimeEstimate"].Value
+                AfterHours = [bool]$row.Cells["AfterHours"].Value
+                ThirdParty = if ($IsRMITPlus) { [bool]$row.Cells["ThirdParty"].Value } else { $false }
+                TicketGenerated = if ($IsRMITPlus) { [bool]$row.Cells["TicketGenerated"].Value } else { $false }
+            }
+        }
+        return $timeEstimates
+    } else {
+        return $null
+    }
+}
+
+function New-TimeEstimate {
+    param(
+        [string]$OutputPath,
+        [array]$Top10Data,
+        [array]$TimeEstimates,
+        [bool]$IsRMITPlus
+    )
+
+    try {
+        $sb = New-Object System.Text.StringBuilder
+
+        [void]$sb.AppendLine("=".PadRight(100, '='))
+        [void]$sb.AppendLine("TIME ESTIMATE FOR VULNERABILITY REMEDIATION")
+        [void]$sb.AppendLine("=".PadRight(100, '='))
+        [void]$sb.AppendLine()
+
+        if ($IsRMITPlus) {
+            [void]$sb.AppendLine("Client Type: RMIT+ (Covered by Agreement)")
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine("Note: Items covered by agreement are included below. After-hours work and")
+            [void]$sb.AppendLine("3rd party software items require approval and are billed hourly.")
+            [void]$sb.AppendLine("(3rd party software refers to items in the covered software list)")
+            [void]$sb.AppendLine()
+        } else {
+            [void]$sb.AppendLine("Client Type: RMIT (Billed Hourly)")
+            [void]$sb.AppendLine()
+        }
+
+        [void]$sb.AppendLine("Vulnerability Time Estimates:")
+        [void]$sb.AppendLine()
+
+        $totalCovered = 0.0
+        $totalRequiringApproval = 0.0
+        $grandTotal = 0.0
+
+        # Load covered software list if needed
+        if ($null -eq $script:CoveredSoftware -or $script:CoveredSoftware.Count -eq 0) {
+            Load-CoveredSoftware
+        }
+
+        for ($i = 0; $i -lt $Top10Data.Count; $i++) {
+            $item = $Top10Data[$i]
+            $timeEstimate = $TimeEstimates[$i]
+
+            [void]$sb.AppendLine("$($i + 1). $($item.Product)")
+            
+            # Add hostnames CSV list
+            if ($item.AffectedSystems -and $item.AffectedSystems.Count -gt 0) {
+                $hostnames = $item.AffectedSystems | ForEach-Object { $_.HostName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+                if ($hostnames.Count -gt 0) {
+                    $hostnameList = $hostnames -join ", "
+                    [void]$sb.AppendLine("   Affected Hostnames: $hostnameList")
+                }
+            }
+            
+            # Add remediation guidance
+            $remediationGuidance = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Ticket'
+            if (-not [string]::IsNullOrWhiteSpace($remediationGuidance)) {
+                [void]$sb.AppendLine("   Remediation Guidance:")
+                # Split by line breaks and indent each line
+                $guidanceLines = $remediationGuidance -split "`r?`n"
+                foreach ($line in $guidanceLines) {
+                    if (-not [string]::IsNullOrWhiteSpace($line)) {
+                        [void]$sb.AppendLine("     $line")
+                    }
+                }
+            }
+
+            if ($IsRMITPlus) {
+                # Use the 3rd party status from the dialog checkbox
+                $isThirdParty = $timeEstimate.ThirdParty
+                
+                # Auto-mark as ticket generated if 3rd party software AND after-hours
+                # (user can't select ticket generated until after report is run)
+                $autoTicketGenerated = $isThirdParty -and $timeEstimate.AfterHours
+                $isTicketGenerated = $timeEstimate.TicketGenerated -or $autoTicketGenerated
+                
+                # Check if it requires approval (after-hours OR 3rd party software)
+                $requiresApproval = $timeEstimate.AfterHours -or $isThirdParty
+                
+                # If ticket is already generated (manually or auto), it's covered regardless
+                if ($isTicketGenerated) {
+                    if ($autoTicketGenerated) {
+                        [void]$sb.AppendLine("   After Hours: Yes")
+                        [void]$sb.AppendLine("   Ticket Generated: Yes (Covered by Agreement - Auto-generated)")
+                    } else {
+                        [void]$sb.AppendLine("   Ticket Generated: Yes (Covered by Agreement)")
+                    }
+                    [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours - A remediation ticket has already been generated")
+                    [void]$sb.AppendLine("   Status: Covered by Agreement")
+                    $totalCovered += $timeEstimate.TimeEstimate  # Add time to covered total
+                } elseif (-not $requiresApproval) {
+                    # Covered by agreement (non-3rd party software, not after-hours, ticket not generated)
+                    [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours - A remediation ticket has already been generated")
+                    [void]$sb.AppendLine("   Status: Covered by Agreement")
+                    $totalCovered += $timeEstimate.TimeEstimate  # Add time to covered total
+                } else {
+                    # Requires approval (3rd party software OR after-hours)
+                    if ($timeEstimate.AfterHours) {
+                        [void]$sb.AppendLine("   After Hours: Yes")
+                        [void]$sb.AppendLine("   Estimated Time: N/A - A remediation ticket has already been generated")
+                    } else {
+                        [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours")
+                    }
+                    
+                    [void]$sb.AppendLine("   Status: Requires Approval")
+                    if ($timeEstimate.AfterHours) {
+                        # After-hours items don't count toward totals (ticket already generated)
+                        $totalRequiringApproval += 0
+                    } else {
+                        # 3rd party software items require approval and count toward totals
+                        $totalRequiringApproval += $timeEstimate.TimeEstimate
+                        $grandTotal += $timeEstimate.TimeEstimate
+                    }
+                }
+            } else {
+                # RMIT (hourly billing)
+                if ($timeEstimate.AfterHours) {
+                    [void]$sb.AppendLine("   After Hours: Yes")
+                    [void]$sb.AppendLine("   Estimated Time: N/A - A remediation ticket has already been generated")
+                    # After-hours items don't count toward grand total
+                } else {
+                    [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours")
+                    $grandTotal += $timeEstimate.TimeEstimate
+                }
+            }
+            [void]$sb.AppendLine()
+        }
+
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("=".PadRight(100, '='))
+        [void]$sb.AppendLine("SUMMARY")
+        [void]$sb.AppendLine("=".PadRight(100, '='))
+        [void]$sb.AppendLine()
+
+        if ($IsRMITPlus) {
+            [void]$sb.AppendLine("Total Covered by Agreement: $totalCovered hours")
+            [void]$sb.AppendLine("Total Requiring Approval: $totalRequiringApproval hours")
+            [void]$sb.AppendLine()
+        }
+
+        [void]$sb.AppendLine("Grand Total: $grandTotal hours")
+
+        $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
+        Write-Log "Time estimate saved to: $OutputPath" -Level Success
+
+    } catch {
+        Write-Log "Error generating time estimate: $($_.Exception.Message)" -Level Error
+        throw
+    }
+}
+
 function New-TicketInstructions {
     param(
         [string]$OutputPath,
@@ -2114,33 +2630,9 @@ function New-TicketInstructions {
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Remediation Instructions:")
 
-            # Determine remediation type
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                [void]$sb.AppendLine("  - This end-of-support operating system represents an infrastructure project")
-                [void]$sb.AppendLine("  - Consider planning a migration to a supported operating system version")
-            } elseif ($item.Product -like "*Windows 10*") {
-                [void]$sb.AppendLine("  - Windows 10 reached End of Life on October 14, 2025")
-                [void]$sb.AppendLine("  - No longer supported unless you have extended support licensing")
-                [void]$sb.AppendLine("  - If Windows Updates are functional and no extension licensing in place:")
-                [void]$sb.AppendLine("    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine")
-                [void]$sb.AppendLine("  - For systems with extension licensing:")
-                [void]$sb.AppendLine("    * Continue to verify Windows Update status through ConnectWise Automate")
-            } elseif ($item.Product -like "*Windows*") {
-                [void]$sb.AppendLine("  - Investigate via ConnectWise Automate")
-                [void]$sb.AppendLine("  - Verify Windows Update status on affected systems")
-                [void]$sb.AppendLine("  - Check for any issues preventing patch installation")
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                [void]$sb.AppendLine("  - Requires manual firmware updates via manufacturer tools")
-                [void]$sb.AppendLine("  - Consult manufacturer documentation for update procedures")
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                [void]$sb.AppendLine("  - Update via RMM script deployed through ConnectWise Automate")
-                [void]$sb.AppendLine("  - Can sometimes be remediated by cleaning up unused user profile installed versions")
-                [void]$sb.AppendLine("  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM")
-            } else {
-                [void]$sb.AppendLine("  - Update to latest version")
-                [void]$sb.AppendLine("  - Deploy via ConnectWise Automate/RMM if available")
-                [void]$sb.AppendLine("  - Otherwise, manual updates required on affected systems")
-            }
+            # Get remediation guidance from configurable rules
+            $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Ticket'
+            [void]$sb.AppendLine($remediationText)
             [void]$sb.AppendLine()
         }
 
@@ -2251,6 +2743,319 @@ $taskResolved
 }
 
 # --- GUI Functions ---
+
+function Show-RemediationRulesDialog {
+    # Load rules if not already loaded
+    if ($null -eq $script:RemediationRules -or $script:RemediationRules.Count -eq 0) {
+        Load-RemediationRules
+    }
+
+    # Create main dialog
+    $rulesForm = New-Object System.Windows.Forms.Form
+    $rulesForm.Text = "Remediation Rules Editor"
+    $rulesForm.Size = New-Object System.Drawing.Size(900, 600)
+    $rulesForm.StartPosition = "CenterParent"
+    $rulesForm.FormBorderStyle = "FixedDialog"
+    $rulesForm.MaximizeBox = $false
+    $rulesForm.MinimizeBox = $false
+
+    # Create DataGridView
+    $dataGridView = New-Object System.Windows.Forms.DataGridView
+    $dataGridView.Location = New-Object System.Drawing.Point(20, 20)
+    $dataGridView.Size = New-Object System.Drawing.Size(840, 450)
+    $dataGridView.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+    $dataGridView.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+    $dataGridView.MultiSelect = $false
+    $dataGridView.ReadOnly = $true
+    $dataGridView.AllowUserToAddRows = $false
+    $rulesForm.Controls.Add($dataGridView)
+
+    # Add columns
+    $colPattern = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colPattern.Name = "Pattern"
+    $colPattern.HeaderText = "Product Pattern"
+    $colPattern.Width = 200
+    $dataGridView.Columns.Add($colPattern) | Out-Null
+
+    $colWordPreview = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colWordPreview.Name = "WordPreview"
+    $colWordPreview.HeaderText = "Word Text Preview"
+    $colWordPreview.Width = 300
+    $dataGridView.Columns.Add($colWordPreview) | Out-Null
+
+    $colTicketPreview = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colTicketPreview.Name = "TicketPreview"
+    $colTicketPreview.HeaderText = "Ticket Text Preview"
+    $colTicketPreview.Width = 300
+    $dataGridView.Columns.Add($colTicketPreview) | Out-Null
+
+    $colIsDefault = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colIsDefault.Name = "IsDefault"
+    $colIsDefault.HeaderText = "Default"
+    $colIsDefault.Width = 60
+    $dataGridView.Columns.Add($colIsDefault) | Out-Null
+
+    # Function to refresh grid
+    function Refresh-RulesGrid {
+        $dataGridView.Rows.Clear()
+        foreach ($rule in $script:RemediationRules) {
+            $wordPreview = if ($rule.WordText.Length -gt 50) { $rule.WordText.Substring(0, 47) + "..." } else { $rule.WordText }
+            $ticketPreview = if ($rule.TicketText.Length -gt 50) { $rule.TicketText.Substring(0, 47) + "..." } else { $rule.TicketText }
+            $null = $dataGridView.Rows.Add($rule.Pattern, $wordPreview, $ticketPreview, $rule.IsDefault)
+        }
+    }
+
+    # Function to show edit dialog
+    function Show-EditRuleDialog {
+        param(
+            [int]$RuleIndex = -1
+        )
+
+        $isNew = $RuleIndex -lt 0
+        $rule = if ($isNew) {
+            @{
+                Pattern = ""
+                WordText = ""
+                TicketText = ""
+                IsDefault = $false
+            }
+        } else {
+            $script:RemediationRules[$RuleIndex]
+        }
+
+        $editForm = New-Object System.Windows.Forms.Form
+        $editForm.Text = if ($isNew) { "Add New Rule" } else { "Edit Rule" }
+        $editForm.Size = New-Object System.Drawing.Size(700, 500)
+        $editForm.StartPosition = "CenterParent"
+        $editForm.FormBorderStyle = "FixedDialog"
+        $editForm.MaximizeBox = $false
+        $editForm.MinimizeBox = $false
+
+        $y = 20
+
+        # Pattern label and textbox
+        $lblPattern = New-Object System.Windows.Forms.Label
+        $lblPattern.Location = New-Object System.Drawing.Point(20, $y)
+        $lblPattern.Size = New-Object System.Drawing.Size(200, 20)
+        $lblPattern.Text = "Product Pattern (wildcard):"
+        $editForm.Controls.Add($lblPattern)
+
+        $txtPattern = New-Object System.Windows.Forms.TextBox
+        $txtPattern.Location = New-Object System.Drawing.Point(20, ($y + 25))
+        $txtPattern.Size = New-Object System.Drawing.Size(640, 20)
+        $txtPattern.Text = $rule.Pattern
+        $txtPattern.Enabled = -not $rule.IsDefault
+        $editForm.Controls.Add($txtPattern)
+        $y += 60
+
+        # Word text label and textbox
+        $lblWordText = New-Object System.Windows.Forms.Label
+        $lblWordText.Location = New-Object System.Drawing.Point(20, $y)
+        $lblWordText.Size = New-Object System.Drawing.Size(200, 20)
+        $lblWordText.Text = "Word Report Remediation Text:"
+        $editForm.Controls.Add($lblWordText)
+
+        $txtWordText = New-Object System.Windows.Forms.TextBox
+        $txtWordText.Location = New-Object System.Drawing.Point(20, ($y + 25))
+        $txtWordText.Size = New-Object System.Drawing.Size(640, 120)
+        $txtWordText.Multiline = $true
+        $txtWordText.ScrollBars = "Vertical"
+        $txtWordText.Text = $rule.WordText
+        $editForm.Controls.Add($txtWordText)
+        $y += 160
+
+        # Ticket text label and textbox
+        $lblTicketText = New-Object System.Windows.Forms.Label
+        $lblTicketText.Location = New-Object System.Drawing.Point(20, $y)
+        $lblTicketText.Size = New-Object System.Drawing.Size(200, 20)
+        $lblTicketText.Text = "Ticket Instructions Remediation Text:"
+        $editForm.Controls.Add($lblTicketText)
+
+        $txtTicketText = New-Object System.Windows.Forms.TextBox
+        $txtTicketText.Location = New-Object System.Drawing.Point(20, ($y + 25))
+        $txtTicketText.Size = New-Object System.Drawing.Size(640, 120)
+        $txtTicketText.Multiline = $true
+        $txtTicketText.ScrollBars = "Vertical"
+        $txtTicketText.Text = $rule.TicketText
+        $editForm.Controls.Add($txtTicketText)
+        $y += 160
+
+        # IsDefault checkbox (only for new rules or if editing default)
+        $chkIsDefault = New-Object System.Windows.Forms.CheckBox
+        $chkIsDefault.Location = New-Object System.Drawing.Point(20, $y)
+        $chkIsDefault.Size = New-Object System.Drawing.Size(300, 20)
+        $chkIsDefault.Text = "This is the default rule (applies when no patterns match)"
+        $chkIsDefault.Checked = $rule.IsDefault
+        $chkIsDefault.Enabled = $isNew -or $rule.IsDefault
+        $editForm.Controls.Add($chkIsDefault)
+        $y += 40
+
+        # Save button
+        $btnSave = New-Object System.Windows.Forms.Button
+        $btnSave.Location = New-Object System.Drawing.Point(480, $y)
+        $btnSave.Size = New-Object System.Drawing.Size(90, 30)
+        $btnSave.Text = "Save"
+        $btnSave.Add_Click({
+            if ([string]::IsNullOrWhiteSpace($txtPattern.Text) -and -not $chkIsDefault.Checked) {
+                [System.Windows.Forms.MessageBox]::Show("Pattern cannot be empty (unless this is the default rule).", "Validation Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            if ([string]::IsNullOrWhiteSpace($txtWordText.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Word remediation text cannot be empty.", "Validation Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            if ([string]::IsNullOrWhiteSpace($txtTicketText.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Ticket remediation text cannot be empty.", "Validation Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            # If setting as default, ensure only one default exists
+            if ($chkIsDefault.Checked) {
+                for ($i = 0; $i -lt $script:RemediationRules.Count; $i++) {
+                    if ($script:RemediationRules[$i].IsDefault -and ($isNew -or $i -ne $RuleIndex)) {
+                        $script:RemediationRules[$i].IsDefault = $false
+                    }
+                }
+            }
+
+            if ($isNew) {
+                $newRule = @{
+                    Pattern = if ($chkIsDefault.Checked) { "*" } else { $txtPattern.Text }
+                    WordText = $txtWordText.Text
+                    TicketText = $txtTicketText.Text
+                    IsDefault = $chkIsDefault.Checked
+                }
+                $script:RemediationRules += $newRule
+            } else {
+                # Update the rule at the specific index
+                $script:RemediationRules[$RuleIndex].Pattern = if ($chkIsDefault.Checked) { "*" } else { $txtPattern.Text }
+                $script:RemediationRules[$RuleIndex].WordText = $txtWordText.Text
+                $script:RemediationRules[$RuleIndex].TicketText = $txtTicketText.Text
+                $script:RemediationRules[$RuleIndex].IsDefault = $chkIsDefault.Checked
+            }
+
+            Refresh-RulesGrid
+            $editForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $editForm.Close()
+        })
+        $editForm.Controls.Add($btnSave)
+
+        # Cancel button
+        $btnCancel = New-Object System.Windows.Forms.Button
+        $btnCancel.Location = New-Object System.Drawing.Point(580, $y)
+        $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+        $btnCancel.Text = "Cancel"
+        $btnCancel.Add_Click({
+            $editForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+            $editForm.Close()
+        })
+        $editForm.Controls.Add($btnCancel)
+
+        $editForm.ShowDialog() | Out-Null
+    }
+
+    # Populate grid
+    Refresh-RulesGrid
+
+    # Buttons
+    $y = 480
+
+    $btnAdd = New-Object System.Windows.Forms.Button
+    $btnAdd.Location = New-Object System.Drawing.Point(20, $y)
+    $btnAdd.Size = New-Object System.Drawing.Size(90, 30)
+    $btnAdd.Text = "Add"
+    $btnAdd.Add_Click({
+        Show-EditRuleDialog -RuleIndex -1
+    })
+    $rulesForm.Controls.Add($btnAdd)
+
+    $btnEdit = New-Object System.Windows.Forms.Button
+    $btnEdit.Location = New-Object System.Drawing.Point(120, $y)
+    $btnEdit.Size = New-Object System.Drawing.Size(90, 30)
+    $btnEdit.Text = "Edit"
+    $btnEdit.Add_Click({
+        if ($dataGridView.SelectedRows.Count -gt 0) {
+            $selectedIndex = $dataGridView.SelectedRows[0].Index
+            Show-EditRuleDialog -RuleIndex $selectedIndex
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Please select a rule to edit.", "No Selection",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    })
+    $rulesForm.Controls.Add($btnEdit)
+
+    $btnDelete = New-Object System.Windows.Forms.Button
+    $btnDelete.Location = New-Object System.Drawing.Point(220, $y)
+    $btnDelete.Size = New-Object System.Drawing.Size(90, 30)
+    $btnDelete.Text = "Delete"
+    $btnDelete.Add_Click({
+        if ($dataGridView.SelectedRows.Count -gt 0) {
+            $selectedIndex = $dataGridView.SelectedRows[0].Index
+            $selectedRule = $script:RemediationRules[$selectedIndex]
+            
+            if ($selectedRule.IsDefault) {
+                [System.Windows.Forms.MessageBox]::Show("Cannot delete the default rule. You must have at least one default rule.", "Cannot Delete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+
+            $result = [System.Windows.Forms.MessageBox]::Show("Are you sure you want to delete this rule?", "Confirm Delete",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+
+            if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+                # Remove rule at the selected index
+                $newRules = @()
+                for ($i = 0; $i -lt $script:RemediationRules.Count; $i++) {
+                    if ($i -ne $selectedIndex) {
+                        $newRules += $script:RemediationRules[$i]
+                    }
+                }
+                $script:RemediationRules = $newRules
+                Refresh-RulesGrid
+            }
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Please select a rule to delete.", "No Selection",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    })
+    $rulesForm.Controls.Add($btnDelete)
+
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Location = New-Object System.Drawing.Point(680, $y)
+    $btnSave.Size = New-Object System.Drawing.Size(90, 30)
+    $btnSave.Text = "Save"
+    $btnSave.Add_Click({
+        if (Save-RemediationRules) {
+            [System.Windows.Forms.MessageBox]::Show("Remediation rules saved successfully!", "Success",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $rulesForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $rulesForm.Close()
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Failed to save remediation rules.", "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $rulesForm.Controls.Add($btnSave)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(780, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Add_Click({
+        # Reload rules to discard changes
+        Load-RemediationRules
+        $rulesForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $rulesForm.Close()
+    })
+    $rulesForm.Controls.Add($btnCancel)
+
+    $rulesForm.ShowDialog() | Out-Null
+}
 
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
@@ -2397,51 +3202,37 @@ function Show-VScanMagicGUI {
 
     # Load user settings from disk
     Load-UserSettings
+    
+    # Load remediation rules from disk
+    Load-RemediationRules
+    
+    # Load covered software list from disk
+    Load-CoveredSoftware
 
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 750)
+    $form.Size = New-Object System.Drawing.Size(700, 775)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
 
-    # --- Ticket Notes Button (Top Right) ---
-    $buttonTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonTicketNotes.Location = New-Object System.Drawing.Point(450, 10)
-    $buttonTicketNotes.Size = New-Object System.Drawing.Size(120, 25)
-    $buttonTicketNotes.Text = "Ticket Notes"
-    $buttonTicketNotes.Add_Click({
-        New-TicketNotes
-    })
-    $form.Controls.Add($buttonTicketNotes)
-
-    # --- Settings Button (Top Right) ---
-    $buttonSettings = New-Object System.Windows.Forms.Button
-    $buttonSettings.Location = New-Object System.Drawing.Point(580, 10)
-    $buttonSettings.Size = New-Object System.Drawing.Size(90, 25)
-    $buttonSettings.Text = "Settings"
-    $buttonSettings.Add_Click({
-        Show-SettingsDialog
-    })
-    $form.Controls.Add($buttonSettings)
-
     # --- Input File Section ---
     $labelInputFile = New-Object System.Windows.Forms.Label
-    $labelInputFile.Location = New-Object System.Drawing.Point(20, 20)
+    $labelInputFile.Location = New-Object System.Drawing.Point(20, 15)
     $labelInputFile.Size = New-Object System.Drawing.Size(200, 20)
     $labelInputFile.Text = "Pending EPSS Report (XLSX):"
     $form.Controls.Add($labelInputFile)
 
     $textBoxInputFile = New-Object System.Windows.Forms.TextBox
-    $textBoxInputFile.Location = New-Object System.Drawing.Point(20, 45)
-    $textBoxInputFile.Size = New-Object System.Drawing.Size(520, 20)
+    $textBoxInputFile.Location = New-Object System.Drawing.Point(20, 40)
+    $textBoxInputFile.Size = New-Object System.Drawing.Size(570, 20)
     $textBoxInputFile.ReadOnly = $true
     $form.Controls.Add($textBoxInputFile)
 
     $buttonBrowseInput = New-Object System.Windows.Forms.Button
-    $buttonBrowseInput.Location = New-Object System.Drawing.Point(550, 43)
-    $buttonBrowseInput.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBrowseInput.Location = New-Object System.Drawing.Point(600, 38)
+    $buttonBrowseInput.Size = New-Object System.Drawing.Size(80, 25)
     $buttonBrowseInput.Text = "Browse..."
     $buttonBrowseInput.Add_Click({
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -2461,9 +3252,10 @@ function Show-VScanMagicGUI {
             Write-Log "Attempting to extract company name from filename: $fileName"
 
             $companyName = $null
-            # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Report-{CompanyName}_..."
-            if ($fileName -match 'Reports?-([^\s_-]+)(?:_|$)') {
-                $rawName = $matches[1]
+            # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Report-{CompanyName}_..." or "...Reports-{CompanyName} "
+            # Captures company name with spaces until underscore, end of string, or space before date/timestamp
+            if ($fileName -match 'Reports?[-_]\s*([^_]+?)(?:_\d|$|\s+\d)') {
+                $rawName = $matches[1].Trim()
                 # Skip if it's a report-related keyword
                 if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
                     $companyName = $rawName
@@ -2472,20 +3264,22 @@ function Show-VScanMagicGUI {
                     Write-Log "Pattern 1 matched but result was report keyword: $rawName" -Level Warning
                 }
             }
-            # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports" (but not report keywords)
-            if (-not $companyName -and $fileName -match '^([^\s_-]+)[-_]Reports?') {
-                $rawName = $matches[1]
-                if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
+            # Pattern 2: "{CompanyName}-Reports" or "{CompanyName}_Reports" or "{CompanyName} Reports"
+            # Captures company name with spaces before Reports/Report
+            if (-not $companyName -and $fileName -match '^(.+?)[\s_-]+Reports?') {
+                $rawName = $matches[1].Trim()
+                if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$' -and $rawName.Length -gt 0) {
                     $companyName = $rawName
                     Write-Log "Matched Pattern 2 (Company-Reports): $companyName"
                 } else {
                     Write-Log "Pattern 2 matched but result was report keyword: $rawName" -Level Warning
                 }
             }
-            # Pattern 3: Any text before first delimiter (space, underscore, hyphen), but exclude report-related keywords
-            if (-not $companyName -and $fileName -match '^([^\s_-]+)') {
-                $rawName = $matches[1]
-                if ($rawName -notmatch '(Pending|EPSS|Report|Reports?|Vulnerability|Security)') {
+            # Pattern 3: Extract text before first underscore or hyphen (preserving spaces)
+            # But exclude if it contains report-related keywords
+            if (-not $companyName -and $fileName -match '^([^_-]+)') {
+                $rawName = $matches[1].Trim()
+                if ($rawName -notmatch '(Pending|EPSS|Report|Reports?|Vulnerability|Security)' -and $rawName.Length -gt 0) {
                     $companyName = $rawName
                     Write-Log "Matched Pattern 3 (first segment, not keyword): $companyName"
                 } else {
@@ -2505,41 +3299,41 @@ function Show-VScanMagicGUI {
 
     # --- Client Name ---
     $labelClientName = New-Object System.Windows.Forms.Label
-    $labelClientName.Location = New-Object System.Drawing.Point(20, 85)
+    $labelClientName.Location = New-Object System.Drawing.Point(20, 75)
     $labelClientName.Size = New-Object System.Drawing.Size(150, 20)
     $labelClientName.Text = "Client Name:"
     $form.Controls.Add($labelClientName)
 
     $textBoxClientName = New-Object System.Windows.Forms.TextBox
-    $textBoxClientName.Location = New-Object System.Drawing.Point(20, 110)
-    $textBoxClientName.Size = New-Object System.Drawing.Size(300, 20)
+    $textBoxClientName.Location = New-Object System.Drawing.Point(20, 100)
+    $textBoxClientName.Size = New-Object System.Drawing.Size(280, 20)
     $form.Controls.Add($textBoxClientName)
 
     # --- Scan Date ---
     $labelScanDate = New-Object System.Windows.Forms.Label
-    $labelScanDate.Location = New-Object System.Drawing.Point(350, 85)
-    $labelScanDate.Size = New-Object System.Drawing.Size(150, 20)
+    $labelScanDate.Location = New-Object System.Drawing.Point(320, 75)
+    $labelScanDate.Size = New-Object System.Drawing.Size(100, 20)
     $labelScanDate.Text = "Scan Date:"
     $form.Controls.Add($labelScanDate)
 
     $datePickerScanDate = New-Object System.Windows.Forms.DateTimePicker
-    $datePickerScanDate.Location = New-Object System.Drawing.Point(350, 110)
-    $datePickerScanDate.Size = New-Object System.Drawing.Size(200, 20)
+    $datePickerScanDate.Location = New-Object System.Drawing.Point(320, 100)
+    $datePickerScanDate.Size = New-Object System.Drawing.Size(150, 20)
     $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
     $form.Controls.Add($datePickerScanDate)
 
     # --- Client Type ---
     $checkBoxRMITPlus = New-Object System.Windows.Forms.CheckBox
-    $checkBoxRMITPlus.Location = New-Object System.Drawing.Point(570, 110)
-    $checkBoxRMITPlus.Size = New-Object System.Drawing.Size(80, 20)
-    $checkBoxRMITPlus.Text = "RMIT+?"
+    $checkBoxRMITPlus.Location = New-Object System.Drawing.Point(480, 100)
+    $checkBoxRMITPlus.Size = New-Object System.Drawing.Size(100, 20)
+    $checkBoxRMITPlus.Text = "RMIT+ Client?"
     $checkBoxRMITPlus.Checked = $false
     $form.Controls.Add($checkBoxRMITPlus)
 
     # --- Output Options ---
     $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
-    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 170)
-    $groupBoxOutput.Size = New-Object System.Drawing.Size(630, 210)
+    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 135)
+    $groupBoxOutput.Size = New-Object System.Drawing.Size(660, 160)
     $groupBoxOutput.Text = "Output Options"
     $form.Controls.Add($groupBoxOutput)
 
@@ -2571,22 +3365,29 @@ function Show-VScanMagicGUI {
     $checkBoxTicketInstructions.Checked = $false
     $groupBoxOutput.Controls.Add($checkBoxTicketInstructions)
 
+    $checkBoxTimeEstimate = New-Object System.Windows.Forms.CheckBox
+    $checkBoxTimeEstimate.Location = New-Object System.Drawing.Point(20, 125)
+    $checkBoxTimeEstimate.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxTimeEstimate.Text = "Generate Time Estimate (Text)"
+    $checkBoxTimeEstimate.Checked = $false
+    $groupBoxOutput.Controls.Add($checkBoxTimeEstimate)
+
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 395)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 305)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 420)
-    $textBoxOutputDir.Size = New-Object System.Drawing.Size(520, 20)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 330)
+    $textBoxOutputDir.Size = New-Object System.Drawing.Size(570, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(550, 418)
-    $buttonBrowseOutput.Size = New-Object System.Drawing.Size(100, 25)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(600, 328)
+    $buttonBrowseOutput.Size = New-Object System.Drawing.Size(80, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
         $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -2601,15 +3402,15 @@ function Show-VScanMagicGUI {
 
     # --- Progress Section ---
     $script:StatusLabel = New-Object System.Windows.Forms.Label
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 455)
-    $script:StatusLabel.Size = New-Object System.Drawing.Size(630, 20)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 365)
+    $script:StatusLabel.Size = New-Object System.Drawing.Size(660, 20)
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Visible = $false
     $form.Controls.Add($script:StatusLabel)
 
     $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
-    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 480)
-    $script:ProgressBar.Size = New-Object System.Drawing.Size(630, 20)
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 390)
+    $script:ProgressBar.Size = New-Object System.Drawing.Size(660, 20)
     $script:ProgressBar.Style = 'Marquee'
     $script:ProgressBar.MarqueeAnimationSpeed = 30
     $script:ProgressBar.Visible = $false
@@ -2617,14 +3418,14 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 505)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 420)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 530)
-    $script:LogTextBox.Size = New-Object System.Drawing.Size(630, 50)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 445)
+    $script:LogTextBox.Size = New-Object System.Drawing.Size(660, 80)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
     $script:LogTextBox.ReadOnly = $true
@@ -2633,8 +3434,8 @@ function Show-VScanMagicGUI {
 
     # --- Open Report Buttons ---
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
-    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 590)
-    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 535)
+    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenWord.Text = "Open Top Ten"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
@@ -2645,8 +3446,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenWord)
 
     $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(180, 590)
-    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(160, 535)
+    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenExcel.Text = "Open EPSS Report"
     $script:buttonOpenExcel.Enabled = $false
     $script:buttonOpenExcel.Add_Click({
@@ -2657,8 +3458,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenExcel)
 
     $script:buttonOpenEmail = New-Object System.Windows.Forms.Button
-    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(340, 590)
-    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(300, 535)
+    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenEmail.Text = "Open Email Template"
     $script:buttonOpenEmail.Enabled = $false
     $script:buttonOpenEmail.Add_Click({
@@ -2669,8 +3470,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenEmail)
 
     $script:buttonOpenTicket = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(500, 590)
-    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size(150, 25)
+    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(440, 535)
+    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenTicket.Text = "Open Ticket Instr."
     $script:buttonOpenTicket.Enabled = $false
     $script:buttonOpenTicket.Add_Click({
@@ -2680,11 +3481,43 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($script:buttonOpenTicket)
 
+    # --- Utility Buttons (Bottom Left) ---
+    $buttonTicketNotes = New-Object System.Windows.Forms.Button
+    $buttonTicketNotes.Location = New-Object System.Drawing.Point(20, 570)
+    $buttonTicketNotes.Size = New-Object System.Drawing.Size(120, 30)
+    $buttonTicketNotes.Text = "Ticket Notes"
+    $buttonTicketNotes.Add_Click({
+        New-TicketNotes
+    })
+    $form.Controls.Add($buttonTicketNotes)
+
+    $buttonRemediationRules = New-Object System.Windows.Forms.Button
+    $buttonRemediationRules.Location = New-Object System.Drawing.Point(150, 570)
+    $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
+    $buttonRemediationRules.Text = "Remediation Rules"
+    $buttonRemediationRules.Add_Click({
+        Show-RemediationRulesDialog
+    })
+    $form.Controls.Add($buttonRemediationRules)
+
+    $buttonSettings = New-Object System.Windows.Forms.Button
+    $buttonSettings.Location = New-Object System.Drawing.Point(300, 570)
+    $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
+    $buttonSettings.Text = "Settings"
+    $buttonSettings.Add_Click({
+        Show-SettingsDialog
+    })
+    $form.Controls.Add($buttonSettings)
+
     # --- Action Buttons ---
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 630)
-    $buttonGenerate.Size = New-Object System.Drawing.Size(100, 30)
-    $buttonGenerate.Text = "Generate"
+    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 570)
+    $buttonGenerate.Size = New-Object System.Drawing.Size(110, 30)
+    $buttonGenerate.Text = "Generate Reports"
+    $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)  # Blue - Primary action
+    $buttonGenerate.ForeColor = [System.Drawing.Color]::White
+    $buttonGenerate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $buttonGenerate.FlatAppearance.BorderSize = 0
     $buttonGenerate.Add_Click({
         # Validate inputs
         if ([string]::IsNullOrWhiteSpace($textBoxInputFile.Text)) {
@@ -2699,7 +3532,7 @@ function Show-VScanMagicGUI {
             return
         }
 
-        if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked -and -not $checkBoxEmailTemplate.Checked -and -not $checkBoxTicketInstructions.Checked) {
+        if (-not $checkBoxExcel.Checked -and -not $checkBoxWord.Checked -and -not $checkBoxEmailTemplate.Checked -and -not $checkBoxTicketInstructions.Checked -and -not $checkBoxTimeEstimate.Checked) {
             [System.Windows.Forms.MessageBox]::Show("Please select at least one output option.", "Validation Error",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
@@ -2820,6 +3653,30 @@ function Show-VScanMagicGUI {
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
             }
 
+            # Generate Time Estimate
+            if ($checkBoxTimeEstimate.Checked) {
+                Update-Progress -Status "Generating Time Estimate..." -Show $true
+                
+                # Show time estimate entry dialog
+                $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                
+                if ($null -ne $timeEstimates) {
+                    $companyName = $textBoxClientName.Text
+                    if ([string]::IsNullOrWhiteSpace($companyName)) {
+                        $companyName = "Client"
+                    }
+                    # Add timestamp to filename
+                    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                    $timeEstimateOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Time Estimate_$timestamp.txt"
+
+                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus
+
+                    Write-Log "Time Estimate saved to: $timeEstimateOutputPath" -Level Success
+                } else {
+                    Write-Log "Time Estimate generation cancelled by user." -Level Warning
+                }
+            }
+
             # Hide progress bar
             Update-Progress -Status "Complete" -Show $false
 
@@ -2842,9 +3699,13 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(560, 630)
-    $buttonClose.Size = New-Object System.Drawing.Size(90, 30)
+    $buttonClose.Location = New-Object System.Drawing.Point(570, 570)
+    $buttonClose.Size = New-Object System.Drawing.Size(110, 30)
     $buttonClose.Text = "Close"
+    $buttonClose.BackColor = [System.Drawing.Color]::FromArgb(128, 128, 128)  # Gray - Secondary action
+    $buttonClose.ForeColor = [System.Drawing.Color]::White
+    $buttonClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $buttonClose.FlatAppearance.BorderSize = 0
     $buttonClose.Add_Click({ $form.Close() })
     $form.Controls.Add($buttonClose)
 
