@@ -56,4 +56,6 @@ Download `VScanMagic.zip` and extract `VScanMagic.exe` - ready to use!
 - Update after-hours items to show N/A time with descriptor
 - Remove client type header and note from time estimate report
 - Improve client name extraction to handle spaces correctly
+- Add configurable settings directory location in Settings dialog
+- Automatically migrate settings files when directory is changed
 
