@@ -8,10 +8,10 @@ A suite of PowerShell tools for vulnerability management and security alert proc
 Automates the processing of vulnerability report Excel files, performing data consolidation, formatting, and pivot table creation with conditional formatting.
 
 ### 2. VScanMagic v3 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`) ⭐ NEW
-A GUI application that processes vulnerability scan Excel files and generates professional Word and Excel reports with dynamic severity thresholds, email templates, and ticket notes.
+A GUI application that processes vulnerability scan reports from **ConnectSecure** and generates professional Word and Excel reports with dynamic severity thresholds, email templates, ticket notes, and time estimates.
 
-### 3. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`) ⭐ NEW
-A GUI application that processes Barracuda XDR security alerts and generates professional, client-facing DOCX reports with automated threat classification.
+### 3. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`)
+A separate GUI application that processes Barracuda XDR security alerts and generates professional, client-facing DOCX reports with automated threat classification.
 
 ---
 
