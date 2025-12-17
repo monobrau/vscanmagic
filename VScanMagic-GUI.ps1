@@ -73,22 +73,13 @@ $script:Config = @{
 # --- User Settings Persistence ---
 # Use Windows LocalAppData for settings (standard Windows application data location)
 # This resolves to: C:\Users\<Username>\AppData\Local\VScanMagic\
+# Can be overridden via UserSettings.SettingsDirectory
 $script:SettingsDirectory = Join-Path $env:LOCALAPPDATA "VScanMagic"
 $script:SettingsPath = Join-Path $script:SettingsDirectory "VScanMagic_Settings.json"
 $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
 $script:RemediationRules = $null
 $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
 $script:CoveredSoftware = $null
-
-# Create settings directory if it doesn't exist
-if (-not (Test-Path $script:SettingsDirectory)) {
-    try {
-        New-Item -Path $script:SettingsDirectory -ItemType Directory -Force | Out-Null
-        Write-Host "Created settings directory: $script:SettingsDirectory"
-    } catch {
-        Write-Warning "Could not create settings directory: $($_.Exception.Message)"
-    }
-}
 
 # Migration: Check for old settings file in script/exe directory
 $oldSettingsPath = $null
@@ -122,9 +113,54 @@ $script:UserSettings = @{
     Email = ""
     PhoneNumber = ""
     CompanyPhoneNumber = ""
+    SettingsDirectory = ""  # Empty = use default (LOCALAPPDATA\VScanMagic)
+}
+
+function Update-SettingsPaths {
+    # Update paths based on custom directory if set, otherwise use default
+    if (-not [string]::IsNullOrEmpty($script:UserSettings.SettingsDirectory) -and 
+        (Test-Path $script:UserSettings.SettingsDirectory)) {
+        $script:SettingsDirectory = $script:UserSettings.SettingsDirectory
+    } else {
+        # Use default location
+        $script:SettingsDirectory = Join-Path $env:LOCALAPPDATA "VScanMagic"
+    }
+    
+    # Update all path variables
+    $script:SettingsPath = Join-Path $script:SettingsDirectory "VScanMagic_Settings.json"
+    $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
+    $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
+    
+    # Create settings directory if it doesn't exist
+    if (-not (Test-Path $script:SettingsDirectory)) {
+        try {
+            New-Item -Path $script:SettingsDirectory -ItemType Directory -Force | Out-Null
+            Write-Host "Created settings directory: $script:SettingsDirectory"
+        } catch {
+            Write-Warning "Could not create settings directory: $($_.Exception.Message)"
+        }
+    }
 }
 
 function Load-UserSettings {
+    # First, try to load from default location to get custom directory setting
+    $defaultSettingsPath = Join-Path (Join-Path $env:LOCALAPPDATA "VScanMagic") "VScanMagic_Settings.json"
+    
+    if ((Test-Path $defaultSettingsPath)) {
+        try {
+            $json = Get-Content $defaultSettingsPath -Raw | ConvertFrom-Json
+            if ($json.SettingsDirectory) {
+                $script:UserSettings.SettingsDirectory = $json.SettingsDirectory
+            }
+        } catch {
+            Write-Warning "Could not load settings directory preference: $($_.Exception.Message)"
+        }
+    }
+    
+    # Update paths based on loaded settings
+    Update-SettingsPaths
+    
+    # Now load settings from the actual settings directory
     if (-not [string]::IsNullOrEmpty($script:SettingsPath) -and (Test-Path $script:SettingsPath)) {
         try {
             $json = Get-Content $script:SettingsPath -Raw | ConvertFrom-Json
@@ -134,6 +170,9 @@ function Load-UserSettings {
             $script:UserSettings.Email = $json.Email
             $script:UserSettings.PhoneNumber = $json.PhoneNumber
             $script:UserSettings.CompanyPhoneNumber = $json.CompanyPhoneNumber
+            if ($json.SettingsDirectory) {
+                $script:UserSettings.SettingsDirectory = $json.SettingsDirectory
+            }
             Write-Host "User settings loaded from $script:SettingsPath"
         } catch {
             Write-Warning "Could not load settings: $($_.Exception.Message)"
@@ -142,6 +181,9 @@ function Load-UserSettings {
 }
 
 function Save-UserSettings {
+    # Update paths before saving (in case directory changed)
+    Update-SettingsPaths
+    
     if ([string]::IsNullOrEmpty($script:SettingsPath)) {
         Write-Warning "Settings path is not set. Cannot save settings."
         return $false
@@ -210,14 +252,14 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Microsoft Teams*"
-            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can sometimes be remediated by cleaning up the unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM."
-            TicketText = "- Update via RMM script deployed through ConnectWise Automate`r`n  - Can sometimes be remediated by cleaning up unused user profile installed versions`r`n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM"
+            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can be remediated by cleaning up unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM."
+            TicketText = "- Update via RMM script deployed through ConnectWise Automate`r`n  - Can be remediated by cleaning up unused user profile installed versions`r`n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM"
             IsDefault = $false
         },
         @{
             Pattern = "*"
-            WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM, deploy updates using the patch management system. Otherwise, manual updates may be required on affected systems."
-            TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM if available`r`n  - Otherwise, manual updates required on affected systems"
+            WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
+            TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
             IsDefault = $true
         }
     )
@@ -1215,9 +1257,9 @@ function Get-RemediationGuidance {
 
     # Fallback if no rules exist
     if ($OutputType -eq 'Word') {
-        return "This application should be updated to the latest version. If available via ConnectWise Automate/RMM, deploy updates using the patch management system. Otherwise, manual updates may be required on affected systems."
+        return "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
     } else {
-        return "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM if available`r`n  - Otherwise, manual updates required on affected systems"
+        return "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
     }
 }
 
@@ -2420,18 +2462,6 @@ function New-TimeEstimate {
         [void]$sb.AppendLine("=".PadRight(100, '='))
         [void]$sb.AppendLine()
 
-        if ($IsRMITPlus) {
-            [void]$sb.AppendLine("Client Type: RMIT+ (Covered by Agreement)")
-            [void]$sb.AppendLine()
-            [void]$sb.AppendLine("Note: Items covered by agreement are included below. After-hours work and")
-            [void]$sb.AppendLine("3rd party software items require approval and are billed hourly.")
-            [void]$sb.AppendLine("(3rd party software refers to items in the covered software list)")
-            [void]$sb.AppendLine()
-        } else {
-            [void]$sb.AppendLine("Client Type: RMIT (Billed Hourly)")
-            [void]$sb.AppendLine()
-        }
-
         [void]$sb.AppendLine("Vulnerability Time Estimates:")
         [void]$sb.AppendLine()
 
@@ -2520,15 +2550,15 @@ function New-TimeEstimate {
                     }
                 }
             } else {
-                # RMIT (hourly billing)
+                # RMIT/CMIT (hourly billing) - include all items in totals
                 if ($timeEstimate.AfterHours) {
                     [void]$sb.AppendLine("   After Hours: Yes")
-                    [void]$sb.AppendLine("   Estimated Time: N/A - A remediation ticket has already been generated")
-                    # After-hours items don't count toward grand total
+                    [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours")
                 } else {
                     [void]$sb.AppendLine("   Estimated Time: $($timeEstimate.TimeEstimate) hours")
-                    $grandTotal += $timeEstimate.TimeEstimate
                 }
+                # All items count toward grand total for RMIT/CMIT clients
+                $grandTotal += $timeEstimate.TimeEstimate
             }
             [void]$sb.AppendLine()
         }
@@ -2546,6 +2576,11 @@ function New-TimeEstimate {
         }
 
         [void]$sb.AppendLine("Grand Total: $grandTotal hours")
+        
+        if (-not $IsRMITPlus) {
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine("Note: We will not begin remediation without your prior approval.")
+        }
 
         $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
         Write-Log "Time estimate saved to: $OutputPath" -Level Success
@@ -3060,7 +3095,7 @@ function Show-RemediationRulesDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(500, 400)
+    $settingsForm.Size = New-Object System.Drawing.Size(500, 500)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -3151,6 +3186,54 @@ function Show-SettingsDialog {
     $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
     $txtCompanyPhoneNumber.Text = $script:UserSettings.CompanyPhoneNumber
     $settingsForm.Controls.Add($txtCompanyPhoneNumber)
+    $y += 35
+
+    # Settings Directory
+    $lblSettingsDirectory = New-Object System.Windows.Forms.Label
+    $lblSettingsDirectory.Location = New-Object System.Drawing.Point(20, $y)
+    $lblSettingsDirectory.Size = New-Object System.Drawing.Size(150, 20)
+    $lblSettingsDirectory.Text = "Settings Directory:"
+    $settingsForm.Controls.Add($lblSettingsDirectory)
+
+    $txtSettingsDirectory = New-Object System.Windows.Forms.TextBox
+    $txtSettingsDirectory.Location = New-Object System.Drawing.Point(180, $y)
+    $txtSettingsDirectory.Size = New-Object System.Drawing.Size(200, 20)
+    $txtSettingsDirectory.ReadOnly = $true
+    $displayDir = if ([string]::IsNullOrEmpty($script:UserSettings.SettingsDirectory)) {
+        Join-Path $env:LOCALAPPDATA "VScanMagic"
+    } else {
+        $script:UserSettings.SettingsDirectory
+    }
+    $txtSettingsDirectory.Text = $displayDir
+    $settingsForm.Controls.Add($txtSettingsDirectory)
+
+    $btnBrowseSettingsDir = New-Object System.Windows.Forms.Button
+    $btnBrowseSettingsDir.Location = New-Object System.Drawing.Point(390, ($y - 2))
+    $btnBrowseSettingsDir.Size = New-Object System.Drawing.Size(70, 25)
+    $btnBrowseSettingsDir.Text = "Browse..."
+    $btnBrowseSettingsDir.Add_Click({
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select directory for settings and rules configuration files"
+        $folderBrowser.ShowNewFolderButton = $true
+        if (-not [string]::IsNullOrEmpty($txtSettingsDirectory.Text)) {
+            $folderBrowser.SelectedPath = $txtSettingsDirectory.Text
+        }
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtSettingsDirectory.Text = $folderBrowser.SelectedPath
+        }
+    })
+    $settingsForm.Controls.Add($btnBrowseSettingsDir)
+    $y += 35
+
+    # Reset to Default button
+    $btnResetDir = New-Object System.Windows.Forms.Button
+    $btnResetDir.Location = New-Object System.Drawing.Point(180, $y)
+    $btnResetDir.Size = New-Object System.Drawing.Size(150, 25)
+    $btnResetDir.Text = "Reset to Default"
+    $btnResetDir.Add_Click({
+        $txtSettingsDirectory.Text = Join-Path $env:LOCALAPPDATA "VScanMagic"
+    })
+    $settingsForm.Controls.Add($btnResetDir)
     $y += 50
 
     # Save Button
@@ -3165,9 +3248,53 @@ function Show-SettingsDialog {
         $script:UserSettings.Email = $txtEmail.Text
         $script:UserSettings.PhoneNumber = $txtPhoneNumber.Text
         $script:UserSettings.CompanyPhoneNumber = $txtCompanyPhoneNumber.Text
+        
+        # Handle settings directory
+        $selectedDir = $txtSettingsDirectory.Text.Trim()
+        $defaultDir = Join-Path $env:LOCALAPPDATA "VScanMagic"
+        if ($selectedDir -eq $defaultDir -or [string]::IsNullOrEmpty($selectedDir)) {
+            $script:UserSettings.SettingsDirectory = ""
+        } else {
+            if (-not (Test-Path $selectedDir)) {
+                try {
+                    New-Item -Path $selectedDir -ItemType Directory -Force | Out-Null
+                } catch {
+                    [System.Windows.Forms.MessageBox]::Show("Could not create directory: $($_.Exception.Message)", "Error",
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                    return
+                }
+            }
+            $script:UserSettings.SettingsDirectory = $selectedDir
+        }
+        
+        # Update paths and migrate files if directory changed
+        $oldSettingsPath = $script:SettingsPath
+        Update-SettingsPaths
+        
+        # Migrate files if directory changed
+        if ($oldSettingsPath -ne $script:SettingsPath -and (Test-Path $oldSettingsPath)) {
+            try {
+                $oldDir = [System.IO.Path]::GetDirectoryName($oldSettingsPath)
+                $oldRulesPath = Join-Path $oldDir "VScanMagic_RemediationRules.json"
+                $oldCoveredPath = Join-Path $oldDir "VScanMagic_CoveredSoftware.json"
+                
+                if ((Test-Path $oldRulesPath) -and -not (Test-Path $script:RemediationRulesPath)) {
+                    Copy-Item -Path $oldRulesPath -Destination $script:RemediationRulesPath -Force
+                }
+                if ((Test-Path $oldCoveredPath) -and -not (Test-Path $script:CoveredSoftwarePath)) {
+                    Copy-Item -Path $oldCoveredPath -Destination $script:CoveredSoftwarePath -Force
+                }
+                
+                # Reload rules and covered software from new location
+                Load-RemediationRules
+                Load-CoveredSoftware
+            } catch {
+                Write-Warning "Could not migrate files: $($_.Exception.Message)"
+            }
+        }
 
         if (Save-UserSettings) {
-            [System.Windows.Forms.MessageBox]::Show("Settings saved successfully!", "Success",
+            [System.Windows.Forms.MessageBox]::Show("Settings saved successfully!`n`nSettings directory: $script:SettingsDirectory", "Success",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $settingsForm.Close()
@@ -3200,8 +3327,11 @@ function Show-VScanMagicGUI {
     $script:TicketInstructionsPath = $null
     $script:IsRMITPlus = $false
 
-    # Load user settings from disk
+    # Load user settings from disk (this also initializes and updates paths)
     Load-UserSettings
+    
+    # Ensure paths are updated after loading settings
+    Update-SettingsPaths
     
     # Load remediation rules from disk
     Load-RemediationRules
