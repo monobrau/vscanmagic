@@ -1268,7 +1268,9 @@ function New-WordReport {
         [string]$OutputPath,
         [string]$ClientName,
         [string]$ScanDate,
-        [array]$Top10Data
+        [array]$Top10Data,
+        [array]$TimeEstimates = $null,
+        [bool]$IsRMITPlus = $false
     )
 
     Write-Log "Generating Word document report..."
@@ -1718,20 +1720,42 @@ function New-WordReport {
             $selection.Style = "Heading 2"
             $title = "$rank. $($item.Product)"
 
-            # Add End of Life note for Windows 10
-            if ($item.Product -like "*Windows 10*") {
+            # Find matching time estimate if available
+            $timeEstimate = $null
+            if ($null -ne $TimeEstimates) {
+                $timeEstimate = $TimeEstimates | Where-Object { $_.Product -eq $item.Product } | Select-Object -First 1
+            }
+
+            # Priority order for checkbox-based suffixes (only if time estimates are available)
+            if ($null -ne $timeEstimate) {
+                $afterHours = $timeEstimate.AfterHours
+                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
+                $thirdParty = if ($IsRMITPlus) { $timeEstimate.ThirdParty } else { $false }
+
+                # Check checkbox states in priority order
+                if ($afterHours -and $ticketGenerated) {
+                    $title += " - after hours ticket generated"
+                } elseif ($ticketGenerated) {
+                    $title += " - ticket generated"
+                } elseif ($thirdParty) {
+                    $title += " - 3rd party application, approval needed"
+                }
+            }
+
+            # Add End of Life note for Windows 10 (only if no checkbox suffix was added)
+            if ($item.Product -like "*Windows 10*" -and $null -eq $timeEstimate) {
                 $title += " - Windows 10 is End of Life"
             }
 
-            # Add RMIT+ note for Microsoft applications (not OS) - only for RMIT+ clients
+            # Add RMIT+ note for Microsoft applications (not OS) - only for RMIT+ clients (only if no checkbox suffix was added)
             $isMicrosoftApp = Test-IsMicrosoftApplication -ProductName $item.Product
-            if ($isMicrosoftApp -and $script:IsRMITPlus) {
+            if ($isMicrosoftApp -and $IsRMITPlus -and $null -eq $timeEstimate) {
                 $title += " - RMIT+ ticketed"
             }
 
-            # Add after-hours ticket note for VMware products - only for RMIT+ clients
+            # Add after-hours ticket note for VMware products - only for RMIT+ clients (only if no checkbox suffix was added)
             $isVMwareProduct = Test-IsVMwareProduct -ProductName $item.Product
-            if ($isVMwareProduct -and $script:IsRMITPlus) {
+            if ($isVMwareProduct -and $IsRMITPlus -and $null -eq $timeEstimate) {
                 $title += " - RMIT+ after-hours ticket created if we maintain this"
             }
 
@@ -2249,7 +2273,8 @@ function Get-TimeOfDayGreeting {
 
 function New-EmailTemplate {
     param(
-        [string]$OutputPath
+        [string]$OutputPath,
+        [bool]$IsRMITPlus = $false
     )
 
     try {
@@ -2258,6 +2283,13 @@ function New-EmailTemplate {
         $year = (Get-Date).Year
         $quarter = Get-CurrentQuarter
         $greeting = Get-TimeOfDayGreeting
+
+        # Build client-type-specific note
+        if ($IsRMITPlus) {
+            $noteText = "Note: Remediation tickets have been generated for items that are covered under your RMIT+ agreement. A TimeZest meeting request has been sent to discuss the 3rd party items that are not covered under the RMIT+ agreement. Those 3rd party items will not be remediated unless they are discussed and a quote has been generated. If you would like to discuss the report further, please contact your TSL or vCIO."
+        } else {
+            $noteText = "Note: We will not generate any tickets without your approval. A TimeZest meeting request has been sent to discuss the remediation of these vulnerabilities. If you would like to discuss the report further, please contact your TSL or vCIO."
+        }
 
         $emailContent = @"
 Subject: $year Q$quarter Vulnerability Scan Follow Up
@@ -2283,7 +2315,7 @@ Executive Summary Report: A high-level overview of your security "grade" as well
 
 External Scan: Any detected vulnerabilities or services that are exposed to the outside Internet
 
-Note: If you would like to discuss the report further, please contact your TSL or vCIO and we will coordinate a meeting. We will not begin remediation without your approval.
+$noteText
 
 We appreciate your commitment to security, as addressing these vulnerabilities is essential for maintaining the ongoing protection of your systems.
 
@@ -2594,7 +2626,9 @@ function New-TimeEstimate {
 function New-TicketInstructions {
     param(
         [string]$OutputPath,
-        [array]$TopTenData
+        [array]$TopTenData,
+        [array]$TimeEstimates = $null,
+        [bool]$IsRMITPlus = $false
     )
 
     try {
@@ -2611,6 +2645,12 @@ function New-TicketInstructions {
             $item = $TopTenData[$i]
             $num = $i + 1
 
+            # Find matching time estimate if available
+            $timeEstimate = $null
+            if ($null -ne $TimeEstimates) {
+                $timeEstimate = $TimeEstimates | Where-Object { $_.Product -eq $item.Product } | Select-Object -First 1
+            }
+
             # Generate ticket subject based on product type
             $ticketSubject = "Vulnerability Scan - "
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
@@ -2625,14 +2665,23 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - Firmware Update Required"
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $script:IsRMITPlus) {
+            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
                 $ticketSubject += "$($item.Product) - RMIT+ ticketed"
-            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $script:IsRMITPlus) {
+            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
                 $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
             } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
                 $ticketSubject += "$($item.Product) - This software updates automatically"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
+            }
+
+            # Prepend "After Hours - " if after hours AND ticket generated
+            if ($null -ne $timeEstimate) {
+                $afterHours = $timeEstimate.AfterHours
+                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
+                if ($afterHours -and $ticketGenerated) {
+                    $ticketSubject = "After Hours - " + $ticketSubject
+                }
             }
 
             [void]$sb.AppendLine()
@@ -2685,87 +2734,35 @@ function New-TicketInstructions {
 }
 
 function New-TicketNotes {
-    # Task variations
-    $taskVariations = @(
-        "Set up and pull vulnerability scans and verify for accuracy. Send out encrypted email with reports and recommendations.",
-        "Configured and executed vulnerability scans, verified accuracy, and sent encrypted email with reports and recommendations.",
-        "Pulled vulnerability scans, verified for accuracy, and delivered encrypted email containing reports and recommendations.",
-        "Set up vulnerability scans and verified accuracy. Transmitted encrypted email with comprehensive reports and recommendations.",
-        "Executed vulnerability scans with accuracy verification. Sent secure encrypted email with reports and recommendations to contact.",
-        "Configured vulnerability scans, performed accuracy verification, and delivered encrypted email with reports and recommendations.",
-        "Set up and ran vulnerability scans with verification. Sent encrypted email containing reports and recommendations.",
-        "Initiated vulnerability scans, verified accuracy of results, and sent encrypted email with detailed reports and recommendations."
-    )
+    # Fixed steps performed list
+    $stepsText = @"
+- Examined lightweight agents
+- Verified probe setup
+- Checked agent/probe count compared to other systems
+- Examined credential mappings
+- Examined external assets
+- Checked nmap interface on probe
+- Verified deprecated item list
+- Created all reports
+- Assessed reports
+- Produced top ten vulnerabilities docx report
+- Sent secure email with reports to contact
+- Sent TimeZest meeting request
+"@
 
-    # Steps performed variations
-    $stepVariations = @(
-        ,@("Reviewed lightweight agents", "Checked lightweight agents", "Examined lightweight agents", "Verified lightweight agent configuration"),
-        ,@("Reviewed probe", "Checked probe configuration", "Examined probe settings", "Verified probe setup"),
-        ,@("Compared agent/probe count vs other systems", "Verified agent/probe count against other systems", "Checked agent/probe count compared to other systems", "Analyzed agent/probe count relative to other systems"),
-        ,@("Reviewed mapped credentials", "Checked mapped credentials", "Verified mapped credentials", "Examined credential mappings"),
-        ,@("Reviewed external assets", "Checked external assets", "Examined external assets", "Verified external asset inventory"),
-        ,@("Reviewed nmap interface on probe", "Checked nmap interface on probe", "Examined probe nmap interface", "Verified nmap interface configuration on probe"),
-        ,@("Reviewed deprecated items", "Checked deprecated items", "Examined deprecated items", "Verified deprecated item list"),
-        ,@("Generated all reports", "Created all reports", "Produced all reports", "Compiled all reports"),
-        ,@("Analyzed reports", "Reviewed reports", "Examined reports", "Assessed reports"),
-        ,@("Made a top ten vulnerabilities docx file", "Created top ten vulnerabilities docx file", "Generated top ten vulnerabilities docx file", "Produced top ten vulnerabilities docx report"),
-        ,@("Sent encrypted email to contact with reports", "Delivered encrypted email with reports to contact", "Transmitted encrypted email containing reports to contact", "Sent secure email with reports to contact")
-    )
-
-    # Task resolved variations
-    $taskResolvedVariations = @(
-        "Task complete",
-        "Completed",
-        "Task completed",
-        "Yes - task complete",
-        "Yes - completed"
-    )
-
-    # Select random task
-    $task = $taskVariations | Get-Random
-
-    # Generate random steps - select ONE random variation from each step category
-    $steps = New-Object System.Collections.ArrayList
-    foreach ($varSet in $stepVariations) {
-        if ($varSet -is [Array] -and $varSet.Count -gt 0) {
-            # Use Get-Random directly on the array to select ONE element
-            $selectedStep = $varSet | Get-Random
-            # Ensure it's a string and not an array
-            $selectedStep = [string]$selectedStep
-            if ($selectedStep -and $selectedStep.Trim().Length -gt 0) {
-                [void]$steps.Add("- " + $selectedStep.Trim())
-            }
-        }
-    }
-    $stepsText = $steps -join "`r`n"
-
-    # Select random task resolved
-    $taskResolved = $taskResolvedVariations | Get-Random
-
-    # Build full ticket notes
+    # Build full ticket notes (no markdown formatting)
     $result = @"
-**Task**
-
-$task
-
-
-**Steps performed**
+Steps performed
 
 $stepsText
 
+Is the task resolved?
 
-**Is the task resolved?**
+Yes - completed
 
-$taskResolved
+Next step(s)
 
-
-**Next step(s)**
-
-
-
-**Special note or recommendation(s)**
-
-
+Meet with Connie if asked
 "@
 
     # Copy to clipboard
@@ -3696,30 +3693,8 @@ function Show-VScanMagicGUI {
             Update-Progress -Status "Calculating top 10 vulnerabilities..." -Show $true
             $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
 
-            # Generate Word report
-            if ($checkBoxWord.Checked) {
-                Update-Progress -Status "Generating Top Ten Vulnerabilities Report (Word)..." -Show $true
-                $companyName = $textBoxClientName.Text
-                if ([string]::IsNullOrWhiteSpace($companyName)) {
-                    $companyName = "Client"
-                }
-                # Add timestamp to filename to avoid duplicate name conflicts
-                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-                $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report_$timestamp.docx"
-
-                Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
-                    New-WordReport -OutputPath $wordOutputPath `
-                                  -ClientName $textBoxClientName.Text `
-                                  -ScanDate $datePickerScanDate.Value.ToShortDateString() `
-                                  -Top10Data $top10
-                }
-
-                # Store path and enable open button
-                $script:WordReportPath = $wordOutputPath
-                $script:buttonOpenWord.Enabled = $true
-
-                Write-Log "Top Ten Vulnerabilities Report saved to: $wordOutputPath" -Level Success
-            }
+            # Store time estimates for use in Word report and ticket instructions
+            $timeEstimates = $null
 
             # Generate Excel report
             if ($checkBoxExcel.Checked) {
@@ -3754,7 +3729,7 @@ function Show-VScanMagicGUI {
                 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                 $emailOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Email Template_$timestamp.txt"
 
-                New-EmailTemplate -OutputPath $emailOutputPath
+                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $script:IsRMITPlus
 
                 # Store path and enable open button
                 $script:EmailTemplatePath = $emailOutputPath
@@ -3763,27 +3738,7 @@ function Show-VScanMagicGUI {
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
             }
 
-            # Generate Ticket Instructions
-            if ($checkBoxTicketInstructions.Checked) {
-                Update-Progress -Status "Generating Ticket Instructions..." -Show $true
-                $companyName = $textBoxClientName.Text
-                if ([string]::IsNullOrWhiteSpace($companyName)) {
-                    $companyName = "Client"
-                }
-                # Add timestamp to filename
-                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-                $ticketOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Ticket Instructions_$timestamp.txt"
-
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10
-
-                # Store path and enable open button
-                $script:TicketInstructionsPath = $ticketOutputPath
-                $script:buttonOpenTicket.Enabled = $true
-
-                Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
-            }
-
-            # Generate Time Estimate
+            # Generate Time Estimate (must be done before Word report and Ticket Instructions)
             if ($checkBoxTimeEstimate.Checked) {
                 Update-Progress -Status "Generating Time Estimate..." -Show $true
                 
@@ -3805,6 +3760,59 @@ function Show-VScanMagicGUI {
                 } else {
                     Write-Log "Time Estimate generation cancelled by user." -Level Warning
                 }
+            }
+
+            # Generate Word report (after time estimate dialog so it can reflect checkbox states)
+            if ($checkBoxWord.Checked) {
+                # Only generate Word report if time estimate was not requested, or if it was requested and completed successfully
+                # (if time estimate was requested but cancelled, skip Word report)
+                if (-not $checkBoxTimeEstimate.Checked -or $null -ne $timeEstimates) {
+                    Update-Progress -Status "Generating Top Ten Vulnerabilities Report (Word)..." -Show $true
+                    $companyName = $textBoxClientName.Text
+                    if ([string]::IsNullOrWhiteSpace($companyName)) {
+                        $companyName = "Client"
+                    }
+                    # Add timestamp to filename to avoid duplicate name conflicts
+                    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                    $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report_$timestamp.docx"
+
+                    Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
+                        New-WordReport -OutputPath $wordOutputPath `
+                                      -ClientName $textBoxClientName.Text `
+                                      -ScanDate $datePickerScanDate.Value.ToShortDateString() `
+                                      -Top10Data $top10 `
+                                      -TimeEstimates $timeEstimates `
+                                      -IsRMITPlus $script:IsRMITPlus
+                    }
+
+                    # Store path and enable open button
+                    $script:WordReportPath = $wordOutputPath
+                    $script:buttonOpenWord.Enabled = $true
+
+                    Write-Log "Top Ten Vulnerabilities Report saved to: $wordOutputPath" -Level Success
+                } else {
+                    Write-Log "Word report generation skipped because time estimate was cancelled." -Level Warning
+                }
+            }
+
+            # Generate Ticket Instructions
+            if ($checkBoxTicketInstructions.Checked) {
+                Update-Progress -Status "Generating Ticket Instructions..." -Show $true
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                # Add timestamp to filename
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $ticketOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Ticket Instructions_$timestamp.txt"
+
+                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus
+
+                # Store path and enable open button
+                $script:TicketInstructionsPath = $ticketOutputPath
+                $script:buttonOpenTicket.Enabled = $true
+
+                Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
             }
 
             # Hide progress bar
