@@ -3827,6 +3827,7 @@ function Show-VScanMagicGUI {
     $script:ExcelReportPath = $null
     $script:EmailTemplatePath = $null
     $script:TicketInstructionsPath = $null
+    $script:TimeEstimatePath = $null
     $script:IsRMITPlus = $false
 
     # Load user settings from disk (this also initializes and updates paths)
@@ -3847,7 +3848,7 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 775)
+    $form.Size = New-Object System.Drawing.Size(700, 780)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -4067,11 +4068,18 @@ function Show-VScanMagicGUI {
     $script:LogTextBox.Font = New-Object System.Drawing.Font("Consolas", 9)
     $form.Controls.Add($script:LogTextBox)
 
+    # --- View Reports Section Label ---
+    $labelViewReports = New-Object System.Windows.Forms.Label
+    $labelViewReports.Location = New-Object System.Drawing.Point(20, 530)
+    $labelViewReports.Size = New-Object System.Drawing.Size(200, 20)
+    $labelViewReports.Text = "View Generated Reports:"
+    $form.Controls.Add($labelViewReports)
+
     # --- Open Report Buttons ---
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
-    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 535)
+    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 555)
     $script:buttonOpenWord.Size = New-Object System.Drawing.Size(130, 25)
-    $script:buttonOpenWord.Text = "Open Top Ten"
+    $script:buttonOpenWord.Text = "Top Ten"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
         if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
@@ -4081,9 +4089,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenWord)
 
     $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(160, 535)
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(160, 555)
     $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(130, 25)
-    $script:buttonOpenExcel.Text = "Open EPSS Report"
+    $script:buttonOpenExcel.Text = "EPSS Report"
     $script:buttonOpenExcel.Enabled = $false
     $script:buttonOpenExcel.Add_Click({
         if ($script:ExcelReportPath -and (Test-Path $script:ExcelReportPath)) {
@@ -4093,9 +4101,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenExcel)
 
     $script:buttonOpenEmail = New-Object System.Windows.Forms.Button
-    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(300, 535)
+    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(300, 555)
     $script:buttonOpenEmail.Size = New-Object System.Drawing.Size(130, 25)
-    $script:buttonOpenEmail.Text = "Open Email Template"
+    $script:buttonOpenEmail.Text = "Email Template"
     $script:buttonOpenEmail.Enabled = $false
     $script:buttonOpenEmail.Add_Click({
         if ($script:EmailTemplatePath -and (Test-Path $script:EmailTemplatePath)) {
@@ -4105,9 +4113,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenEmail)
 
     $script:buttonOpenTicket = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(440, 535)
+    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(440, 555)
     $script:buttonOpenTicket.Size = New-Object System.Drawing.Size(130, 25)
-    $script:buttonOpenTicket.Text = "Open Ticket Instr."
+    $script:buttonOpenTicket.Text = "Ticket Instr."
     $script:buttonOpenTicket.Enabled = $false
     $script:buttonOpenTicket.Add_Click({
         if ($script:TicketInstructionsPath -and (Test-Path $script:TicketInstructionsPath)) {
@@ -4116,9 +4124,21 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($script:buttonOpenTicket)
 
+    $script:buttonOpenTimeEstimate = New-Object System.Windows.Forms.Button
+    $script:buttonOpenTimeEstimate.Location = New-Object System.Drawing.Point(570, 555)
+    $script:buttonOpenTimeEstimate.Size = New-Object System.Drawing.Size(110, 25)
+    $script:buttonOpenTimeEstimate.Text = "Time Estimate"
+    $script:buttonOpenTimeEstimate.Enabled = $false
+    $script:buttonOpenTimeEstimate.Add_Click({
+        if ($script:TimeEstimatePath -and (Test-Path $script:TimeEstimatePath)) {
+            Start-Process $script:TimeEstimatePath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenTimeEstimate)
+
     # --- Utility Buttons (Bottom Left) ---
     $buttonTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonTicketNotes.Location = New-Object System.Drawing.Point(20, 570)
+    $buttonTicketNotes.Location = New-Object System.Drawing.Point(20, 590)
     $buttonTicketNotes.Size = New-Object System.Drawing.Size(120, 30)
     $buttonTicketNotes.Text = "Ticket Notes"
     $buttonTicketNotes.Add_Click({
@@ -4126,8 +4146,9 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($buttonTicketNotes)
 
+    # --- Action Buttons (Bottom Right) ---
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
-    $buttonRemediationRules.Location = New-Object System.Drawing.Point(150, 570)
+    $buttonRemediationRules.Location = New-Object System.Drawing.Point(300, 700)
     $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
     $buttonRemediationRules.Text = "Remediation Rules"
     $buttonRemediationRules.Add_Click({
@@ -4136,7 +4157,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonRemediationRules)
 
     $buttonSettings = New-Object System.Windows.Forms.Button
-    $buttonSettings.Location = New-Object System.Drawing.Point(300, 570)
+    $buttonSettings.Location = New-Object System.Drawing.Point(450, 700)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
@@ -4144,10 +4165,9 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($buttonSettings)
 
-    # --- Action Buttons ---
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(450, 570)
-    $buttonGenerate.Size = New-Object System.Drawing.Size(110, 30)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(20, 700)
+    $buttonGenerate.Size = New-Object System.Drawing.Size(130, 30)
     $buttonGenerate.Text = "Generate Reports"
     $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)  # Blue - Primary action
     $buttonGenerate.ForeColor = [System.Drawing.Color]::White
@@ -4185,6 +4205,7 @@ function Show-VScanMagicGUI {
         $script:buttonOpenExcel.Enabled = $false
         $script:buttonOpenEmail.Enabled = $false
         $script:buttonOpenTicket.Enabled = $false
+        $script:buttonOpenTimeEstimate.Enabled = $false
 
         try {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
@@ -4285,6 +4306,10 @@ function Show-VScanMagicGUI {
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
+                    # Store path and enable open button
+                    $script:TimeEstimatePath = $timeEstimateOutputPath
+                    $script:buttonOpenTimeEstimate.Enabled = $true
+
                     Write-Log "Time Estimate saved to: $timeEstimateOutputPath" -Level Success
                 } else {
                     Write-Log "Time Estimate generation cancelled by user." -Level Warning
@@ -4367,7 +4392,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(570, 570)
+    $buttonClose.Location = New-Object System.Drawing.Point(560, 700)
     $buttonClose.Size = New-Object System.Drawing.Size(110, 30)
     $buttonClose.Text = "Close"
     $buttonClose.BackColor = [System.Drawing.Color]::FromArgb(128, 128, 128)  # Gray - Secondary action
