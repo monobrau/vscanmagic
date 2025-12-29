@@ -3250,8 +3250,8 @@ function New-TicketNotes {
         $TimeEstimates = $script:CurrentTimeEstimates
     }
 
-    # Fixed steps performed list
-    $stepsText = @"
+    # Build steps performed list with ticket creation lines inserted in the correct position
+    $stepsBeforeTickets = @"
 - Examined lightweight agents
 - Verified probe setup
 - Checked agent/probe count compared to other systems
@@ -3262,13 +3262,11 @@ function New-TicketNotes {
 - Created all reports
 - Assessed reports
 - Produced top ten vulnerabilities docx report
-- Sent secure email with reports to contact
-- Sent TimeZest meeting request
 "@
 
-    # Add ticket creation lines for vulnerabilities with tickets generated
+    # Collect ticket creation lines for vulnerabilities with tickets generated
+    $ticketLines = @()
     if ($null -ne $Top10Data -and $null -ne $TimeEstimates -and $TimeEstimates.Count -gt 0) {
-        $ticketLines = @()
         foreach ($item in $Top10Data) {
             $timeEstimate = $TimeEstimates | Where-Object { $_.Product -eq $item.Product } | Select-Object -First 1
             if ($null -ne $timeEstimate) {
@@ -3278,10 +3276,18 @@ function New-TicketNotes {
                 }
             }
         }
-        
-        if ($ticketLines.Count -gt 0) {
-            $stepsText += "`n" + ($ticketLines -join "`n")
-        }
+    }
+
+    $stepsAfterTickets = @"
+- Sent secure email with reports to contact
+- Sent TimeZest meeting request
+"@
+
+    # Combine steps with ticket lines inserted in the middle
+    if ($ticketLines.Count -gt 0) {
+        $stepsText = $stepsBeforeTickets + "`n" + ($ticketLines -join "`n") + "`n" + $stepsAfterTickets
+    } else {
+        $stepsText = $stepsBeforeTickets + "`n" + $stepsAfterTickets
     }
 
     # Build full ticket notes (no markdown formatting)
