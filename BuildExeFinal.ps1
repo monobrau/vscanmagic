@@ -46,7 +46,7 @@ if (Test-Path $modulePath) {
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "3.1.1"
+            version = "3.1.3"
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         

@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 3.1.2
+Version: 3.1.3
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 #>
@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Drawing
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v3"
-    Version = "3.1.2"
+    Version = "3.1.3"
     Author = "River Run MSP"
 
     # Risk Score Calculation
@@ -80,6 +80,8 @@ $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_R
 $script:RemediationRules = $null
 $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
 $script:CoveredSoftware = $null
+$script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
+$script:GeneralRecommendations = $null
 
 # Migration: Check for old settings file in script/exe directory
 $oldSettingsPath = $null
@@ -130,6 +132,7 @@ function Update-SettingsPaths {
     $script:SettingsPath = Join-Path $script:SettingsDirectory "VScanMagic_Settings.json"
     $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
     $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
+    $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
     
     # Create settings directory if it doesn't exist
     if (-not (Test-Path $script:SettingsDirectory)) {
@@ -366,6 +369,79 @@ function Save-CoveredSoftware {
         Write-Warning "Could not save covered software list: $($_.Exception.Message)"
         return $false
     }
+}
+
+# --- General Recommendations Persistence ---
+
+function Load-GeneralRecommendations {
+    if (-not [string]::IsNullOrEmpty($script:GeneralRecommendationsPath) -and (Test-Path $script:GeneralRecommendationsPath)) {
+        try {
+            $json = Get-Content $script:GeneralRecommendationsPath -Raw | ConvertFrom-Json
+            $script:GeneralRecommendations = @()
+            foreach ($rec in $json) {
+                $script:GeneralRecommendations += @{
+                    Product = $rec.Product
+                    Recommendations = $rec.Recommendations
+                }
+            }
+            Write-Host "General recommendations loaded from $script:GeneralRecommendationsPath"
+        } catch {
+            Write-Warning "Could not load general recommendations: $($_.Exception.Message). Using empty list."
+            $script:GeneralRecommendations = @()
+        }
+    } else {
+        # Initialize with empty list
+        $script:GeneralRecommendations = @()
+        Save-GeneralRecommendations
+    }
+}
+
+function Save-GeneralRecommendations {
+    if ([string]::IsNullOrEmpty($script:GeneralRecommendationsPath)) {
+        Write-Warning "General recommendations path is not set. Cannot save recommendations."
+        return $false
+    }
+    try {
+        # Ensure settings directory exists before saving
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:GeneralRecommendationsPath)
+        if (-not (Test-Path $settingsDir)) {
+            New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        }
+
+        $script:GeneralRecommendations | ConvertTo-Json -Depth 10 | Set-Content $script:GeneralRecommendationsPath -Encoding UTF8
+        Write-Host "General recommendations saved to $script:GeneralRecommendationsPath"
+        return $true
+    } catch {
+        Write-Warning "Could not save general recommendations: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Get-ModifierText {
+    param(
+        [bool]$AfterHours,
+        [bool]$TicketGenerated,
+        [bool]$ThirdParty
+    )
+
+    # Handle all combinations with proper English grammar
+    if ($AfterHours -and $TicketGenerated -and $ThirdParty) {
+        return " - After-hours ticket generated for 3rd party application"
+    } elseif ($AfterHours -and $TicketGenerated) {
+        return " - After-hours ticket generated"
+    } elseif ($TicketGenerated -and $ThirdParty) {
+        return " - Ticket generated for 3rd party application"
+    } elseif ($AfterHours -and $ThirdParty) {
+        return " - After-hours work required for 3rd party application, approval needed"
+    } elseif ($TicketGenerated) {
+        return " - Ticket generated"
+    } elseif ($AfterHours) {
+        return " - After-hours work required"
+    } elseif ($ThirdParty) {
+        return " - 3rd party application, approval needed"
+    }
+
+    return ""
 }
 
 function Test-IsCoveredSoftware {
@@ -1171,12 +1247,17 @@ function Get-Top10Vulnerabilities {
                 $existing.EPSSScore = $maxEPSS
             }
 
-            # Add affected systems (store objects with hostname, IP, and username)
-            foreach ($item in $group.Group) {
+            # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
+            # Aggregate vulnerability counts per unique hostname when merging
+            $hostnameGroups = $group.Group | Group-Object -Property 'Host Name'
+            foreach ($hostGroup in $hostnameGroups) {
+                $hostItem = $hostGroup.Group[0]
+                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
                 $existing.AffectedSystems += [PSCustomObject]@{
-                    HostName = $item.'Host Name'
-                    IP = $item.'IP'
-                    Username = $item.'Username'
+                    HostName = $hostItem.'Host Name'
+                    IP = $hostItem.'IP'
+                    Username = $hostItem.'Username'
+                    VulnCount = $hostVulnCount
                 }
             }
         } else {
@@ -1191,13 +1272,18 @@ function Get-Top10Vulnerabilities {
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -VulnCount $vulnCount -EPSSScore $epssScore -AvgCVSS $avgCVSS
 
-            # Create affected systems array with hostname, IP, and username
+            # Create affected systems array with hostname, IP, username, and vulnerability count
+            # Aggregate vulnerability counts per unique hostname
             $affectedSystems = @()
-            foreach ($item in $group.Group) {
+            $hostnameGroups = $group.Group | Group-Object -Property 'Host Name'
+            foreach ($hostGroup in $hostnameGroups) {
+                $hostItem = $hostGroup.Group[0]
+                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
                 $affectedSystems += [PSCustomObject]@{
-                    HostName = $item.'Host Name'
-                    IP = $item.'IP'
-                    Username = $item.'Username'
+                    HostName = $hostItem.'Host Name'
+                    IP = $hostItem.'IP'
+                    Username = $hostItem.'Username'
+                    VulnCount = $hostVulnCount
                 }
             }
 
@@ -1281,7 +1367,8 @@ function New-WordReport {
         [string]$ScanDate,
         [array]$Top10Data,
         [array]$TimeEstimates = $null,
-        [bool]$IsRMITPlus = $false
+        [bool]$IsRMITPlus = $false,
+        [array]$GeneralRecommendations = $null
     )
 
     Write-Log "Generating Word document report..."
@@ -1737,19 +1824,15 @@ function New-WordReport {
                 $timeEstimate = $TimeEstimates | Where-Object { $_.Product -eq $item.Product } | Select-Object -First 1
             }
 
-            # Priority order for checkbox-based suffixes (only if time estimates are available)
+            # Add modifier text based on checkbox states (only if time estimates are available)
             if ($null -ne $timeEstimate) {
                 $afterHours = $timeEstimate.AfterHours
                 $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
                 $thirdParty = if ($IsRMITPlus) { $timeEstimate.ThirdParty } else { $false }
 
-                # Check checkbox states in priority order
-                if ($afterHours -and $ticketGenerated) {
-                    $title += " - after hours ticket generated"
-                } elseif ($ticketGenerated) {
-                    $title += " - ticket generated"
-                } elseif ($thirdParty) {
-                    $title += " - 3rd party application, approval needed"
+                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $ticketGenerated -ThirdParty $thirdParty
+                if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
+                    $title += $modifierText
                 }
             }
 
@@ -1839,6 +1922,22 @@ function New-WordReport {
 
             $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
+
+            # Add General Recommendations if available
+            if ($null -ne $GeneralRecommendations -and $GeneralRecommendations.Count -gt 0) {
+                $matchingRec = $GeneralRecommendations | Where-Object { $item.Product -eq $_.Product } | Select-Object -First 1
+                if ($null -ne $matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                    $selection.Font.Bold = $true
+                    $selection.TypeText("General Recommendations:")
+                    $selection.TypeParagraph()
+                    $selection.Font.Bold = $false
+
+                    $selection.ParagraphFormat.LeftIndent = 36
+                    $selection.TypeText($matchingRec.Recommendations)
+                    $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
+                    $selection.TypeParagraph()
+                }
+            }
 
             # Add spacing between items (except after the last one)
             if ($rank -lt $Top10Data.Count) {
@@ -2297,9 +2396,9 @@ function New-EmailTemplate {
 
         # Build client-type-specific note
         if ($IsRMITPlus) {
-            $noteText = "Note: Remediation tickets have been generated for items that are covered under your RMIT+ agreement. A TimeZest meeting request has been sent to discuss the 3rd party items that are not covered under the RMIT+ agreement. Those 3rd party items will not be remediated unless they are discussed and a quote has been generated. If you would like to discuss the report further, please contact your TSL or vCIO."
+            $noteText = "Note: Remediation tickets have been generated for items that are covered under your RMIT+ agreement. A TimeZest meeting request has been sent to discuss the 3rd party items that are not covered under the RMIT+ agreement. Those 3rd party items will not be remediated unless they are discussed and a quote has been generated.`n`nIf you would like to discuss the report further, please use the meeting request to schedule an appointment directly from my availability via a Teams Meeting."
         } else {
-            $noteText = "Note: We will not generate any tickets without your approval. A TimeZest meeting request has been sent to discuss the remediation of these vulnerabilities. If you would like to discuss the report further, please contact your TSL or vCIO."
+            $noteText = "Note: We will not generate any tickets without your approval. A TimeZest meeting request has been sent to discuss the remediation of these vulnerabilities. If you would like to discuss the report further, please use the meeting request to schedule an appointment directly from my availability via a Teams Meeting."
         }
 
         $emailContent = @"
@@ -2316,9 +2415,9 @@ The main list of items I recommend remediating can be found here:
 You can access and view the full reports using the link below:
 <onedrive link to folder containing reports>
 
-In this folder you will find:
+In this folder you will also find:
 
-Pending Remediation EPSS Score Report: This report classifies vulnerabilities by the "EPSS Score." This is a measure of the likelihood that an attacker will exploit a particular vulnerability within 30 days. The scale ranges from 0 to 1.0, with 1.0 being the most critical. <--- look in "Proposed Remediations (all)" for items that require your attention.
+Pending Remediation EPSS Score Report: This report classifies vulnerabilities by the "EPSS Score." This is a measure of the likelihood that an attacker will exploit a particular vulnerability within 30 days. The scale ranges from 0 to 1.0, with 1.0 being the most critical.
 
 All Vulnerabilities Report: This spreadsheet contains a list of all vulnerabilities (including internal and external) that were detected, ranging from critical to low
 
@@ -2342,6 +2441,359 @@ $($script:UserSettings.PreparedBy)
     } catch {
         Write-Log "Error generating email template: $($_.Exception.Message)" -Level Error
     }
+}
+
+function Show-GeneralRecommendationsDialog {
+    param(
+        [array]$Top10Data
+    )
+
+    # Load recommendations if not already loaded
+    if ($null -eq $script:GeneralRecommendations) {
+        Load-GeneralRecommendations
+    }
+
+    # Create dialog
+    $recDialog = New-Object System.Windows.Forms.Form
+    $recDialog.Text = "General Recommendations"
+    $recDialog.Size = New-Object System.Drawing.Size(1000, 600)
+    $recDialog.StartPosition = "CenterParent"
+    $recDialog.FormBorderStyle = "FixedDialog"
+    $recDialog.MaximizeBox = $false
+    $recDialog.MinimizeBox = $false
+
+    # Create DataGridView
+    $dataGridView = New-Object System.Windows.Forms.DataGridView
+    $dataGridView.Location = New-Object System.Drawing.Point(20, 20)
+    $dataGridView.Size = New-Object System.Drawing.Size(950, 450)
+    $dataGridView.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+    $dataGridView.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+    $dataGridView.MultiSelect = $false
+    $dataGridView.AllowUserToAddRows = $false
+    $recDialog.Controls.Add($dataGridView)
+
+    # Add columns
+    $colProduct = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colProduct.Name = "Product"
+    $colProduct.HeaderText = "Product"
+    $colProduct.Width = 250
+    $colProduct.ReadOnly = $true
+    $dataGridView.Columns.Add($colProduct) | Out-Null
+
+    $colRecommendations = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colRecommendations.Name = "Recommendations"
+    $colRecommendations.HeaderText = "General Recommendations"
+    $colRecommendations.Width = 700
+    $colRecommendations.DefaultCellStyle.WrapMode = [System.Windows.Forms.DataGridViewTriState]::True
+    $dataGridView.Columns.Add($colRecommendations) | Out-Null
+
+    # Set row height for multi-line text
+    $dataGridView.AutoSizeRowsMode = [System.Windows.Forms.DataGridViewAutoSizeRowsMode]::AllCells
+    $dataGridView.DefaultCellStyle.WrapMode = [System.Windows.Forms.DataGridViewTriState]::True
+
+    # Populate grid with top 10 data and pre-populate from saved recommendations
+    foreach ($item in $Top10Data) {
+        $row = $dataGridView.Rows.Add()
+        $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
+        
+        # Try to find matching recommendation using pattern matching
+        $matchingRec = $null
+        foreach ($rec in $script:GeneralRecommendations) {
+            if ($item.Product -like $rec.Product) {
+                $matchingRec = $rec
+                break
+            }
+        }
+        
+        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } else { "" }
+        $dataGridView.Rows[$row].Cells["Recommendations"].Value = $recommendationsText
+    }
+
+    # Buttons
+    $y = 480
+
+    $btnLoadDefaults = New-Object System.Windows.Forms.Button
+    $btnLoadDefaults.Location = New-Object System.Drawing.Point(20, $y)
+    $btnLoadDefaults.Size = New-Object System.Drawing.Size(120, 30)
+    $btnLoadDefaults.Text = "Load Defaults"
+    $btnLoadDefaults.Add_Click({
+        # Reload recommendations from disk
+        Load-GeneralRecommendations
+        # Refresh grid
+        foreach ($row in $dataGridView.Rows) {
+            if ($row.IsNewRow) { continue }
+            $product = $row.Cells["Product"].Value
+            $matchingRec = $null
+            foreach ($rec in $script:GeneralRecommendations) {
+                if ($product -like $rec.Product) {
+                    $matchingRec = $rec
+                    break
+                }
+            }
+            $row.Cells["Recommendations"].Value = if ($matchingRec) { $matchingRec.Recommendations } else { "" }
+        }
+    })
+    $recDialog.Controls.Add($btnLoadDefaults)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(800, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $recDialog.Controls.Add($btnCancel)
+
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Location = New-Object System.Drawing.Point(890, $y)
+    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
+    $btnOK.Text = "OK"
+    $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $recDialog.Controls.Add($btnOK)
+
+    # Set default button
+    $recDialog.AcceptButton = $btnOK
+    $recDialog.CancelButton = $btnCancel
+
+    if ($recDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $recommendations = @()
+        foreach ($row in $dataGridView.Rows) {
+            if ($row.IsNewRow) { continue }
+            $product = $row.Cells["Product"].Value
+            $recText = [string]$row.Cells["Recommendations"].Value
+            
+            if (-not [string]::IsNullOrWhiteSpace($recText)) {
+                $recommendations += [PSCustomObject]@{
+                    Product = $product
+                    Recommendations = $recText.Trim()
+                }
+            }
+        }
+        return $recommendations
+    }
+
+    return $null
+}
+
+function Show-HostnameReviewDialog {
+    param(
+        [array]$Top10Data
+    )
+
+    # Create dialog
+    $hostDialog = New-Object System.Windows.Forms.Form
+    $hostDialog.Text = "Review Hostnames - Select Systems to Include"
+    $hostDialog.Size = New-Object System.Drawing.Size(1100, 700)
+    $hostDialog.StartPosition = "CenterParent"
+    $hostDialog.FormBorderStyle = "FixedDialog"
+    $hostDialog.MaximizeBox = $false
+    $hostDialog.MinimizeBox = $false
+
+    # Create TabControl
+    $tabControl = New-Object System.Windows.Forms.TabControl
+    $tabControl.Location = New-Object System.Drawing.Point(20, 20)
+    $tabControl.Size = New-Object System.Drawing.Size(1050, 550)
+    $hostDialog.Controls.Add($tabControl)
+
+    # Create a copy of Top10Data to modify
+    $filteredData = @()
+    foreach ($item in $Top10Data) {
+        $filteredData += [PSCustomObject]@{
+            Product = $item.Product
+            Critical = $item.Critical
+            High = $item.High
+            Medium = $item.Medium
+            Low = $item.Low
+            VulnCount = $item.VulnCount
+            EPSSScore = $item.EPSSScore
+            AvgCVSS = $item.AvgCVSS
+            RiskScore = $item.RiskScore
+            AffectedSystems = $item.AffectedSystems | ForEach-Object { $_ }  # Clone array
+        }
+    }
+
+    # Create tab for each vulnerability item
+    $tabDataGridViews = @()
+    for ($i = 0; $i -lt $filteredData.Count; $i++) {
+        $item = $filteredData[$i]
+        $tabPage = New-Object System.Windows.Forms.TabPage
+        $tabPage.Text = "$($i + 1). $($item.Product)"
+        $tabPage.UseVisualStyleBackColor = $true
+        $tabControl.TabPages.Add($tabPage)
+
+        # Create DataGridView for this tab
+        $dataGridView = New-Object System.Windows.Forms.DataGridView
+        $dataGridView.Location = New-Object System.Drawing.Point(10, 10)
+        $dataGridView.Size = New-Object System.Drawing.Size(1020, 480)
+        $dataGridView.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+        $dataGridView.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+        $dataGridView.MultiSelect = $false
+        $dataGridView.AllowUserToAddRows = $false
+        $dataGridView.ReadOnly = $false
+        $tabPage.Controls.Add($dataGridView)
+
+        # Add columns
+        $colInclude = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+        $colInclude.Name = "Include"
+        $colInclude.HeaderText = "Include"
+        $colInclude.Width = 60
+        $dataGridView.Columns.Add($colInclude) | Out-Null
+
+        $colHostname = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $colHostname.Name = "Hostname"
+        $colHostname.HeaderText = "Hostname"
+        $colHostname.Width = 200
+        $colHostname.ReadOnly = $true
+        $dataGridView.Columns.Add($colHostname) | Out-Null
+
+        $colIP = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $colIP.Name = "IP"
+        $colIP.HeaderText = "IP Address"
+        $colIP.Width = 150
+        $colIP.ReadOnly = $true
+        $dataGridView.Columns.Add($colIP) | Out-Null
+
+        $colUsername = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $colUsername.Name = "Username"
+        $colUsername.HeaderText = "Username"
+        $colUsername.Width = 150
+        $colUsername.ReadOnly = $true
+        $dataGridView.Columns.Add($colUsername) | Out-Null
+
+        $colVulnCount = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $colVulnCount.Name = "VulnCount"
+        $colVulnCount.HeaderText = "Vulnerability Count"
+        $colVulnCount.Width = 150
+        $colVulnCount.ReadOnly = $true
+        $colVulnCount.ValueType = [int]
+        $dataGridView.Columns.Add($colVulnCount) | Out-Null
+
+        # Populate grid with hostnames, sorted by vulnerability count descending
+        $sortedSystems = $item.AffectedSystems | Sort-Object -Property VulnCount -Descending
+        foreach ($sys in $sortedSystems) {
+            $row = $dataGridView.Rows.Add()
+            $dataGridView.Rows[$row].Cells["Include"].Value = $true  # Default checked
+            $dataGridView.Rows[$row].Cells["Hostname"].Value = $sys.HostName
+            $dataGridView.Rows[$row].Cells["IP"].Value = $sys.IP
+            $dataGridView.Rows[$row].Cells["Username"].Value = $sys.Username
+            $dataGridView.Rows[$row].Cells["VulnCount"].Value = $sys.VulnCount
+        }
+
+        # Store reference to DataGridView for later access
+        $tabDataGridViews += $dataGridView
+    }
+
+    # Summary label
+    $lblSummary = New-Object System.Windows.Forms.Label
+    $lblSummary.Location = New-Object System.Drawing.Point(20, 580)
+    $lblSummary.Size = New-Object System.Drawing.Size(600, 20)
+    $lblSummary.Text = ""
+    $hostDialog.Controls.Add($lblSummary)
+
+    # Function to update summary
+    $updateSummary = {
+        $totalSelected = 0
+        $totalHostnames = 0
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $totalHostnames++
+                if ([bool]$row.Cells["Include"].Value) {
+                    $totalSelected++
+                }
+            }
+        }
+        $lblSummary.Text = "Selected: $totalSelected of $totalHostnames hostnames"
+    }
+
+    # Add event handler to update summary when checkboxes change
+    foreach ($dgv in $tabDataGridViews) {
+        $dgv.Add_CellValueChanged($updateSummary)
+    }
+
+    # Initial summary update
+    & $updateSummary
+
+    # Buttons
+    $y = 610
+
+    $btnSelectAll = New-Object System.Windows.Forms.Button
+    $btnSelectAll.Location = New-Object System.Drawing.Point(20, $y)
+    $btnSelectAll.Size = New-Object System.Drawing.Size(100, 30)
+    $btnSelectAll.Text = "Select All"
+    $btnSelectAll.Add_Click({
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $row.Cells["Include"].Value = $true
+            }
+        }
+        & $updateSummary
+    })
+    $hostDialog.Controls.Add($btnSelectAll)
+
+    $btnDeselectAll = New-Object System.Windows.Forms.Button
+    $btnDeselectAll.Location = New-Object System.Drawing.Point(130, $y)
+    $btnDeselectAll.Size = New-Object System.Drawing.Size(100, 30)
+    $btnDeselectAll.Text = "Deselect All"
+    $btnDeselectAll.Add_Click({
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $row.Cells["Include"].Value = $false
+            }
+        }
+        & $updateSummary
+    })
+    $hostDialog.Controls.Add($btnDeselectAll)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(900, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $hostDialog.Controls.Add($btnCancel)
+
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Location = New-Object System.Drawing.Point(990, $y)
+    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
+    $btnOK.Text = "OK"
+    $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $hostDialog.Controls.Add($btnOK)
+
+    # Set default button
+    $hostDialog.AcceptButton = $btnOK
+    $hostDialog.CancelButton = $btnCancel
+
+    if ($hostDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        # Filter AffectedSystems based on selections
+        for ($i = 0; $i -lt $filteredData.Count; $i++) {
+            $dgv = $tabDataGridViews[$i]
+            $filteredSystems = @()
+            
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                if ([bool]$row.Cells["Include"].Value) {
+                    $hostname = $row.Cells["Hostname"].Value
+                    $ip = $row.Cells["IP"].Value
+                    $username = $row.Cells["Username"].Value
+                    $vulnCount = [int]$row.Cells["VulnCount"].Value
+                    
+                    $filteredSystems += [PSCustomObject]@{
+                        HostName = $hostname
+                        IP = $ip
+                        Username = $username
+                        VulnCount = $vulnCount
+                    }
+                }
+            }
+            
+            $filteredData[$i].AffectedSystems = $filteredSystems
+            # Note: Count property is read-only and automatically reflects array length
+        }
+        
+        return $filteredData
+    }
+
+    return $null
 }
 
 function Show-TimeEstimateEntryDialog {
@@ -2494,7 +2946,8 @@ function New-TimeEstimate {
         [string]$OutputPath,
         [array]$Top10Data,
         [array]$TimeEstimates,
-        [bool]$IsRMITPlus
+        [bool]$IsRMITPlus,
+        [array]$GeneralRecommendations = $null
     )
 
     try {
@@ -2541,6 +2994,20 @@ function New-TimeEstimate {
                 foreach ($line in $guidanceLines) {
                     if (-not [string]::IsNullOrWhiteSpace($line)) {
                         [void]$sb.AppendLine("     $line")
+                    }
+                }
+            }
+            
+            # Add General Recommendations if available
+            if ($null -ne $GeneralRecommendations -and $GeneralRecommendations.Count -gt 0) {
+                $matchingRec = $GeneralRecommendations | Where-Object { $item.Product -eq $_.Product } | Select-Object -First 1
+                if ($null -ne $matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                    [void]$sb.AppendLine("   General Recommendations:")
+                    $recLines = $matchingRec.Recommendations -split "`r?`n"
+                    foreach ($line in $recLines) {
+                        if (-not [string]::IsNullOrWhiteSpace($line)) {
+                            [void]$sb.AppendLine("     $line")
+                        }
                     }
                 }
             }
@@ -2639,7 +3106,8 @@ function New-TicketInstructions {
         [string]$OutputPath,
         [array]$TopTenData,
         [array]$TimeEstimates = $null,
-        [bool]$IsRMITPlus = $false
+        [bool]$IsRMITPlus = $false,
+        [array]$GeneralRecommendations = $null
     )
 
     try {
@@ -2693,11 +3161,6 @@ function New-TicketInstructions {
                 if ($afterHours -and $ticketGenerated) {
                     $ticketSubject = "After Hours - " + $ticketSubject
                 }
-                
-                # Append time estimate to subject if available
-                if ($timeEstimate.TimeEstimate -gt 0) {
-                    $ticketSubject += " - Estimated Time: $($timeEstimate.TimeEstimate) hours"
-                }
             }
 
             [void]$sb.AppendLine()
@@ -2745,6 +3208,16 @@ function New-TicketInstructions {
             $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Ticket'
             [void]$sb.AppendLine($remediationText)
             [void]$sb.AppendLine()
+
+            # Add General Recommendations if available
+            if ($null -ne $GeneralRecommendations -and $GeneralRecommendations.Count -gt 0) {
+                $matchingRec = $GeneralRecommendations | Where-Object { $item.Product -eq $_.Product } | Select-Object -First 1
+                if ($null -ne $matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                    [void]$sb.AppendLine("General Recommendations:")
+                    [void]$sb.AppendLine($matchingRec.Recommendations)
+            [void]$sb.AppendLine()
+                }
+            }
         }
 
         [void]$sb.AppendLine()
@@ -3301,6 +3774,7 @@ function Show-SettingsDialog {
                 $oldDir = [System.IO.Path]::GetDirectoryName($oldSettingsPath)
                 $oldRulesPath = Join-Path $oldDir "VScanMagic_RemediationRules.json"
                 $oldCoveredPath = Join-Path $oldDir "VScanMagic_CoveredSoftware.json"
+                $oldRecommendationsPath = Join-Path $oldDir "VScanMagic_GeneralRecommendations.json"
                 
                 if ((Test-Path $oldRulesPath) -and -not (Test-Path $script:RemediationRulesPath)) {
                     Copy-Item -Path $oldRulesPath -Destination $script:RemediationRulesPath -Force
@@ -3308,10 +3782,14 @@ function Show-SettingsDialog {
                 if ((Test-Path $oldCoveredPath) -and -not (Test-Path $script:CoveredSoftwarePath)) {
                     Copy-Item -Path $oldCoveredPath -Destination $script:CoveredSoftwarePath -Force
                 }
+                if ((Test-Path $oldRecommendationsPath) -and -not (Test-Path $script:GeneralRecommendationsPath)) {
+                    Copy-Item -Path $oldRecommendationsPath -Destination $script:GeneralRecommendationsPath -Force
+                }
                 
                 # Reload rules and covered software from new location
                 Load-RemediationRules
                 Load-CoveredSoftware
+                Load-GeneralRecommendations
             } catch {
                 Write-Warning "Could not migrate files: $($_.Exception.Message)"
             }
@@ -3362,6 +3840,9 @@ function Show-VScanMagicGUI {
     
     # Load covered software list from disk
     Load-CoveredSoftware
+    
+    # Load general recommendations from disk
+    Load-GeneralRecommendations
 
     # Create main form
     $form = New-Object System.Windows.Forms.Form
@@ -3720,8 +4201,9 @@ function Show-VScanMagicGUI {
             Update-Progress -Status "Calculating top 10 vulnerabilities..." -Show $true
             $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
 
-            # Store time estimates for use in Word report and ticket instructions
+            # Store time estimates and general recommendations for use in reports
             $timeEstimates = $null
+            $generalRecommendations = @()
 
             # Generate Excel report
             if ($checkBoxExcel.Checked) {
@@ -3765,6 +4247,26 @@ function Show-VScanMagicGUI {
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
             }
 
+            # Show General Recommendations dialog
+            Update-Progress -Status "Entering General Recommendations..." -Show $true
+            $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
+            
+            if ($null -eq $generalRecommendations) {
+                Write-Log "General Recommendations dialog cancelled by user." -Level Warning
+                $generalRecommendations = @()
+            }
+
+            # Show Hostname Review dialog
+            Update-Progress -Status "Reviewing Hostnames..." -Show $true
+            $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
+            
+            if ($null -eq $filteredTop10) {
+                Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
+                $filteredTop10 = $top10
+            } else {
+                $top10 = $filteredTop10
+            }
+
             # Generate Time Estimate (must be done before Word report and Ticket Instructions)
             if ($checkBoxTimeEstimate.Checked) {
                 Update-Progress -Status "Generating Time Estimate..." -Show $true
@@ -3781,7 +4283,7 @@ function Show-VScanMagicGUI {
                     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                     $timeEstimateOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Time Estimate_$timestamp.txt"
 
-                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus
+                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
                     Write-Log "Time Estimate saved to: $timeEstimateOutputPath" -Level Success
                 } else {
@@ -3809,7 +4311,8 @@ function Show-VScanMagicGUI {
                                       -ScanDate $datePickerScanDate.Value.ToShortDateString() `
                                       -Top10Data $top10 `
                                       -TimeEstimates $timeEstimates `
-                                      -IsRMITPlus $script:IsRMITPlus
+                                      -IsRMITPlus $script:IsRMITPlus `
+                                      -GeneralRecommendations $generalRecommendations
                     }
 
                     # Store path and enable open button
@@ -3833,7 +4336,7 @@ function Show-VScanMagicGUI {
                 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
                 $ticketOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Ticket Instructions_$timestamp.txt"
 
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus
+                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
                 # Store path and enable open button
                 $script:TicketInstructionsPath = $ticketOutputPath
