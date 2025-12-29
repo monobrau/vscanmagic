@@ -3234,6 +3234,22 @@ function New-TicketInstructions {
 }
 
 function New-TicketNotes {
+    param(
+        [array]$Top10Data = $null,
+        [array]$TimeEstimates = $null,
+        [string]$OutputPath = $null,
+        [bool]$IsRMITPlus = $false
+    )
+
+    # Use script variables if Top10Data not provided (backward compatibility)
+    if ($null -eq $Top10Data) {
+        $Top10Data = $script:CurrentTop10Data
+        $TimeEstimates = $script:CurrentTimeEstimates
+        $IsRMITPlus = $script:IsRMITPlus
+    } elseif ($null -eq $TimeEstimates) {
+        $TimeEstimates = $script:CurrentTimeEstimates
+    }
+
     # Fixed steps performed list
     $stepsText = @"
 - Examined lightweight agents
@@ -3250,6 +3266,24 @@ function New-TicketNotes {
 - Sent TimeZest meeting request
 "@
 
+    # Add ticket creation lines for vulnerabilities with tickets generated
+    if ($null -ne $Top10Data -and $null -ne $TimeEstimates -and $TimeEstimates.Count -gt 0) {
+        $ticketLines = @()
+        foreach ($item in $Top10Data) {
+            $timeEstimate = $TimeEstimates | Where-Object { $_.Product -eq $item.Product } | Select-Object -First 1
+            if ($null -ne $timeEstimate) {
+                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
+                if ($ticketGenerated) {
+                    $ticketLines += "- Ticket created for $($item.Product)"
+                }
+            }
+        }
+        
+        if ($ticketLines.Count -gt 0) {
+            $stepsText += "`n" + ($ticketLines -join "`n")
+        }
+    }
+
     # Build full ticket notes (no markdown formatting)
     $result = @"
 Steps performed
@@ -3265,12 +3299,23 @@ Next step(s)
 TimeZest meeting request has been sent. Please select a time to meet if you would like to discuss this further.
 "@
 
-    # Copy to clipboard
-    try {
-        [System.Windows.Forms.Clipboard]::SetText($result)
-        [System.Windows.Forms.MessageBox]::Show("Ticket notes copied to clipboard!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to copy to clipboard: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    # Save to file if output path provided, otherwise copy to clipboard
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+        try {
+            $result | Out-File -FilePath $OutputPath -Encoding UTF8
+            $script:TicketNotesPath = $OutputPath
+            [System.Windows.Forms.MessageBox]::Show("Ticket notes saved to:`n$OutputPath", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Failed to save ticket notes: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    } else {
+        # Copy to clipboard (fallback for when called from button without file path)
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($result)
+            [System.Windows.Forms.MessageBox]::Show("Ticket notes copied to clipboard!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Failed to copy to clipboard: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
     }
 }
 
@@ -3828,7 +3873,10 @@ function Show-VScanMagicGUI {
     $script:EmailTemplatePath = $null
     $script:TicketInstructionsPath = $null
     $script:TimeEstimatePath = $null
+    $script:TicketNotesPath = $null
     $script:IsRMITPlus = $false
+    $script:CurrentTop10Data = $null
+    $script:CurrentTimeEstimates = $null
 
     # Load user settings from disk (this also initializes and updates paths)
     Load-UserSettings
@@ -3848,7 +3896,7 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(700, 780)
+    $form.Size = New-Object System.Drawing.Size(710, 780)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -4076,9 +4124,15 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($labelViewReports)
 
     # --- Open Report Buttons ---
+    # Uniform button width and spacing for better UX
+    $buttonWidth = 120
+    $buttonSpacing = 15
+    $startX = 20
+    $buttonY = 555
+    
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
-    $script:buttonOpenWord.Location = New-Object System.Drawing.Point(20, 555)
-    $script:buttonOpenWord.Size = New-Object System.Drawing.Size(130, 25)
+    $script:buttonOpenWord.Location = New-Object System.Drawing.Point($startX, $buttonY)
+    $script:buttonOpenWord.Size = New-Object System.Drawing.Size($buttonWidth, 25)
     $script:buttonOpenWord.Text = "Top Ten"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
@@ -4089,8 +4143,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenWord)
 
     $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(160, 555)
-    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size(130, 25)
+    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(($startX + $buttonWidth + $buttonSpacing), $buttonY)
+    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size($buttonWidth, 25)
     $script:buttonOpenExcel.Text = "EPSS Report"
     $script:buttonOpenExcel.Enabled = $false
     $script:buttonOpenExcel.Add_Click({
@@ -4101,8 +4155,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenExcel)
 
     $script:buttonOpenEmail = New-Object System.Windows.Forms.Button
-    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(300, 555)
-    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size(130, 25)
+    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 2), $buttonY)
+    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size($buttonWidth, 25)
     $script:buttonOpenEmail.Text = "Email Template"
     $script:buttonOpenEmail.Enabled = $false
     $script:buttonOpenEmail.Add_Click({
@@ -4113,8 +4167,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenEmail)
 
     $script:buttonOpenTicket = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(440, 555)
-    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size(130, 25)
+    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 3), $buttonY)
+    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size($buttonWidth, 25)
     $script:buttonOpenTicket.Text = "Ticket Instr."
     $script:buttonOpenTicket.Enabled = $false
     $script:buttonOpenTicket.Add_Click({
@@ -4125,8 +4179,8 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenTicket)
 
     $script:buttonOpenTimeEstimate = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTimeEstimate.Location = New-Object System.Drawing.Point(570, 555)
-    $script:buttonOpenTimeEstimate.Size = New-Object System.Drawing.Size(110, 25)
+    $script:buttonOpenTimeEstimate.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 4), $buttonY)
+    $script:buttonOpenTimeEstimate.Size = New-Object System.Drawing.Size($buttonWidth, 25)
     $script:buttonOpenTimeEstimate.Text = "Time Estimate"
     $script:buttonOpenTimeEstimate.Enabled = $false
     $script:buttonOpenTimeEstimate.Add_Click({
@@ -4136,15 +4190,34 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($script:buttonOpenTimeEstimate)
 
-    # --- Utility Buttons (Bottom Left) ---
-    $buttonTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonTicketNotes.Location = New-Object System.Drawing.Point(20, 590)
-    $buttonTicketNotes.Size = New-Object System.Drawing.Size(120, 30)
-    $buttonTicketNotes.Text = "Ticket Notes"
-    $buttonTicketNotes.Add_Click({
-        New-TicketNotes
+    # --- Ticket Notes Section Label ---
+    $labelTicketNotes = New-Object System.Windows.Forms.Label
+    $labelTicketNotes.Location = New-Object System.Drawing.Point(20, 590)
+    $labelTicketNotes.Size = New-Object System.Drawing.Size(200, 20)
+    $labelTicketNotes.Text = "Ticket Notes:"
+    $form.Controls.Add($labelTicketNotes)
+
+    # --- Ticket Notes Buttons ---
+    $buttonCopyTicketNotes = New-Object System.Windows.Forms.Button
+    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 615)
+    $buttonCopyTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
+    $buttonCopyTicketNotes.Text = "Copy to Clipboard"
+    $buttonCopyTicketNotes.Add_Click({
+        New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -IsRMITPlus $script:IsRMITPlus
     })
-    $form.Controls.Add($buttonTicketNotes)
+    $form.Controls.Add($buttonCopyTicketNotes)
+
+    $script:buttonOpenTicketNotes = New-Object System.Windows.Forms.Button
+    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 615)
+    $script:buttonOpenTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
+    $script:buttonOpenTicketNotes.Text = "View Ticket Notes"
+    $script:buttonOpenTicketNotes.Enabled = $false
+    $script:buttonOpenTicketNotes.Add_Click({
+        if ($script:TicketNotesPath -and (Test-Path $script:TicketNotesPath)) {
+            Start-Process $script:TicketNotesPath
+        }
+    })
+    $form.Controls.Add($script:buttonOpenTicketNotes)
 
     # --- Action Buttons (Bottom Right) ---
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
@@ -4206,6 +4279,7 @@ function Show-VScanMagicGUI {
         $script:buttonOpenEmail.Enabled = $false
         $script:buttonOpenTicket.Enabled = $false
         $script:buttonOpenTimeEstimate.Enabled = $false
+        $script:buttonOpenTicketNotes.Enabled = $false
 
         try {
             Write-Log "=== Starting VScanMagic Processing ===" -Level Info
@@ -4287,6 +4361,9 @@ function Show-VScanMagicGUI {
             } else {
                 $top10 = $filteredTop10
             }
+            
+            # Store Top10Data in script variable for ticket notes
+            $script:CurrentTop10Data = $top10
 
             # Generate Time Estimate (must be done before Word report and Ticket Instructions)
             if ($checkBoxTimeEstimate.Checked) {
@@ -4309,11 +4386,18 @@ function Show-VScanMagicGUI {
                     # Store path and enable open button
                     $script:TimeEstimatePath = $timeEstimateOutputPath
                     $script:buttonOpenTimeEstimate.Enabled = $true
+                    
+                    # Store TimeEstimates in script variable for ticket notes
+                    $script:CurrentTimeEstimates = $timeEstimates
 
                     Write-Log "Time Estimate saved to: $timeEstimateOutputPath" -Level Success
                 } else {
                     Write-Log "Time Estimate generation cancelled by user." -Level Warning
+                    $script:CurrentTimeEstimates = $null
                 }
+            } else {
+                # Store empty TimeEstimates if time estimate not generated
+                $script:CurrentTimeEstimates = $null
             }
 
             # Generate Word report (after time estimate dialog so it can reflect checkbox states)
@@ -4368,6 +4452,22 @@ function Show-VScanMagicGUI {
                 $script:buttonOpenTicket.Enabled = $true
 
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
+            }
+
+            # Auto-generate ticket notes file if we have data
+            if ($null -ne $script:CurrentTop10Data) {
+                $companyName = $textBoxClientName.Text
+                if ([string]::IsNullOrWhiteSpace($companyName)) {
+                    $companyName = "Client"
+                }
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+                $ticketNotesOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Ticket Notes_$timestamp.txt"
+                
+                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $script:IsRMITPlus
+                
+                if ($script:TicketNotesPath) {
+                    $script:buttonOpenTicketNotes.Enabled = $true
+                }
             }
 
             # Hide progress bar
