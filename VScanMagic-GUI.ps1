@@ -816,6 +816,16 @@ function Get-VulnerabilityData {
 
         # Find all sheets that match remediation patterns
         $sourceSheets = @()
+        
+        # Log all sheets found in workbook for debugging
+        Write-Log "All sheets found in workbook:"
+        $allSheetNames = @()
+        foreach ($sheet in $workbook.Worksheets) {
+            $allSheetNames += $sheet.Name
+            Write-Log "  - '$($sheet.Name)'"
+        }
+        Write-Log "Total sheets: $($allSheetNames.Count)"
+        
         foreach ($sheet in $workbook.Worksheets) {
             $sheetName = $sheet.Name
 
@@ -841,6 +851,7 @@ function Get-VulnerabilityData {
                 Write-Log "Found remediation sheet: $sheetName"
                 $sourceSheets += $sheet
             } else {
+                Write-Log "Sheet '$sheetName' does not match remediation patterns (looking for: $($script:Config.SourceSheetPatterns -join ', '))"
                 Clear-ComObject $sheet
             }
         }
@@ -2652,7 +2663,7 @@ function New-TicketInstructions {
             }
 
             # Generate ticket subject based on product type
-            $ticketSubject = "Vulnerability Scan - "
+            $ticketSubject = "Vulnerability Remediation - "
             if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
                 $ticketSubject += "$($item.Product) - End of Support Migration Required"
             } elseif ($item.Product -like "*Windows 10*") {
@@ -2682,6 +2693,11 @@ function New-TicketInstructions {
                 if ($afterHours -and $ticketGenerated) {
                     $ticketSubject = "After Hours - " + $ticketSubject
                 }
+                
+                # Append time estimate to subject if available
+                if ($timeEstimate.TimeEstimate -gt 0) {
+                    $ticketSubject += " - Estimated Time: $($timeEstimate.TimeEstimate) hours"
+                }
             }
 
             [void]$sb.AppendLine()
@@ -2692,24 +2708,35 @@ function New-TicketInstructions {
             [void]$sb.AppendLine("TICKET SUBJECT:")
             [void]$sb.AppendLine("  $ticketSubject")
             [void]$sb.AppendLine()
-            [void]$sb.AppendLine("Product/System:          $($item.Product)")
-            [void]$sb.AppendLine("Risk Score:              $($item.RiskScore.ToString('N2'))")
-            [void]$sb.AppendLine("EPSS Score:              $($item.EPSSScore.ToString('N4'))")
-            [void]$sb.AppendLine("Average CVSS:            $($item.AvgCVSS.ToString('N2'))")
-            [void]$sb.AppendLine("Total Vulnerabilities:   $($item.VulnCount)")
-            [void]$sb.AppendLine("Affected Systems Count:  $($item.AffectedSystems.Count)")
+            [void]$sb.AppendLine(("Product/System:".PadRight(25)) + $item.Product)
+            [void]$sb.AppendLine(("Risk Score:".PadRight(25)) + $item.RiskScore.ToString('N2'))
+            [void]$sb.AppendLine(("EPSS Score:".PadRight(25)) + $item.EPSSScore.ToString('N4'))
+            [void]$sb.AppendLine(("Average CVSS:".PadRight(25)) + $item.AvgCVSS.ToString('N2'))
+            [void]$sb.AppendLine(("Total Vulnerabilities:".PadRight(25)) + $item.VulnCount)
+            [void]$sb.AppendLine(("Affected Systems Count:".PadRight(25)) + $item.AffectedSystems.Count)
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine("NOTE: This remediation can go to any available technician.")
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Affected Systems:")
-            # Group by hostname and IP to get unique systems, then format as "hostname - IP"
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP -Unique
+            # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP" or "hostname - IP"
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
-                if (-not [string]::IsNullOrWhiteSpace($ip)) {
-                    [void]$sb.AppendLine("  - $hostname - $ip")
-                } else {
-                    [void]$sb.AppendLine("  - $hostname")
+                $username = $sys.Username
+                
+                # Format: "hostname (username) - IP" if both username and IP exist
+                # Format: "hostname (username)" if only username exists
+                # Format: "hostname - IP" if only IP exists
+                # Format: "hostname" if neither exists
+                $systemLine = $hostname
+                if (-not [string]::IsNullOrWhiteSpace($username)) {
+                    $systemLine += " ($username)"
                 }
+                if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                    $systemLine += " - $ip"
+                }
+                [void]$sb.AppendLine("  - $systemLine")
             }
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Remediation Instructions:")
@@ -2762,7 +2789,7 @@ Yes - completed
 
 Next step(s)
 
-Meet with Connie if asked
+TimeZest meeting request has been sent. Please select a time to meet if you would like to discuss this further.
 "@
 
     # Copy to clipboard
