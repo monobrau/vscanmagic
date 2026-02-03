@@ -871,6 +871,173 @@ function Read-SheetData {
     return $data.ToArray()
 }
 
+function Test-IsFullListFormat {
+    param(
+        [object]$Workbook
+    )
+    
+    # Check for sheets that indicate full list format
+    $fullListSheetPatterns = @(
+        "*Critical Vulnerabilities*",
+        "*High Vulnerabilities*",
+        "*Medium Vulnerabilities*",
+        "*Low Vulnerabilities*"
+    )
+    
+    $foundSheets = @()
+    foreach ($sheet in $Workbook.Worksheets) {
+        foreach ($pattern in $fullListSheetPatterns) {
+            if ($sheet.Name -like $pattern) {
+                $foundSheets += $sheet.Name
+                break
+            }
+        }
+    }
+    
+    if ($foundSheets.Count -ge 2) {
+        Write-Log "Detected full vulnerability list format (found sheets: $($foundSheets -join ', '))" -Level Info
+        return $true
+    }
+    
+    return $false
+}
+
+function Read-FullListSheetData {
+    param(
+        [object]$Worksheet,
+        [hashtable]$ColumnIndices
+    )
+    
+    $usedRange = $Worksheet.UsedRange
+    $rowCount = $usedRange.Rows.Count
+    
+    if ($rowCount -le 1) {
+        return @()
+    }
+    
+    Write-Log "  Reading $rowCount rows into memory (bulk read)..."
+    
+    # Read entire range into memory
+    $rangeValues = $usedRange.Value2
+    
+    if ($null -eq $rangeValues) {
+        return @()
+    }
+    
+    Write-Log "  Processing data in memory..."
+    
+    $vulnerabilities = [System.Collections.ArrayList]::new()
+    
+    # Process rows in memory
+    for ($row = 2; $row -le $rowCount; $row++) {
+        if ($row % 500 -eq 0) {
+            Write-Log "  Processed $row of $rowCount rows..."
+        }
+        
+        # Extract values
+        $hostName = ''
+        if ($columnIndices.ContainsKey('HostName')) {
+            $hostName = [string]$rangeValues[$row, $columnIndices['HostName']]
+        }
+        
+        $ip = ''
+        if ($columnIndices.ContainsKey('IP')) {
+            $ip = [string]$rangeValues[$row, $columnIndices['IP']]
+        }
+        
+        $product = ''
+        if ($columnIndices.ContainsKey('Product')) {
+            $product = [string]$rangeValues[$row, $columnIndices['Product']]
+            # Clean up product name (remove brackets and quotes if present)
+            $product = $product -replace "^\[|'|\]$", "" -replace "^'|'$", ""
+        }
+        
+        $severity = ''
+        if ($columnIndices.ContainsKey('Severity')) {
+            $severity = [string]$rangeValues[$row, $columnIndices['Severity']]
+        }
+        
+        $epssScore = 0.0
+        if ($columnIndices.ContainsKey('EPSS')) {
+            $epssScore = Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $columnIndices['EPSS']])
+        }
+        
+        # Skip rows without required data
+        if ([string]::IsNullOrWhiteSpace($product) -or [string]::IsNullOrWhiteSpace($severity)) {
+            continue
+        }
+        
+        # Add vulnerability record
+        $null = $vulnerabilities.Add([PSCustomObject]@{
+            'Host Name' = $hostName
+            'IP' = $ip
+            'Product' = $product
+            'Severity' = $severity
+            'EPSS Score' = $epssScore
+        })
+    }
+    
+    Write-Log "  Completed processing $($vulnerabilities.Count) vulnerability records"
+    return $vulnerabilities.ToArray()
+}
+
+function Aggregate-FullListData {
+    param(
+        [array]$Vulnerabilities
+    )
+    
+    Write-Log "Aggregating $($Vulnerabilities.Count) vulnerabilities by Host/Product/Severity..."
+    
+    $aggregated = [System.Collections.ArrayList]::new()
+    
+    # Group by Host Name, IP, and Product
+    $grouped = $Vulnerabilities | Group-Object -Property {
+        "$($_.'Host Name')|$($_.IP)|$($_.Product)"
+    }
+    
+    foreach ($group in $grouped) {
+        $firstItem = $group.Group[0]
+        $hostName = $firstItem.'Host Name'
+        $ip = $firstItem.IP
+        $product = $firstItem.Product
+        
+        # Count vulnerabilities by severity
+        $critical = ($group.Group | Where-Object { $_.Severity -eq 'Critical' }).Count
+        $high = ($group.Group | Where-Object { $_.Severity -eq 'High' }).Count
+        $medium = ($group.Group | Where-Object { $_.Severity -eq 'Medium' }).Count
+        $low = ($group.Group | Where-Object { $_.Severity -eq 'Low' }).Count
+        
+        # Calculate max EPSS score
+        $maxEPSS = 0.0
+        if ($group.Group.Count -gt 0) {
+            $epssValues = $group.Group | Where-Object { $_.'EPSS Score' -gt 0 } | Select-Object -ExpandProperty 'EPSS Score'
+            if ($epssValues) {
+                $maxEPSS = ($epssValues | Measure-Object -Maximum).Maximum
+            }
+        }
+        
+        $vulnCount = $critical + $high + $medium + $low
+        
+        if ($vulnCount -gt 0) {
+            $null = $aggregated.Add([PSCustomObject]@{
+                'Host Name' = $hostName
+                'IP' = $ip
+                'Username' = ''
+                'Product' = $product
+                'Critical' = $critical
+                'High' = $high
+                'Medium' = $medium
+                'Low' = $low
+                'Vulnerability Count' = $vulnCount
+                'EPSS Score' = $maxEPSS
+            })
+        }
+    }
+    
+    Write-Log "Aggregated to $($aggregated.Count) unique Host/Product combinations" -Level Success
+    return $aggregated.ToArray()
+}
+
 function Get-VulnerabilityData {
     param(
         [string]$ExcelPath
@@ -890,9 +1057,6 @@ function Get-VulnerabilityData {
 
         $workbook = $excel.Workbooks.Open($ExcelPath)
 
-        # Find all sheets that match remediation patterns
-        $sourceSheets = @()
-        
         # Log all sheets found in workbook for debugging
         Write-Log "All sheets found in workbook:"
         $allSheetNames = @()
@@ -901,6 +1065,118 @@ function Get-VulnerabilityData {
             Write-Log "  - '$($sheet.Name)'"
         }
         Write-Log "Total sheets: $($allSheetNames.Count)"
+        
+        # Check if this is a full list format file
+        $isFullListFormat = Test-IsFullListFormat -Workbook $workbook
+        
+        if ($isFullListFormat) {
+            Write-Log "Processing as full vulnerability list format..." -Level Info
+            
+            # Find vulnerability severity sheets
+            $fullListSheetPatterns = @(
+                "*Critical Vulnerabilities*",
+                "*High Vulnerabilities*",
+                "*Medium Vulnerabilities*",
+                "*Low Vulnerabilities*"
+            )
+            
+            $sourceSheets = @()
+            foreach ($sheet in $workbook.Worksheets) {
+                $sheetName = $sheet.Name
+                foreach ($pattern in $fullListSheetPatterns) {
+                    if ($sheetName -like $pattern) {
+                        Write-Log "Found vulnerability list sheet: $sheetName"
+                        $sourceSheets += $sheet
+                        break
+                    }
+                }
+            }
+            
+            if ($sourceSheets.Count -eq 0) {
+                throw "No vulnerability list sheets found. Expected sheets matching: Critical Vulnerabilities, High Vulnerabilities, Medium Vulnerabilities, Low Vulnerabilities"
+            }
+            
+            # Get headers from first sheet
+            $firstSheet = $sourceSheets[0]
+            $usedRange = $firstSheet.UsedRange
+            $colCount = $usedRange.Columns.Count
+            
+            # Get headers
+            $headers = @{}
+            for ($col = 1; $col -le $colCount; $col++) {
+                $headerName = $firstSheet.Cells.Item(1, $col).Text
+                if ($headerName) {
+                    $headers[$headerName] = $col
+                }
+            }
+            
+            Write-Log "Found headers: $($headers.Keys -join ', ')"
+            
+            # Define column mappings for full list format
+            $columnMappings = @{
+                'HostName' = @('Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine')
+                'IP' = @('IP', 'IP Address', 'IPAddress', 'Address')
+                'Product' = @('Software Name', 'Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name')
+                'Severity' = @('Severity')
+                'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
+            }
+            
+            # Find column indices
+            $columnIndices = @{}
+            foreach ($key in $columnMappings.Keys) {
+                $colIndex = Find-ColumnIndex -Headers $headers -PossibleNames $columnMappings[$key]
+                if ($colIndex) {
+                    $columnIndices[$key] = $colIndex
+                    Write-Log "Mapped '$key' to column: $($headers.Keys | Where-Object { $headers[$_] -eq $colIndex })"
+                } else {
+                    Write-Log "Could not find column for '$key' (tried: $($columnMappings[$key] -join ', '))" -Level Warning
+                }
+            }
+            
+            # Verify required columns
+            $requiredFields = @('Product', 'Severity')
+            $missingRequired = @()
+            foreach ($field in $requiredFields) {
+                if (-not $columnIndices.ContainsKey($field)) {
+                    $missingRequired += $field
+                }
+            }
+            
+            if ($missingRequired.Count -gt 0) {
+                throw "Missing required columns for full list format: $($missingRequired -join ', '). Please ensure your Excel file has Product/Software Name and Severity columns."
+            }
+            
+            Write-Log "Successfully mapped $($columnIndices.Count) columns."
+            
+            # Read all vulnerabilities from all sheets
+            $allVulnerabilities = @()
+            foreach ($sheet in $sourceSheets) {
+                Write-Log "Reading vulnerabilities from: $($sheet.Name)"
+                $sheetVulns = Read-FullListSheetData -Worksheet $sheet -ColumnIndices $columnIndices
+                Write-Log "  Found $($sheetVulns.Count) vulnerabilities"
+                $allVulnerabilities += $sheetVulns
+            }
+            
+            Write-Log "Total vulnerabilities read: $($allVulnerabilities.Count)"
+            
+            # Aggregate vulnerabilities by Host/Product/Severity
+            $allData = Aggregate-FullListData -Vulnerabilities $allVulnerabilities
+            
+            Write-Log "Total vulnerability records consolidated: $($allData.Count)" -Level Success
+            
+            # Clean up sheet references
+            foreach ($sheet in $sourceSheets) {
+                Clear-ComObject $sheet
+            }
+            
+            return $allData
+        }
+        
+        # Original aggregated format processing
+        Write-Log "Processing as aggregated format..." -Level Info
+        
+        # Find all sheets that match remediation patterns
+        $sourceSheets = @()
         
         foreach ($sheet in $workbook.Worksheets) {
             $sheetName = $sheet.Name
@@ -1201,9 +1477,19 @@ function Get-CompositeRiskScore {
 }
 
 function Get-Top10Vulnerabilities {
-    param([array]$VulnData)
+    param(
+        [array]$VulnData,
+        [double]$MinEPSS = 0,
+        [bool]$IncludeCritical = $true,
+        [bool]$IncludeHigh = $true,
+        [bool]$IncludeMedium = $true,
+        [bool]$IncludeLow = $true,
+        [int]$Count = 10
+    )
 
-    Write-Log "Calculating risk scores and identifying top 10 vulnerabilities..."
+    $countText = if ($Count -le 0) { "all" } else { "$Count" }
+    Write-Log "Calculating risk scores and identifying top $countText vulnerabilities..."
+    Write-Log "Filters: MinEPSS=$MinEPSS, Critical=$IncludeCritical, High=$IncludeHigh, Medium=$IncludeMedium, Low=$IncludeLow, Count=$countText"
 
     # Group by product
     $grouped = $VulnData | Group-Object -Property Product
@@ -1308,12 +1594,49 @@ function Get-Top10Vulnerabilities {
         $item.RiskScore = Get-CompositeRiskScore -VulnCount $item.VulnCount -EPSSScore $item.EPSSScore -AvgCVSS $item.AvgCVSS
     }
 
-    # Sort by risk score and take top 10
-    $top10 = $aggregated | Sort-Object -Property RiskScore -Descending | Select-Object -First 10
+    # Apply filters
+    Write-Log "Before filtering: $($aggregated.Count) products"
+    
+    # Count products by severity before filtering
+    $productsWithCritical = ($aggregated | Where-Object { $_.Critical -gt 0 }).Count
+    $productsWithHigh = ($aggregated | Where-Object { $_.High -gt 0 }).Count
+    $productsWithMedium = ($aggregated | Where-Object { $_.Medium -gt 0 }).Count
+    $productsWithLow = ($aggregated | Where-Object { $_.Low -gt 0 }).Count
+    Write-Log "Products by severity: Critical=$productsWithCritical, High=$productsWithHigh, Medium=$productsWithMedium, Low=$productsWithLow"
+    
+    $filtered = $aggregated | Where-Object {
+        # EPSS filter
+        $epssPass = $_.EPSSScore -ge $MinEPSS
+        
+        # Severity filter - include if has any of the selected severities
+        $severityPass = $false
+        if ($IncludeCritical -and $_.Critical -gt 0) { $severityPass = $true }
+        if ($IncludeHigh -and $_.High -gt 0) { $severityPass = $true }
+        if ($IncludeMedium -and $_.Medium -gt 0) { $severityPass = $true }
+        if ($IncludeLow -and $_.Low -gt 0) { $severityPass = $true }
+        
+        return ($epssPass -and $severityPass)
+    }
 
-    Write-Log "Identified top 10 vulnerabilities from $($aggregated.Count) unique products"
+    Write-Log "Filtered from $($aggregated.Count) to $($filtered.Count) products matching criteria"
+    
+    # Count filtered products by severity
+    $filteredCritical = ($filtered | Where-Object { $_.Critical -gt 0 }).Count
+    $filteredHigh = ($filtered | Where-Object { $_.High -gt 0 }).Count
+    $filteredMedium = ($filtered | Where-Object { $_.Medium -gt 0 }).Count
+    $filteredLow = ($filtered | Where-Object { $_.Low -gt 0 }).Count
+    Write-Log "Filtered products by severity: Critical=$filteredCritical, High=$filteredHigh, Medium=$filteredMedium, Low=$filteredLow"
 
-    return $top10
+    # Sort by risk score and take requested count (or all if Count <= 0)
+    if ($Count -le 0) {
+        $topVulns = $filtered | Sort-Object -Property RiskScore -Descending
+        Write-Log "Including all $($topVulns.Count) vulnerabilities above minimum EPSS score"
+    } else {
+        $topVulns = $filtered | Sort-Object -Property RiskScore -Descending | Select-Object -First $Count
+        Write-Log "Identified top $Count vulnerabilities from $($filtered.Count) filtered products"
+    }
+
+    return $topVulns
 }
 
 function Get-RemediationGuidance {
@@ -1368,7 +1691,8 @@ function New-WordReport {
         [array]$Top10Data,
         [array]$TimeEstimates = $null,
         [bool]$IsRMITPlus = $false,
-        [array]$GeneralRecommendations = $null
+        [array]$GeneralRecommendations = $null,
+        [string]$ReportTitle = "Top Ten Vulnerabilities Report"
     )
 
     Write-Log "Generating Word document report..."
@@ -1404,7 +1728,7 @@ function New-WordReport {
         # Set document properties (optional - may fail on some systems)
         Write-Log "Setting document properties..."
         try {
-            $doc.BuiltInDocumentProperties.Item("Title").Value = "Top Ten Vulnerabilities Report - $ClientName"
+            $doc.BuiltInDocumentProperties.Item("Title").Value = "$ReportTitle - $ClientName"
             $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
             $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
             $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
@@ -1435,7 +1759,7 @@ function New-WordReport {
         $selection.Font.Bold = $true
         $selection.Font.Color = 5855577  # Dark blue color
         $selection.ParagraphFormat.Alignment = 1  # Center
-        $selection.TypeText("Top Ten Vulnerabilities Report")
+        $selection.TypeText($ReportTitle)
         $selection.TypeParagraph()
 
         # Add horizontal line
@@ -1632,7 +1956,8 @@ function New-WordReport {
         # --- Top 10 Vulnerabilities Table ---
         Write-Log "Creating top 10 vulnerabilities table..."
         $selection.Style = "Heading 1"
-        $selection.TypeText("Top 10 Vulnerabilities by Risk Score")
+        $vulnCountText = if ($Top10Data.Count -eq 10) { "Top 10" } elseif ($Top10Data.Count -gt 0) { "Top $($Top10Data.Count)" } else { "Top Vulnerabilities" }
+        $selection.TypeText("$vulnCountText Vulnerabilities by Risk Score")
         $selection.TypeParagraph()
 
         $selection.Style = "Normal"
@@ -1777,7 +2102,8 @@ function New-WordReport {
 
             # Basic chart formatting
             $chart.HasTitle = $true
-            $chart.ChartTitle.Text = "Top 10 Vulnerabilities by Count"
+            $vulnCountText = if ($Top10Data.Count -eq 10) { "Top 10" } elseif ($Top10Data.Count -gt 0) { "Top $($Top10Data.Count)" } else { "Top Vulnerabilities" }
+            $chart.ChartTitle.Text = "$vulnCountText Vulnerabilities by Count"
             $chart.HasLegend = $true
             $chart.Legend.Position = -4152  # xlLegendPositionRight - legend to the right of pie
             $chart.Legend.Font.Size = 11  # Reduced size to fit all 10 entries (1/3 smaller than 16)
@@ -2031,6 +2357,9 @@ function New-ExcelReport {
         # --- 2. Consolidate Data ---
         Write-Log "Consolidating data from remediation sheets..." -Level Info
 
+        # Check if this is a full list format file
+        $isFullListFormat = Test-IsFullListFormat -Workbook $workbook
+
         # Delete existing consolidated sheet if present
         $existingSheet = $null
         foreach ($sheet in $workbook.Worksheets) {
@@ -2053,102 +2382,274 @@ function New-ExcelReport {
         Write-Log "Created '$($script:Config.ConsolidatedSheetName)' sheet" -Level Info
         Clear-ComObject $lastSheet
 
-        # Find and collect source sheets
-        $sourceSheets = @()
-        $firstValidSheet = $null
-
-        foreach ($pattern in $script:Config.SourceSheetPatterns) {
+        if ($isFullListFormat) {
+            Write-Log "Processing as full vulnerability list format for Excel report..." -Level Info
+            
+            # Find vulnerability severity sheets
+            $fullListSheetPatterns = @(
+                "*Critical Vulnerabilities*",
+                "*High Vulnerabilities*",
+                "*Medium Vulnerabilities*",
+                "*Low Vulnerabilities*"
+            )
+            
+            $sourceSheets = @()
             foreach ($sheet in $workbook.Worksheets) {
-                $shouldInclude = $false
-
-                # Check if matches pattern
-                if ($sheet.Name -like $pattern) {
-                    $shouldInclude = $true
-                }
-
-                # Check exclusions
-                foreach ($excludePattern in $script:Config.ExcludeSheetPatterns) {
-                    if ($sheet.Name -like $excludePattern -or $sheet.Name -eq $excludePattern) {
-                        $shouldInclude = $false
+                $sheetName = $sheet.Name
+                foreach ($pattern in $fullListSheetPatterns) {
+                    if ($sheetName -like $pattern) {
+                        Write-Log "Found vulnerability list sheet: $sheetName"
+                        $sourceSheets += $sheet
                         break
                     }
                 }
-
-                if ($shouldInclude) {
-                    try {
-                        if ($null -ne $sheet.UsedRange -and $sheet.UsedRange.Rows.Count -ge 1) {
-                            $sourceSheets += $sheet
-                            if ($null -eq $firstValidSheet) {
-                                $firstValidSheet = $sheet
-                                Write-Log "Found first valid sheet: $($firstValidSheet.Name)" -Level Info
-                            }
+            }
+            
+            if ($sourceSheets.Count -eq 0) {
+                throw "No vulnerability list sheets found for consolidation"
+            }
+            
+            # Read all vulnerabilities and aggregate them
+            $allVulnerabilities = @()
+            foreach ($sheet in $sourceSheets) {
+                Write-Log "Reading vulnerabilities from: $($sheet.Name)" -Level Info
+                $usedRange = $sheet.UsedRange
+                $rowCount = $usedRange.Rows.Count
+                
+                if ($rowCount -le 1) { continue }
+                
+                # Get headers
+                $headers = @{}
+                $colCount = $usedRange.Columns.Count
+                for ($col = 1; $col -le $colCount; $col++) {
+                    $headerName = $sheet.Cells.Item(1, $col).Text
+                    if ($headerName) {
+                        $headers[$headerName] = $col
+                    }
+                }
+                
+                # Find column indices
+                $hostNameCol = $null
+                $ipCol = $null
+                $productCol = $null
+                $severityCol = $null
+                $epssCol = $null
+                $fixCol = $null
+                $evidencePathCol = $null
+                $evidenceVersionCol = $null
+                
+                foreach ($header in $headers.Keys) {
+                    if ($header -match '^(Host Name|Hostname)$') { $hostNameCol = $headers[$header] }
+                    if ($header -match '^(IP|IP Address)$') { $ipCol = $headers[$header] }
+                    if ($header -match '^(Software Name|Product|Software)$') { $productCol = $headers[$header] }
+                    if ($header -eq 'Severity') { $severityCol = $headers[$header] }
+                    if ($header -match '^(EPSS Score|EPSS)$') { $epssCol = $headers[$header] }
+                    if ($header -match '^(Solution|Fix)$') { $fixCol = $headers[$header] }
+                    if ($header -match '^(Evidence Path)$') { $evidencePathCol = $headers[$header] }
+                    if ($header -match '^(Evidence Version)$') { $evidenceVersionCol = $headers[$header] }
+                }
+                
+                # Read vulnerabilities
+                $rangeValues = $usedRange.Value2
+                for ($row = 2; $row -le $rowCount; $row++) {
+                    $hostName = if ($hostNameCol) { [string]$rangeValues[$row, $hostNameCol] } else { '' }
+                    $ip = if ($ipCol) { [string]$rangeValues[$row, $ipCol] } else { '' }
+                    $product = if ($productCol) { [string]$rangeValues[$row, $productCol] } else { '' }
+                    $product = $product -replace "^\[|'|\]$", "" -replace "^'|'$", ""
+                    $severity = if ($severityCol) { [string]$rangeValues[$row, $severityCol] } else { '' }
+                    $epssScore = if ($epssCol) { Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $epssCol]) } else { 0.0 }
+                    $fix = if ($fixCol) { [string]$rangeValues[$row, $fixCol] } else { '' }
+                    $evidencePath = if ($evidencePathCol) { [string]$rangeValues[$row, $evidencePathCol] } else { '' }
+                    $evidenceVersion = if ($evidenceVersionCol) { [string]$rangeValues[$row, $evidenceVersionCol] } else { '' }
+                    
+                    if (-not [string]::IsNullOrWhiteSpace($product) -and -not [string]::IsNullOrWhiteSpace($severity)) {
+                        $allVulnerabilities += [PSCustomObject]@{
+                            'Host Name' = $hostName
+                            'IP' = $ip
+                            'Product' = $product
+                            'Severity' = $severity
+                            'EPSS Score' = $epssScore
+                            'Fix' = $fix
+                            'Evidence Path' = $evidencePath
+                            'Evidence Version' = $evidenceVersion
                         }
-                    } catch {
-                        Write-Log "Could not evaluate sheet '$($sheet.Name)'" -Level Warning
+                    }
+                }
+                Clear-ComObject $usedRange
+            }
+            
+            Write-Log "Read $($allVulnerabilities.Count) vulnerabilities from full list format" -Level Info
+            
+            # Aggregate by Host/Product
+            $aggregatedData = $allVulnerabilities | Group-Object -Property {
+                "$($_.'Host Name')|$($_.IP)|$($_.Product)"
+            } | ForEach-Object {
+                $group = $_
+                $firstItem = $group.Group[0]
+                
+                $critical = ($group.Group | Where-Object { $_.Severity -eq 'Critical' }).Count
+                $high = ($group.Group | Where-Object { $_.Severity -eq 'High' }).Count
+                $medium = ($group.Group | Where-Object { $_.Severity -eq 'Medium' }).Count
+                $low = ($group.Group | Where-Object { $_.Severity -eq 'Low' }).Count
+                $vulnCount = $critical + $high + $medium + $low
+                $maxEPSS = ($group.Group | Measure-Object -Property 'EPSS Score' -Maximum).Maximum
+                
+                # Get first non-empty values for other fields
+                $fix = ($group.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Fix) } | Select-Object -First 1).Fix
+                $evidencePath = ($group.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.'Evidence Path') } | Select-Object -First 1).'Evidence Path'
+                $evidenceVersion = ($group.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.'Evidence Version') } | Select-Object -First 1).'Evidence Version'
+                
+                [PSCustomObject]@{
+                    'Remediation Type' = ''  # Not available in full list format
+                    'Product' = $firstItem.Product
+                    'Host Name' = $firstItem.'Host Name'
+                    'Fix' = if ($fix) { $fix } else { '' }
+                    'IP' = $firstItem.IP
+                    'Evidence Path' = if ($evidencePath) { $evidencePath } else { '' }
+                    'Evidence Version' = if ($evidenceVersion) { $evidenceVersion } else { '' }
+                    'Critical' = $critical
+                    'High' = $high
+                    'Medium' = $medium
+                    'Low' = $low
+                    'Vulnerability Count' = $vulnCount
+                    'EPSS Score' = $maxEPSS
+                }
+            }
+            
+            Write-Log "Aggregated to $($aggregatedData.Count) Host/Product combinations" -Level Info
+            
+            # Write headers to Source Data sheet
+            $headers = @('Remediation Type', 'Product', 'Host Name', 'Fix', 'IP', 'Evidence Path', 'Evidence Version', 'Critical', 'High', 'Medium', 'Low', 'Vulnerability Count', 'EPSS Score')
+            for ($col = 1; $col -le $headers.Count; $col++) {
+                $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
+            }
+            
+            # Write aggregated data
+            $row = 2
+            foreach ($item in $aggregatedData) {
+                $sourceDataSheet.Cells.Item($row, 1).Value2 = $item.'Remediation Type'
+                $sourceDataSheet.Cells.Item($row, 2).Value2 = $item.Product
+                $sourceDataSheet.Cells.Item($row, 3).Value2 = $item.'Host Name'
+                $sourceDataSheet.Cells.Item($row, 4).Value2 = $item.Fix
+                $sourceDataSheet.Cells.Item($row, 5).Value2 = $item.IP
+                $sourceDataSheet.Cells.Item($row, 6).Value2 = $item.'Evidence Path'
+                $sourceDataSheet.Cells.Item($row, 7).Value2 = $item.'Evidence Version'
+                $sourceDataSheet.Cells.Item($row, 8).Value2 = $item.Critical
+                $sourceDataSheet.Cells.Item($row, 9).Value2 = $item.High
+                $sourceDataSheet.Cells.Item($row, 10).Value2 = $item.Medium
+                $sourceDataSheet.Cells.Item($row, 11).Value2 = $item.Low
+                $sourceDataSheet.Cells.Item($row, 12).Value2 = $item.'Vulnerability Count'
+                $sourceDataSheet.Cells.Item($row, 13).Value2 = $item.'EPSS Score'
+                $row++
+            }
+            
+            Write-Log "Data consolidation complete for full list format" -Level Info
+            
+            # Release source sheet references
+            foreach ($sheet in $sourceSheets) {
+                Clear-ComObject $sheet
+            }
+        } else {
+            # Original aggregated format processing
+            Write-Log "Processing as aggregated format..." -Level Info
+            
+            # Find and collect source sheets
+            $sourceSheets = @()
+            $firstValidSheet = $null
+
+            foreach ($pattern in $script:Config.SourceSheetPatterns) {
+                foreach ($sheet in $workbook.Worksheets) {
+                    $shouldInclude = $false
+
+                    # Check if matches pattern
+                    if ($sheet.Name -like $pattern) {
+                        $shouldInclude = $true
+                    }
+
+                    # Check exclusions
+                    foreach ($excludePattern in $script:Config.ExcludeSheetPatterns) {
+                        if ($sheet.Name -like $excludePattern -or $sheet.Name -eq $excludePattern) {
+                            $shouldInclude = $false
+                            break
+                        }
+                    }
+
+                    if ($shouldInclude) {
+                        try {
+                            if ($null -ne $sheet.UsedRange -and $sheet.UsedRange.Rows.Count -ge 1) {
+                                $sourceSheets += $sheet
+                                if ($null -eq $firstValidSheet) {
+                                    $firstValidSheet = $sheet
+                                    Write-Log "Found first valid sheet: $($firstValidSheet.Name)" -Level Info
+                                }
+                            }
+                        } catch {
+                            Write-Log "Could not evaluate sheet '$($sheet.Name)'" -Level Warning
+                        }
                     }
                 }
             }
-        }
 
-        Write-Log "Found $($sourceSheets.Count) source sheets to consolidate" -Level Info
+            Write-Log "Found $($sourceSheets.Count) source sheets to consolidate" -Level Info
 
-        # Copy headers from first valid sheet
-        if ($null -ne $firstValidSheet) {
-            try {
-                $sourceCols = $firstValidSheet.UsedRange.Columns.Count
-                $sourceRow = $firstValidSheet.Rows(1)
-                $targetRow = $sourceDataSheet.Rows(1)
+            # Copy headers from first valid sheet
+            if ($null -ne $firstValidSheet) {
+                try {
+                    $sourceCols = $firstValidSheet.UsedRange.Columns.Count
+                    $sourceRow = $firstValidSheet.Rows(1)
+                    $targetRow = $sourceDataSheet.Rows(1)
 
-                # Copy column by column to avoid type casting issues
-                for ($col = 1; $col -le $sourceCols; $col++) {
-                    $sourceDataSheet.Cells.Item(1, $col).Value2 = $firstValidSheet.Cells.Item(1, $col).Value2
+                    # Copy column by column to avoid type casting issues
+                    for ($col = 1; $col -le $sourceCols; $col++) {
+                        $sourceDataSheet.Cells.Item(1, $col).Value2 = $firstValidSheet.Cells.Item(1, $col).Value2
+                    }
+
+                    Write-Log "Headers copied successfully ($sourceCols columns)" -Level Info
+                    Clear-ComObject $sourceRow
+                    Clear-ComObject $targetRow
+                } catch {
+                    throw "Failed to copy headers: $($_.Exception.Message)"
                 }
-
-                Write-Log "Headers copied successfully ($sourceCols columns)" -Level Info
-                Clear-ComObject $sourceRow
-                Clear-ComObject $targetRow
-            } catch {
-                throw "Failed to copy headers: $($_.Exception.Message)"
             }
-        }
 
-        # Copy data rows from all source sheets
-        $destRow = 2
-        foreach ($sourceSheet in $sourceSheets) {
-            Write-Log "Copying data from: $($sourceSheet.Name)" -Level Info
+            # Copy data rows from all source sheets
+            $destRow = 2
+            foreach ($sourceSheet in $sourceSheets) {
+                Write-Log "Copying data from: $($sourceSheet.Name)" -Level Info
 
-            try {
-                $sourceRange = $sourceSheet.UsedRange
-                $sourceRows = $sourceRange.Rows.Count
-                $sourceCols = $sourceRange.Columns.Count
+                try {
+                    $sourceRange = $sourceSheet.UsedRange
+                    $sourceRows = $sourceRange.Rows.Count
+                    $sourceCols = $sourceRange.Columns.Count
 
-                if ($sourceRows -gt 1) {
-                    # Use Excel's Copy/PasteSpecial to avoid PowerShell type casting
-                    $sourceDataRange = $sourceSheet.Range($sourceSheet.Cells.Item(2, 1), $sourceSheet.Cells.Item($sourceRows, $sourceCols))
-                    $targetCell = $sourceDataSheet.Cells.Item($destRow, 1)
+                    if ($sourceRows -gt 1) {
+                        # Use Excel's Copy/PasteSpecial to avoid PowerShell type casting
+                        $sourceDataRange = $sourceSheet.Range($sourceSheet.Cells.Item(2, 1), $sourceSheet.Cells.Item($sourceRows, $sourceCols))
+                        $targetCell = $sourceDataSheet.Cells.Item($destRow, 1)
 
-                    # Copy and paste values only (not formulas/formatting)
-                    $sourceDataRange.Copy()
-                    $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
-                    $excel.Application.CutCopyMode = $false  # Clear clipboard
+                        # Copy and paste values only (not formulas/formatting)
+                        $sourceDataRange.Copy()
+                        $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
+                        $excel.Application.CutCopyMode = $false  # Clear clipboard
 
-                    $rowsCopied = $sourceRows - 1
-                    $destRow += $rowsCopied
-                    Write-Log "  Copied $rowsCopied data rows" -Level Info
+                        $rowsCopied = $sourceRows - 1
+                        $destRow += $rowsCopied
+                        Write-Log "  Copied $rowsCopied data rows" -Level Info
+                    }
+                    Clear-ComObject $sourceRange
+                } catch {
+                    Write-Log "Failed to copy data from '$($sourceSheet.Name)': $($_.Exception.Message)" -Level Warning
                 }
-                Clear-ComObject $sourceRange
-            } catch {
-                Write-Log "Failed to copy data from '$($sourceSheet.Name)': $($_.Exception.Message)" -Level Warning
             }
-        }
 
-        Write-Log "Data consolidation complete" -Level Info
+            Write-Log "Data consolidation complete" -Level Info
 
-        # Release source sheet references
-        foreach ($sheet in $sourceSheets) {
-            Clear-ComObject $sheet
+            # Release source sheet references
+            foreach ($sheet in $sourceSheets) {
+                Clear-ComObject $sheet
+            }
+            Clear-ComObject $firstValidSheet
         }
-        Clear-ComObject $firstValidSheet
 
         # --- 3. Create Pivot Table ---
         Write-Log "Creating Pivot Table..." -Level Info
@@ -3169,7 +3670,7 @@ function New-TicketInstructions {
             [void]$sb.AppendLine("-".PadRight(100, '-'))
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("TICKET SUBJECT:")
-            [void]$sb.AppendLine("  $ticketSubject")
+            [void]$sb.AppendLine($ticketSubject)
             [void]$sb.AppendLine()
             [void]$sb.AppendLine(("Product/System:".PadRight(25)) + $item.Product)
             [void]$sb.AppendLine(("Risk Score:".PadRight(25)) + $item.RiskScore.ToString('N2'))
@@ -3902,7 +4403,7 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(710, 780)
+    $form.Size = New-Object System.Drawing.Size(710, 900)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -4037,7 +4538,7 @@ function Show-VScanMagicGUI {
     $checkBoxWord = New-Object System.Windows.Forms.CheckBox
     $checkBoxWord.Location = New-Object System.Drawing.Point(20, 50)
     $checkBoxWord.Size = New-Object System.Drawing.Size(300, 20)
-    $checkBoxWord.Text = "Generate Top Ten Vulnerabilities Report (Word)"
+    $checkBoxWord.Text = "Generate Top Vulnerabilities Report (Word)"
     $checkBoxWord.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxWord)
 
@@ -4062,21 +4563,95 @@ function Show-VScanMagicGUI {
     $checkBoxTimeEstimate.Checked = $false
     $groupBoxOutput.Controls.Add($checkBoxTimeEstimate)
 
+    # --- Top Ten Filters ---
+    $groupBoxTopTenFilters = New-Object System.Windows.Forms.GroupBox
+    $groupBoxTopTenFilters.Location = New-Object System.Drawing.Point(20, 305)
+    $groupBoxTopTenFilters.Size = New-Object System.Drawing.Size(660, 120)
+    $groupBoxTopTenFilters.Text = "Top Vulnerabilities Report Filters"
+    $form.Controls.Add($groupBoxTopTenFilters)
+
+    # Minimum EPSS Score
+    $labelMinEPSS = New-Object System.Windows.Forms.Label
+    $labelMinEPSS.Location = New-Object System.Drawing.Point(20, 25)
+    $labelMinEPSS.Size = New-Object System.Drawing.Size(150, 20)
+    $labelMinEPSS.Text = "Minimum EPSS Score:"
+    $groupBoxTopTenFilters.Controls.Add($labelMinEPSS)
+
+    $numericUpDownMinEPSS = New-Object System.Windows.Forms.NumericUpDown
+    $numericUpDownMinEPSS.Location = New-Object System.Drawing.Point(170, 23)
+    $numericUpDownMinEPSS.Size = New-Object System.Drawing.Size(80, 20)
+    $numericUpDownMinEPSS.Minimum = 0
+    $numericUpDownMinEPSS.Maximum = 1
+    $numericUpDownMinEPSS.DecimalPlaces = 3
+    $numericUpDownMinEPSS.Increment = 0.001
+    $numericUpDownMinEPSS.Value = 0
+    $groupBoxTopTenFilters.Controls.Add($numericUpDownMinEPSS)
+
+    # Severity Filters
+    $labelSeverity = New-Object System.Windows.Forms.Label
+    $labelSeverity.Location = New-Object System.Drawing.Point(20, 55)
+    $labelSeverity.Size = New-Object System.Drawing.Size(100, 20)
+    $labelSeverity.Text = "Include Severities:"
+    $groupBoxTopTenFilters.Controls.Add($labelSeverity)
+
+    $checkBoxSeverityCritical = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityCritical.Location = New-Object System.Drawing.Point(120, 55)
+    $checkBoxSeverityCritical.Size = New-Object System.Drawing.Size(70, 20)
+    $checkBoxSeverityCritical.Text = "Critical"
+    $checkBoxSeverityCritical.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityCritical)
+
+    $checkBoxSeverityHigh = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityHigh.Location = New-Object System.Drawing.Point(200, 55)
+    $checkBoxSeverityHigh.Size = New-Object System.Drawing.Size(60, 20)
+    $checkBoxSeverityHigh.Text = "High"
+    $checkBoxSeverityHigh.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityHigh)
+
+    $checkBoxSeverityMedium = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityMedium.Location = New-Object System.Drawing.Point(270, 55)
+    $checkBoxSeverityMedium.Size = New-Object System.Drawing.Size(70, 20)
+    $checkBoxSeverityMedium.Text = "Medium"
+    $checkBoxSeverityMedium.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityMedium)
+
+    $checkBoxSeverityLow = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityLow.Location = New-Object System.Drawing.Point(350, 55)
+    $checkBoxSeverityLow.Size = New-Object System.Drawing.Size(50, 20)
+    $checkBoxSeverityLow.Text = "Low"
+    $checkBoxSeverityLow.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityLow)
+
+    # Number of Vulnerabilities to Include
+    $labelVulnCount = New-Object System.Windows.Forms.Label
+    $labelVulnCount.Location = New-Object System.Drawing.Point(20, 85)
+    $labelVulnCount.Size = New-Object System.Drawing.Size(150, 20)
+    $labelVulnCount.Text = "Number to Include:"
+    $groupBoxTopTenFilters.Controls.Add($labelVulnCount)
+
+    $comboBoxVulnCount = New-Object System.Windows.Forms.ComboBox
+    $comboBoxVulnCount.Location = New-Object System.Drawing.Point(170, 83)
+    $comboBoxVulnCount.Size = New-Object System.Drawing.Size(100, 20)
+    $comboBoxVulnCount.DropDownStyle = 'DropDownList'
+    $comboBoxVulnCount.Items.AddRange(@("10", "20", "50", "100", "All"))
+    $comboBoxVulnCount.SelectedIndex = 0  # Default to 10
+    $groupBoxTopTenFilters.Controls.Add($comboBoxVulnCount)
+
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 305)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 435)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 330)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 460)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(570, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(600, 328)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(600, 458)
     $buttonBrowseOutput.Size = New-Object System.Drawing.Size(80, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
@@ -4092,14 +4667,14 @@ function Show-VScanMagicGUI {
 
     # --- Progress Section ---
     $script:StatusLabel = New-Object System.Windows.Forms.Label
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 365)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 495)
     $script:StatusLabel.Size = New-Object System.Drawing.Size(660, 20)
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Visible = $false
     $form.Controls.Add($script:StatusLabel)
 
     $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
-    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 390)
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 520)
     $script:ProgressBar.Size = New-Object System.Drawing.Size(660, 20)
     $script:ProgressBar.Style = 'Marquee'
     $script:ProgressBar.MarqueeAnimationSpeed = 30
@@ -4108,13 +4683,13 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 420)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 550)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 445)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 575)
     $script:LogTextBox.Size = New-Object System.Drawing.Size(660, 80)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
@@ -4124,7 +4699,7 @@ function Show-VScanMagicGUI {
 
     # --- View Reports Section Label ---
     $labelViewReports = New-Object System.Windows.Forms.Label
-    $labelViewReports.Location = New-Object System.Drawing.Point(20, 530)
+    $labelViewReports.Location = New-Object System.Drawing.Point(20, 665)
     $labelViewReports.Size = New-Object System.Drawing.Size(200, 20)
     $labelViewReports.Text = "View Generated Reports:"
     $form.Controls.Add($labelViewReports)
@@ -4134,12 +4709,12 @@ function Show-VScanMagicGUI {
     $buttonWidth = 120
     $buttonSpacing = 15
     $startX = 20
-    $buttonY = 555
+    $buttonY = 690
     
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
     $script:buttonOpenWord.Location = New-Object System.Drawing.Point($startX, $buttonY)
     $script:buttonOpenWord.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenWord.Text = "Top Ten"
+    $script:buttonOpenWord.Text = "View Report"
     $script:buttonOpenWord.Enabled = $false
     $script:buttonOpenWord.Add_Click({
         if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
@@ -4205,7 +4780,7 @@ function Show-VScanMagicGUI {
 
     # --- Ticket Notes Buttons ---
     $buttonCopyTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 615)
+    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 720)
     $buttonCopyTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $buttonCopyTicketNotes.Text = "Copy to Clipboard"
     $buttonCopyTicketNotes.Add_Click({
@@ -4214,7 +4789,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonCopyTicketNotes)
 
     $script:buttonOpenTicketNotes = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 615)
+    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 720)
     $script:buttonOpenTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenTicketNotes.Text = "View Ticket Notes"
     $script:buttonOpenTicketNotes.Enabled = $false
@@ -4227,7 +4802,7 @@ function Show-VScanMagicGUI {
 
     # --- Action Buttons (Bottom Right) ---
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
-    $buttonRemediationRules.Location = New-Object System.Drawing.Point(300, 700)
+    $buttonRemediationRules.Location = New-Object System.Drawing.Point(300, 755)
     $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
     $buttonRemediationRules.Text = "Remediation Rules"
     $buttonRemediationRules.Add_Click({
@@ -4236,7 +4811,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonRemediationRules)
 
     $buttonSettings = New-Object System.Windows.Forms.Button
-    $buttonSettings.Location = New-Object System.Drawing.Point(450, 700)
+    $buttonSettings.Location = New-Object System.Drawing.Point(450, 755)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
@@ -4245,7 +4820,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonSettings)
 
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(20, 700)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(20, 755)
     $buttonGenerate.Size = New-Object System.Drawing.Size(130, 30)
     $buttonGenerate.Text = "Generate Reports"
     $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)  # Blue - Primary action
@@ -4299,8 +4874,18 @@ function Show-VScanMagicGUI {
             $vulnData = Get-VulnerabilityData -ExcelPath $textBoxInputFile.Text
 
             # Calculate top 10 vulnerabilities
-            Update-Progress -Status "Calculating top 10 vulnerabilities..." -Show $true
-            $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
+            Update-Progress -Status "Calculating top vulnerabilities..." -Show $true
+            $minEPSS = [double]$numericUpDownMinEPSS.Value
+            $vulnCountSelection = $comboBoxVulnCount.SelectedItem.ToString()
+            $vulnCount = if ($vulnCountSelection -eq "All") { 0 } else { [int]$vulnCountSelection }
+            
+            $top10 = Get-Top10Vulnerabilities -VulnData $vulnData `
+                                            -MinEPSS $minEPSS `
+                                            -IncludeCritical $checkBoxSeverityCritical.Checked `
+                                            -IncludeHigh $checkBoxSeverityHigh.Checked `
+                                            -IncludeMedium $checkBoxSeverityMedium.Checked `
+                                            -IncludeLow $checkBoxSeverityLow.Checked `
+                                            -Count $vulnCount
 
             # Store time estimates and general recommendations for use in reports
             $timeEstimates = $null
@@ -4411,14 +4996,24 @@ function Show-VScanMagicGUI {
                 # Only generate Word report if time estimate was not requested, or if it was requested and completed successfully
                 # (if time estimate was requested but cancelled, skip Word report)
                 if (-not $checkBoxTimeEstimate.Checked -or $null -ne $timeEstimates) {
-                    Update-Progress -Status "Generating Top Ten Vulnerabilities Report (Word)..." -Show $true
+                    # Determine report title based on count
+                    $vulnCountSelection = $comboBoxVulnCount.SelectedItem.ToString()
+                    $reportTitle = if ($vulnCountSelection -eq "All") { 
+                        "Top Vulnerabilities Report" 
+                    } elseif ($vulnCountSelection -eq "10") {
+                        "Top Ten Vulnerabilities Report"
+                    } else {
+                        "Top $vulnCountSelection Vulnerabilities Report"
+                    }
+                    
+                    Update-Progress -Status "Generating $reportTitle (Word)..." -Show $true
                     $companyName = $textBoxClientName.Text
                     if ([string]::IsNullOrWhiteSpace($companyName)) {
                         $companyName = "Client"
                     }
                     # Add timestamp to filename to avoid duplicate name conflicts
                     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-                    $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName Top Ten Vulnerabilities Report_$timestamp.docx"
+                    $wordOutputPath = Join-Path $textBoxOutputDir.Text "$companyName $reportTitle _$timestamp.docx"
 
                     Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
                         New-WordReport -OutputPath $wordOutputPath `
@@ -4427,14 +5022,15 @@ function Show-VScanMagicGUI {
                                       -Top10Data $top10 `
                                       -TimeEstimates $timeEstimates `
                                       -IsRMITPlus $script:IsRMITPlus `
-                                      -GeneralRecommendations $generalRecommendations
+                                      -GeneralRecommendations $generalRecommendations `
+                                      -ReportTitle $reportTitle
                     }
 
                     # Store path and enable open button
                     $script:WordReportPath = $wordOutputPath
                     $script:buttonOpenWord.Enabled = $true
 
-                    Write-Log "Top Ten Vulnerabilities Report saved to: $wordOutputPath" -Level Success
+                    Write-Log "$reportTitle saved to: $wordOutputPath" -Level Success
                 } else {
                     Write-Log "Word report generation skipped because time estimate was cancelled." -Level Warning
                 }
@@ -4498,7 +5094,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonGenerate)
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(560, 700)
+    $buttonClose.Location = New-Object System.Drawing.Point(560, 755)
     $buttonClose.Size = New-Object System.Drawing.Size(110, 30)
     $buttonClose.Text = "Close"
     $buttonClose.BackColor = [System.Drawing.Color]::FromArgb(128, 128, 128)  # Gray - Secondary action

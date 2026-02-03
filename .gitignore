@@ -55,4 +55,7 @@ TestResults/
 # *.xlsx
 # *.xls
 
+# Sample vulnerability reports
+All Vulnerabilities Report*.xlsx
+
 VScanMagic_Settings.json
