@@ -28,7 +28,15 @@ $script:Config = @{
     Version = "3.1.3"
     Author = "River Run MSP"
 
-    # Risk Score Calculation
+    # Risk Score Calculation - ConnectSecure-aligned methodology
+    # Severity weights from ConnectSecure Problem Category Weightage (External Scan / Asset Risk)
+    SeverityWeights = @{
+        Critical = 0.90
+        High = 0.80
+        Medium = 0.50
+        Low = 0.30
+    }
+    # CVSS equivalents for Average CVSS display (used for reporting, not primary risk calculation)
     CVSSEquivalent = @{
         Critical = 9.0
         High = 7.0
@@ -37,7 +45,7 @@ $script:Config = @{
     }
 
     # Heatmap Color Thresholds for Risk Scores (Yellow to Red gradient - no greens)
-    # Risk Score = EPSS × Average CVSS (max theoretical: 1.0 × 10.0 = 10.0)
+    # Risk Score uses dynamic thresholds based on max score in dataset
     RiskColors = [ordered]@{
         Critical   = @{ Threshold = 8.0;  Color = 'DC143C'; Name = 'Critical'; TextColor = 'FFFFFF' }      # Crimson red
         VeryHigh   = @{ Threshold = 6.0;  Color = 'FF4500'; Name = 'Very High'; TextColor = 'FFFFFF' }     # Orange-red
@@ -46,9 +54,20 @@ $script:Config = @{
         Medium     = @{ Threshold = 0;    Color = 'FFFF00'; Name = 'Medium'; TextColor = '000000' }        # Yellow (baseline)
     }
 
-    # Products to Filter Out
+    # Products to Filter Out (EOL is no longer filtered - it gets max risk weight instead)
     FilteredProducts = @(
-        'OS-OUT-OF-SUPPORT'
+    )
+
+    # End of Life product patterns - ConnectSecure treats EOL as maximum risk (weight 1.0)
+    EOLProductPatterns = @(
+        'OS-OUT-OF-SUPPORT',
+        'OS-OUT-OF-ACTIVE-SUPPORT',
+        'OS-OUT-OF-SECURITY-SUPPORT',
+        'END OF LIFE',
+        'End of Life',
+        'end-of-life',
+        'out of support',
+        'Out of Support'
     )
 
     # Windows Consolidation Rules
@@ -881,7 +900,9 @@ function Test-IsFullListFormat {
         "*Critical Vulnerabilities*",
         "*High Vulnerabilities*",
         "*Medium Vulnerabilities*",
-        "*Low Vulnerabilities*"
+        "*Low Vulnerabilities*",
+        "*END OF LIFE*",
+        "*End of Life*"
     )
     
     $foundSheets = @()
@@ -905,7 +926,8 @@ function Test-IsFullListFormat {
 function Read-FullListSheetData {
     param(
         [object]$Worksheet,
-        [hashtable]$ColumnIndices
+        [hashtable]$ColumnIndices,
+        [switch]$IsEOLSheet
     )
     
     $usedRange = $Worksheet.UsedRange
@@ -950,6 +972,10 @@ function Read-FullListSheetData {
             $product = [string]$rangeValues[$row, $columnIndices['Product']]
             # Clean up product name (remove brackets and quotes if present)
             $product = $product -replace "^\[|'|\]$", "" -replace "^'|'$", ""
+            # Tag EOL sheet products so they get max risk weight
+            if ($IsEOLSheet -and -not [string]::IsNullOrWhiteSpace($product)) {
+                $product = "$product (End of Life)"
+            }
         }
         
         $severity = ''
@@ -1072,12 +1098,14 @@ function Get-VulnerabilityData {
         if ($isFullListFormat) {
             Write-Log "Processing as full vulnerability list format..." -Level Info
             
-            # Find vulnerability severity sheets
+            # Find vulnerability severity sheets (includes END OF LIFE - treated as max risk)
             $fullListSheetPatterns = @(
                 "*Critical Vulnerabilities*",
                 "*High Vulnerabilities*",
                 "*Medium Vulnerabilities*",
-                "*Low Vulnerabilities*"
+                "*Low Vulnerabilities*",
+                "*END OF LIFE*",
+                "*End of Life*"
             )
             
             $sourceSheets = @()
@@ -1152,7 +1180,8 @@ function Get-VulnerabilityData {
             $allVulnerabilities = @()
             foreach ($sheet in $sourceSheets) {
                 Write-Log "Reading vulnerabilities from: $($sheet.Name)"
-                $sheetVulns = Read-FullListSheetData -Worksheet $sheet -ColumnIndices $columnIndices
+                $isEOLSheet = $sheet.Name -like "*END OF LIFE*" -or $sheet.Name -like "*End of Life*"
+                $sheetVulns = Read-FullListSheetData -Worksheet $sheet -ColumnIndices $columnIndices -IsEOLSheet:$isEOLSheet
                 Write-Log "  Found $($sheetVulns.Count) vulnerabilities"
                 $allVulnerabilities += $sheetVulns
             }
@@ -1464,16 +1493,51 @@ function Get-AverageCVSS {
     return [Math]::Round($weighted / $total, 2)
 }
 
+function Test-IsEOLProduct {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) {
+        return $false
+    }
+
+    foreach ($pattern in $script:Config.EOLProductPatterns) {
+        if ($ProductName -like "*$pattern*") {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-CompositeRiskScore {
     param(
-        [int]$VulnCount,  # Not used in calculation, kept for compatibility
+        [int]$Critical,
+        [int]$High,
+        [int]$Medium,
+        [int]$Low,
         [double]$EPSSScore,
-        [double]$AvgCVSS
+        [string]$ProductName = '',
+        [int]$VulnCount = 0
     )
 
-    # Simplified risk score: EPSS × Average CVSS
-    # Max theoretical score: 1.0 × 10.0 = 10.0
-    return [Math]::Round($EPSSScore * $AvgCVSS, 2)
+    # ConnectSecure-aligned risk score formula:
+    # Severity weighted sum (from Problem Category Weightage) × (1 + EPSS)
+    # EOL gets maximum weight (1.0) per ConnectSecure - "maximum-risk scoring event"
+    # Severity weights: Critical 0.90, High 0.80, Medium 0.50, Low 0.30
+    $severityWeightedSum = ($Critical * $script:Config.SeverityWeights.Critical) +
+                           ($High * $script:Config.SeverityWeights.High) +
+                           ($Medium * $script:Config.SeverityWeights.Medium) +
+                           ($Low * $script:Config.SeverityWeights.Low)
+
+    # EOL products get max weight (1.0) per vuln - hits CS score hard
+    if (Test-IsEOLProduct -ProductName $ProductName) {
+        $severityWeightedSum += ($VulnCount * 1.0)
+    }
+
+    # EPSS boost: (1 + EPSS) ranges from 1.0 to 2.0
+    $epssFactor = 1.0 + $EPSSScore
+    $riskScore = $severityWeightedSum * $epssFactor
+
+    return [Math]::Round($riskScore, 2)
 }
 
 function Get-Top10Vulnerabilities {
@@ -1556,7 +1620,7 @@ function Get-Top10Vulnerabilities {
             $epssScore = ($group.Group.'EPSS Score' | Measure-Object -Maximum).Maximum
 
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
-            $riskScore = Get-CompositeRiskScore -VulnCount $vulnCount -EPSSScore $epssScore -AvgCVSS $avgCVSS
+            $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
 
             # Create affected systems array with hostname, IP, username, and vulnerability count
             # Aggregate vulnerability counts per unique hostname
@@ -1591,7 +1655,7 @@ function Get-Top10Vulnerabilities {
     # Recalculate scores for consolidated entries
     foreach ($item in $aggregated) {
         $item.AvgCVSS = Get-AverageCVSS -Critical $item.Critical -High $item.High -Medium $item.Medium -Low $item.Low
-        $item.RiskScore = Get-CompositeRiskScore -VulnCount $item.VulnCount -EPSSScore $item.EPSSScore -AvgCVSS $item.AvgCVSS
+        $item.RiskScore = Get-CompositeRiskScore -Critical $item.Critical -High $item.High -Medium $item.Medium -Low $item.Low -EPSSScore $item.EPSSScore -ProductName $item.Product -VulnCount $item.VulnCount
     }
 
     # Apply filters
@@ -1824,11 +1888,10 @@ function New-WordReport {
         $selection.Font.Size = 11
         $selection.Font.Bold = $false
         $selection.TypeText("This vulnerability assessment report summarizes the security posture of $ClientName based on the vulnerability scan conducted on $ScanDate. ")
-        $selection.TypeText("The organization utilizes ConnectWise Automate for patch management. WSUS is not currently in use.")
         $selection.TypeParagraph()
 
-        $selection.TypeText("This report identifies the top 10 security risks based on a composite risk score that considers vulnerability count, ")
-        $selection.TypeText("EPSS (Exploit Prediction Scoring System) scores, and CVSS severity ratings. ")
+        $selection.TypeText("This report identifies the top security risks based on a ConnectSecure-aligned risk score that considers severity-weighted vulnerability counts ")
+        $selection.TypeText("and EPSS (Exploit Prediction Scoring System) scores to prioritize by both impact and likelihood of exploitation. ")
         $selection.TypeText("Each finding includes specific remediation guidance appropriate for the environment.")
         $selection.TypeParagraph()
 
@@ -1862,14 +1925,20 @@ function New-WordReport {
         $selection.Font.Name = "Courier New"
         $selection.Font.Bold = $true
         $selection.Font.Size = 10
-        $selection.TypeText("Risk Score = EPSS Score x Average CVSS")
+        $selection.TypeText("Risk Score = (Severity Weighted Sum) x (1 + EPSS Score)")
         $selection.TypeParagraph()
 
         $selection.Font.Bold = $false
-        $selection.TypeText("Where Average CVSS is calculated as:")
+        $selection.TypeText("Severity Weighted Sum uses ConnectSecure Problem Category weights:")
         $selection.TypeParagraph()
 
-        $selection.TypeText("(Critical x 9.0 + High x 7.0 + Medium x 5.0 + Low x 3.0) / Total Vulnerabilities")
+        $selection.TypeText("(Critical x 0.90 + High x 0.80 + Medium x 0.50 + Low x 0.30)")
+        $selection.TypeParagraph()
+
+        $selection.TypeText("End of Life (EOL) software receives maximum weight (1.0 per vulnerability) since it no longer receives security updates.")
+        $selection.TypeParagraph()
+
+        $selection.TypeText("EPSS (Exploit Prediction Scoring System) emphasizes exploit probability - higher EPSS indicates greater likelihood of exploitation in the next 30 days.")
         $selection.TypeParagraph()
 
         # Reset formatting
