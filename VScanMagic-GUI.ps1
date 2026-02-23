@@ -101,21 +101,27 @@ $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_Co
 $script:CoveredSoftware = $null
 $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
 $script:GeneralRecommendations = $null
+$script:ConnectSecureCredentialsPath = Join-Path $script:SettingsDirectory "ConnectSecure-Credentials.json"
+$script:ConnectSecureCompaniesCachePath = Join-Path $script:SettingsDirectory "ConnectSecure-Companies-Cache.json"
 
-# Migration: Check for old settings file in script/exe directory
-$oldSettingsPath = $null
+# Store script directory for use in functions
 if ([string]::IsNullOrEmpty($PSScriptRoot)) {
     # Running as EXE
     try {
         $exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        $exeDir = [System.IO.Path]::GetDirectoryName($exePath)
-        if (-not [string]::IsNullOrEmpty($exeDir)) {
-            $oldSettingsPath = Join-Path $exeDir "VScanMagic_Settings.json"
-        }
-    } catch { }
+        $script:ScriptDirectory = [System.IO.Path]::GetDirectoryName($exePath)
+    } catch {
+        $script:ScriptDirectory = (Get-Location).Path
+    }
 } else {
     # Running as script
-    $oldSettingsPath = Join-Path $PSScriptRoot "VScanMagic_Settings.json"
+    $script:ScriptDirectory = $PSScriptRoot
+}
+
+# Migration: Check for old settings file in script/exe directory
+$oldSettingsPath = $null
+if (-not [string]::IsNullOrEmpty($script:ScriptDirectory)) {
+    $oldSettingsPath = Join-Path $script:ScriptDirectory "VScanMagic_Settings.json"
 }
 
 # Migrate old settings file if it exists and new location doesn't have settings yet
@@ -224,6 +230,108 @@ function Save-UserSettings {
         Write-Warning "Could not save settings: $($_.Exception.Message)"
         return $false
     }
+}
+
+# --- ConnectSecure Credentials Persistence ---
+
+function Load-ConnectSecureCredentials {
+    if ([string]::IsNullOrEmpty($script:ConnectSecureCredentialsPath)) {
+        return $null
+    }
+    
+    if (-not (Test-Path $script:ConnectSecureCredentialsPath)) {
+        return $null
+    }
+    
+    try {
+        $json = Get-Content $script:ConnectSecureCredentialsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return @{
+            BaseUrl = if ($json.BaseUrl) { $json.BaseUrl } else { "" }
+            TenantName = if ($json.TenantName) { $json.TenantName } else { "" }
+            ClientId = if ($json.ClientId) { $json.ClientId } else { "" }
+            ClientSecret = if ($json.ClientSecret) { $json.ClientSecret } else { "" }
+            CompanyId = if ($json.CompanyId) { [int]$json.CompanyId } else { 0 }
+        }
+    } catch {
+        Write-Warning "Could not load ConnectSecure credentials: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Save-ConnectSecureCredentials {
+    param(
+        [string]$BaseUrl,
+        [string]$TenantName,
+        [string]$ClientId,
+        [string]$ClientSecret,
+        [int]$CompanyId = 0
+    )
+    
+    if ([string]::IsNullOrEmpty($script:ConnectSecureCredentialsPath)) {
+        Write-Warning "Credentials path is not set. Cannot save credentials."
+        return $false
+    }
+    
+    try {
+        # Ensure settings directory exists before saving
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:ConnectSecureCredentialsPath)
+        if (-not (Test-Path $settingsDir)) {
+            New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        }
+
+        $credentials = @{
+            BaseUrl = $BaseUrl
+            TenantName = $TenantName
+            ClientId = $ClientId
+            ClientSecret = $ClientSecret
+            CompanyId = $CompanyId
+        }
+        
+        $credentials | ConvertTo-Json | Set-Content $script:ConnectSecureCredentialsPath -Encoding UTF8
+        Write-Log "ConnectSecure credentials saved to $script:ConnectSecureCredentialsPath" -Level Success
+        return $true
+    } catch {
+        Write-Warning "Could not save ConnectSecure credentials: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Save-ConnectSecureCompaniesCache {
+    param(
+        [string]$BaseUrl,
+        [string]$TenantName,
+        [array]$Companies
+    )
+    if ([string]::IsNullOrEmpty($script:ConnectSecureCompaniesCachePath) -or -not $Companies) { return $false }
+    try {
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:ConnectSecureCompaniesCachePath)
+        if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
+        $cache = @{
+            BaseUrl = $BaseUrl
+            TenantName = $TenantName
+            CachedAt = (Get-Date -Format "o")
+            Companies = $Companies
+        }
+        $cache | ConvertTo-Json -Depth 5 | Set-Content $script:ConnectSecureCompaniesCachePath -Encoding UTF8
+        return $true
+    } catch { return $false }
+}
+
+function Load-ConnectSecureCompaniesCache {
+    param(
+        [string]$BaseUrl,
+        [string]$TenantName
+    )
+    if ([string]::IsNullOrEmpty($script:ConnectSecureCompaniesCachePath) -or -not (Test-Path $script:ConnectSecureCompaniesCachePath)) { return $null }
+    try {
+        $cache = Get-Content $script:ConnectSecureCompaniesCachePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $baseMatch = ($cache.BaseUrl -replace '/$','') -eq ($BaseUrl -replace '/$','')
+        $tenantMatch = $cache.TenantName -eq $TenantName
+        if ($baseMatch -and $tenantMatch -and $cache.Companies) {
+            return $cache.Companies
+        }
+    } catch { }
+    return $null
 }
 
 # --- Remediation Rules Persistence ---
@@ -1598,9 +1706,9 @@ function Get-Top10Vulnerabilities {
             }
 
             # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
-            # Aggregate vulnerability counts per unique hostname when merging
-            $hostnameGroups = $group.Group | Group-Object -Property 'Host Name'
-            foreach ($hostGroup in $hostnameGroups) {
+            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
+            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
+            foreach ($hostGroup in $hostKeyGroups) {
                 $hostItem = $hostGroup.Group[0]
                 $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
                 $existing.AffectedSystems += [PSCustomObject]@{
@@ -1623,10 +1731,10 @@ function Get-Top10Vulnerabilities {
             $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
 
             # Create affected systems array with hostname, IP, username, and vulnerability count
-            # Aggregate vulnerability counts per unique hostname
+            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
             $affectedSystems = @()
-            $hostnameGroups = $group.Group | Group-Object -Property 'Host Name'
-            foreach ($hostGroup in $hostnameGroups) {
+            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
+            foreach ($hostGroup in $hostKeyGroups) {
                 $hostItem = $hostGroup.Group[0]
                 $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
                 $affectedSystems += [PSCustomObject]@{
@@ -2287,17 +2395,17 @@ function New-WordReport {
             $selection.Font.Bold = $false
 
             # Display systems as comma-separated list with indent
-            # Format as "hostname (username)" if username is present, otherwise just "hostname"
+            # Use hostname or IP as identifier; format as "hostname (username)" if username present
             $selection.ParagraphFormat.LeftIndent = 36
             $systemsList = ($item.AffectedSystems | ForEach-Object {
-                $hostname = $_.HostName
+                $display = if ($_.HostName) { $_.HostName } else { $_.IP }
                 $username = $_.Username
                 if (-not [string]::IsNullOrWhiteSpace($username)) {
-                    "$hostname ($username)"
+                    "$display ($username)"
                 } else {
-                    $hostname
+                    $display
                 }
-            } | Select-Object -Unique) -join ", "
+            } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ", "
             $selection.TypeText($systemsList)
             $selection.TypeParagraph()
             $selection.ParagraphFormat.LeftIndent = 0
@@ -3236,12 +3344,12 @@ function Show-HostnameReviewDialog {
         $colVulnCount.ValueType = [int]
         $dataGridView.Columns.Add($colVulnCount) | Out-Null
 
-        # Populate grid with hostnames, sorted by vulnerability count descending
+        # Populate grid with hostnames (or IP fallback), sorted by vulnerability count descending
         $sortedSystems = $item.AffectedSystems | Sort-Object -Property VulnCount -Descending
         foreach ($sys in $sortedSystems) {
             $row = $dataGridView.Rows.Add()
             $dataGridView.Rows[$row].Cells["Include"].Value = $true  # Default checked
-            $dataGridView.Rows[$row].Cells["Hostname"].Value = $sys.HostName
+            $dataGridView.Rows[$row].Cells["Hostname"].Value = if ($sys.HostName) { $sys.HostName } else { $sys.IP }
             $dataGridView.Rows[$row].Cells["IP"].Value = $sys.IP
             $dataGridView.Rows[$row].Cells["Username"].Value = $sys.Username
             $dataGridView.Rows[$row].Cells["VulnCount"].Value = $sys.VulnCount
@@ -3546,12 +3654,12 @@ function New-TimeEstimate {
 
             [void]$sb.AppendLine("$($i + 1). $($item.Product)")
             
-            # Add hostnames CSV list
+            # Add hostnames/hosts CSV list (use hostname or IP so we include all systems)
             if ($item.AffectedSystems -and $item.AffectedSystems.Count -gt 0) {
-                $hostnames = $item.AffectedSystems | ForEach-Object { $_.HostName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-                if ($hostnames.Count -gt 0) {
-                    $hostnameList = $hostnames -join ", "
-                    [void]$sb.AppendLine("   Affected Hostnames: $hostnameList")
+                $identifiers = $item.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+                if ($identifiers.Count -gt 0) {
+                    $identifiersList = $identifiers -join ", "
+                    [void]$sb.AppendLine("   Affected Hostnames: $identifiersList")
                 }
             }
             
@@ -3757,12 +3865,8 @@ function New-TicketInstructions {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
                 $username = $sys.Username
-                
-                # Format: "hostname (username) - IP" if both username and IP exist
-                # Format: "hostname (username)" if only username exists
-                # Format: "hostname - IP" if only IP exists
-                # Format: "hostname" if neither exists
-                $systemLine = $hostname
+                # Use hostname or IP as primary identifier so we list all systems
+                $systemLine = if ($hostname) { $hostname } else { $ip }
                 if (-not [string]::IsNullOrWhiteSpace($username)) {
                     $systemLine += " ($username)"
                 }
@@ -3896,6 +4000,874 @@ TimeZest meeting request has been sent. Please select a time to meet if you woul
 }
 
 # --- GUI Functions ---
+
+function Show-DownloadReportsDialog {
+    # Use script-level directory variable (set at script initialization)
+    $scriptDir = $script:ScriptDirectory
+    
+    if ([string]::IsNullOrWhiteSpace($scriptDir)) {
+        # Fallback if script directory wasn't set
+        $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    }
+    
+    $connectSecureScriptPath = Join-Path $scriptDir "ConnectSecure-API.ps1"
+    
+    # Load ConnectSecure API functions
+    if (Test-Path $connectSecureScriptPath) {
+        try {
+            . $connectSecureScriptPath
+        } catch {
+            Write-Log "Warning: Could not load ConnectSecure API functions: $($_.Exception.Message)" -Level Warning
+        }
+    }
+
+    # Create dialog form
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Download Reports"
+    $dialog.Size = New-Object System.Drawing.Size(700, 530)
+    $dialog.StartPosition = "CenterParent"
+    $dialog.FormBorderStyle = "FixedDialog"
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.AutoScroll = $true
+    $dialog.AutoScrollMinSize = New-Object System.Drawing.Size(680, 570)
+
+    $yPos = 20
+
+    # ConnectSecure API Section
+    $lblBaseUrl = New-Object System.Windows.Forms.Label
+    $lblBaseUrl.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblBaseUrl.Size = New-Object System.Drawing.Size(200, 20)
+    $lblBaseUrl.Text = "Base URL:"
+    $dialog.Controls.Add($lblBaseUrl)
+
+    $txtBaseUrl = New-Object System.Windows.Forms.TextBox
+    $txtBaseUrl.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $txtBaseUrl.Size = New-Object System.Drawing.Size(640, 20)
+    $txtBaseUrl.Text = "https://pod104.myconnectsecure.com"
+    $dialog.Controls.Add($txtBaseUrl)
+    
+    $lblBaseUrlHelp = New-Object System.Windows.Forms.Label
+    $lblBaseUrlHelp.Location = New-Object System.Drawing.Point(20, ($yPos + 48))
+    $lblBaseUrlHelp.Size = New-Object System.Drawing.Size(640, 30)
+    $lblBaseUrlHelp.Text = "💡 Tip: Copy the base URL from your ConnectSecure portal browser address bar (without /tenant/... path)"
+    $lblBaseUrlHelp.ForeColor = [System.Drawing.Color]::DarkGray
+    $lblBaseUrlHelp.Font = New-Object System.Drawing.Font($lblBaseUrlHelp.Font.FontFamily, 8.5)
+    $dialog.Controls.Add($lblBaseUrlHelp)
+    $yPos += 50
+
+    $lblTenant = New-Object System.Windows.Forms.Label
+    $lblTenant.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblTenant.Size = New-Object System.Drawing.Size(200, 20)
+    $lblTenant.Text = "Tenant Name:"
+    $dialog.Controls.Add($lblTenant)
+
+    $txtTenant = New-Object System.Windows.Forms.TextBox
+    $txtTenant.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $txtTenant.Size = New-Object System.Drawing.Size(300, 20)
+    $txtTenant.Text = "river-run"
+    $dialog.Controls.Add($txtTenant)
+    $yPos += 50
+
+    $lblClientId = New-Object System.Windows.Forms.Label
+    $lblClientId.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblClientId.Size = New-Object System.Drawing.Size(200, 20)
+    $lblClientId.Text = "Client ID:"
+    $dialog.Controls.Add($lblClientId)
+
+    $txtClientId = New-Object System.Windows.Forms.TextBox
+    $txtClientId.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $txtClientId.Size = New-Object System.Drawing.Size(300, 20)
+    $dialog.Controls.Add($txtClientId)
+    $yPos += 50
+
+    $lblClientSecret = New-Object System.Windows.Forms.Label
+    $lblClientSecret.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblClientSecret.Size = New-Object System.Drawing.Size(200, 20)
+    $lblClientSecret.Text = "Client Secret:"
+    $dialog.Controls.Add($lblClientSecret)
+
+    $txtClientSecret = New-Object System.Windows.Forms.TextBox
+    $txtClientSecret.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $txtClientSecret.Size = New-Object System.Drawing.Size(300, 20)
+    $txtClientSecret.PasswordChar = '*'
+    $dialog.Controls.Add($txtClientSecret)
+    $yPos += 50
+
+    $lblCompanyId = New-Object System.Windows.Forms.Label
+    $lblCompanyId.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblCompanyId.Size = New-Object System.Drawing.Size(200, 20)
+    $lblCompanyId.Text = "Company:"
+    $dialog.Controls.Add($lblCompanyId)
+
+    $comboCompany = New-Object System.Windows.Forms.ComboBox
+    $comboCompany.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $comboCompany.Size = New-Object System.Drawing.Size(400, 20)
+    $comboCompany.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $comboCompany.DisplayMember = "DisplayName"
+    $comboCompany.ValueMember = "Id"
+    $dialog.Controls.Add($comboCompany)
+    $yPos += 50
+
+    $btnTestBaseUrl = New-Object System.Windows.Forms.Button
+    $btnTestBaseUrl.Location = New-Object System.Drawing.Point(20, ($yPos + 5))
+    $btnTestBaseUrl.Size = New-Object System.Drawing.Size(110, 25)
+    $btnTestBaseUrl.Text = "Test Base URL"
+    $btnTestBaseUrl.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243)
+    $btnTestBaseUrl.ForeColor = [System.Drawing.Color]::White
+    $btnTestBaseUrl.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnTestBaseUrl.FlatAppearance.BorderSize = 0
+    $btnTestBaseUrl.Add_Click({
+        $baseUrl = $txtBaseUrl.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Please enter a Base URL first.",
+                "Base URL Required",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return
+        }
+        
+        # Ensure URL has protocol
+        if (-not $baseUrl.StartsWith("http://") -and -not $baseUrl.StartsWith("https://")) {
+            $baseUrl = "https://" + $baseUrl
+        }
+        
+        $baseUrl = $baseUrl.TrimEnd('/')
+        $testUrl = "$baseUrl/w/authorize"
+        
+        $btnTestBaseUrl.Enabled = $false
+        $btnTestBaseUrl.Text = "Testing..."
+        $lblApiStatus.Text = "Testing base URL accessibility..."
+        $lblApiStatus.ForeColor = [System.Drawing.Color]::Blue
+        $dialog.Update()
+        
+        try {
+            # Test if endpoint exists (should return 400/401, not 404)
+            $response = Invoke-WebRequest -Uri $testUrl -Method POST -Headers @{'accept'='application/json'} -Body "" -ErrorAction Stop -TimeoutSec 10
+            $btnTestBaseUrl.Enabled = $true
+            $btnTestBaseUrl.Text = "Test Base URL"
+            $lblApiStatus.Text = "[OK] Base URL is accessible"
+            $lblApiStatus.ForeColor = [System.Drawing.Color]::Green
+        } catch {
+            $statusCode = $null
+            if ($_.Exception.Response) {
+                $statusCode = $_.Exception.Response.StatusCode.value__
+            }
+            
+            $btnTestBaseUrl.Enabled = $true
+            $btnTestBaseUrl.Text = "Test Base URL"
+            
+            if ($statusCode -eq 404) {
+                $lblApiStatus.Text = "[X] Base URL returns 404 - URL is incorrect"
+                $lblApiStatus.ForeColor = [System.Drawing.Color]::Red
+                [System.Windows.Forms.MessageBox]::Show(
+                    "The base URL '$baseUrl' returns a 404 error.`n`n" +
+                    "This means the URL is incorrect. Please:`n`n" +
+                    "1. Open ConnectSecure portal in your browser`n" +
+                    "2. Look at the FULL URL in the address bar`n" +
+                    "3. Copy the BASE URL (without /tenant/ or /w/ paths)`n" +
+                    "4. It should look like:`n" +
+                    "   • https://podXXX.myconnectsecure.com`n" +
+                    "   • https://yourcompany.myconnectsecure.com`n" +
+                    "   • The pod number (XXX) might be different`n`n" +
+                    "If you're not sure, check:`n" +
+                    "• Global > Settings > Users > API Key page`n" +
+                    "• The API documentation for your pod URL",
+                    "Base URL Not Found (404)",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+            } elseif ($statusCode -eq 400 -or $statusCode -eq 401) {
+                $lblApiStatus.Text = "[OK] Base URL is correct (endpoint exists)"
+                $lblApiStatus.ForeColor = [System.Drawing.Color]::Green
+            } elseif ($statusCode) {
+                $lblApiStatus.Text = "⚠ Base URL test: HTTP $statusCode"
+                $lblApiStatus.ForeColor = [System.Drawing.Color]::Orange
+            } else {
+                $lblApiStatus.Text = "⚠ Could not test base URL: $($_.Exception.Message)"
+                $lblApiStatus.ForeColor = [System.Drawing.Color]::Orange
+            }
+        }
+    })
+    $dialog.Controls.Add($btnTestBaseUrl)
+
+    $btnTestCredentials = New-Object System.Windows.Forms.Button
+    $btnTestCredentials.Location = New-Object System.Drawing.Point(140, ($yPos + 5))
+    $btnTestCredentials.Size = New-Object System.Drawing.Size(120, 25)
+    $btnTestCredentials.Text = "Test Credentials"
+    $btnTestCredentials.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)
+    $btnTestCredentials.ForeColor = [System.Drawing.Color]::White
+    $btnTestCredentials.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnTestCredentials.FlatAppearance.BorderSize = 0
+    $btnTestCredentials.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtTenant.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientId.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Please fill in all ConnectSecure API credentials first.",
+                "Credentials Required",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return
+        }
+
+        # Clean up inputs (remove accidental newlines)
+        $cleanTenant = ($txtTenant.Text -replace "`r`n|`r|`n", "").Trim()
+        $cleanClientId = ($txtClientId.Text -replace "`r`n|`r|`n", "").Trim()
+        $cleanClientSecret = ($txtClientSecret.Text -replace "`r`n|`r|`n", "").Trim()
+
+        $btnTestCredentials.Enabled = $false
+        $btnTestCredentials.Text = "Testing..."
+        $dialog.Refresh()
+
+        try {
+            # Show what will be encoded (for debugging)
+            $authStringPreview = "${cleanTenant}+${cleanClientId}:***"
+            Write-Log "Testing authentication with: $authStringPreview" -Level Info
+            
+            # Test authentication
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text `
+                                                    -TenantName $cleanTenant `
+                                                    -ClientId $cleanClientId `
+                                                    -ClientSecret $cleanClientSecret
+            
+            if ($connected) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "[OK] Credentials are valid!`n`nYou can now use the 'Refresh List' button to load companies.",
+                    "Authentication Successful",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            } else {
+                # Generate base64 for manual testing
+                $testAuthString = "${cleanTenant}+${cleanClientId}:${cleanClientSecret}"
+                $testBytes = [System.Text.Encoding]::UTF8.GetBytes($testAuthString)
+                $testBase64 = [System.Convert]::ToBase64String($testBytes)
+                
+                $errorMsg = "[X] Authentication failed.`n`n"
+                $errorMsg += "The API returned 'Failed to authorize'.`n`n"
+                $errorMsg += "⚠️  CRITICAL: Verify Base URL and Tenant Name`n`n"
+                $errorMsg += "1. BASE URL (Check First!):`n"
+                $errorMsg += "   Current: $($txtBaseUrl.Text)`n"
+                $errorMsg += "   • Open ConnectSecure portal in browser`n"
+                $errorMsg += "   • Copy the BASE URL from address bar`n"
+                $errorMsg += "   • Should be: https://podXXX.myconnectsecure.com`n"
+                $errorMsg += "   • If base URL gives 404, pod number is wrong`n`n"
+                $errorMsg += "2. TENANT NAME:`n"
+                $errorMsg += "   Current: '$cleanTenant'`n"
+                $errorMsg += "   • The tenant name is found on the API Key page`n"
+                $errorMsg += "   • Example: 'river-run' (company identifier)`n"
+                $errorMsg += "   • Go to: Global > Settings > Users > API Key`n"
+                $errorMsg += "   • Copy 'Tenant Name' field EXACTLY as shown`n"
+                $errorMsg += "   • Check if case-sensitive`n`n"
+                $errorMsg += "3. API KEY STATUS:`n"
+                $errorMsg += "   • Verify API key is ACTIVE`n"
+                $errorMsg += "   • Regenerate if expired/revoked`n`n"
+                $errorMsg += "Check PowerShell console for detailed debugging info."
+                
+                $result = [System.Windows.Forms.MessageBox]::Show(
+                    $errorMsg,
+                    "Authentication Failed - Check Tenant Name",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+            }
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error testing credentials: $($_.Exception.Message)`n`nCheck PowerShell console for details.",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        } finally {
+            $btnTestCredentials.Enabled = $true
+            $btnTestCredentials.Text = "Test Credentials"
+        }
+    })
+    $dialog.Controls.Add($btnTestCredentials)
+
+    $btnRefreshCompanies = New-Object System.Windows.Forms.Button
+    $btnRefreshCompanies.Location = New-Object System.Drawing.Point(270, ($yPos + 5))
+    $btnRefreshCompanies.Size = New-Object System.Drawing.Size(100, 25)
+    $btnRefreshCompanies.Text = "Refresh List"
+    $btnRefreshCompanies.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnRefreshCompanies.ForeColor = [System.Drawing.Color]::White
+    $btnRefreshCompanies.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnRefreshCompanies.FlatAppearance.BorderSize = 0
+    $btnRefreshCompanies.Add_Click({
+        $btnRefreshCompanies.Enabled = $false
+        $btnRefreshCompanies.Text = "Loading..."
+        $dialog.Refresh()
+        
+        try {
+            # Check if credentials are filled
+            if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or 
+                [string]::IsNullOrWhiteSpace($txtTenant.Text) -or 
+                [string]::IsNullOrWhiteSpace($txtClientId.Text) -or 
+                [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Please fill in all ConnectSecure API credentials first.",
+                    "Credentials Required",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+                return
+            }
+
+            # Connect to ConnectSecure API
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text `
+                                                    -TenantName $txtTenant.Text `
+                                                    -ClientId $txtClientId.Text `
+                                                    -ClientSecret $txtClientSecret.Text
+            
+            if (-not $connected) {
+                $errorMsg = "Failed to authenticate with ConnectSecure API.`n`n"
+                $errorMsg += "Common issues:`n"
+                $errorMsg += "• Check tenant name is correct (exact match, no spaces)`n"
+                $errorMsg += "• Verify Client ID and Client Secret are correct`n"
+                $errorMsg += "• Ensure Base URL is correct (e.g., https://pod104.myconnectsecure.com)`n"
+                $errorMsg += "• Format should be: tenant+client_id:client_secret`n`n"
+                $errorMsg += "Check the PowerShell console for detailed error messages."
+                
+                [System.Windows.Forms.MessageBox]::Show(
+                    $errorMsg,
+                    "Authentication Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                return
+            }
+
+            # Fetch companies (FetchAll for pagination - get all pages)
+            $companies = Get-ConnectSecureCompanies -FetchAll
+            
+            # Clear existing items
+            $comboCompany.Items.Clear()
+            
+            # Add "All Companies" option
+            $allCompaniesOption = [PSCustomObject]@{
+                Id = 0
+                DisplayName = "All Companies"
+            }
+            $comboCompany.Items.Add($allCompaniesOption) | Out-Null
+            
+            # Add companies (use helper for API property name variations)
+            $idx = 1
+            $toCache = [System.Collections.ArrayList]::new()
+            foreach ($company in $companies) {
+                $info = Get-ConnectSecureCompanyDisplayInfo -Company $company
+                $idStr = if ($null -ne $info.Id -and $info.Id -ne "") { $info.Id.ToString() } else { $null }
+                $companyName = if ([string]::IsNullOrWhiteSpace($info.Name)) { $null } else { $info.Name }
+                $displayName = if ($companyName) {
+                    if ($idStr) { "$companyName (ID: $idStr)" } else { $companyName }
+                } elseif ($idStr) {
+                    "Company (ID: $idStr)"
+                } else {
+                    "Company $idx"
+                }
+                $companyOption = [PSCustomObject]@{
+                    Id = $info.Id
+                    DisplayName = $displayName
+                }
+                $comboCompany.Items.Add($companyOption) | Out-Null
+                [void]$toCache.Add($companyOption)
+                $idx++
+            }
+            Save-ConnectSecureCompaniesCache -BaseUrl $txtBaseUrl.Text -TenantName ($txtTenant.Text.Trim()) -Companies @($toCache)
+            
+            # Select "All Companies" by default
+            if ($comboCompany.Items.Count -gt 0) {
+                $comboCompany.SelectedIndex = 0
+            }
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Loaded $($companies.Count) companies.",
+                "Success",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error loading companies: $($_.Exception.Message)",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        } finally {
+            $btnRefreshCompanies.Enabled = $true
+            $btnRefreshCompanies.Text = "Refresh List"
+        }
+    })
+    $dialog.Controls.Add($btnRefreshCompanies)
+    $yPos += 35
+
+    # Credentials Management Buttons
+    $lblCredentialMgmt = New-Object System.Windows.Forms.Label
+    $lblCredentialMgmt.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblCredentialMgmt.Size = New-Object System.Drawing.Size(200, 20)
+    $lblCredentialMgmt.Text = "Credentials Management:"
+    $lblCredentialMgmt.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $dialog.Controls.Add($lblCredentialMgmt)
+    $yPos += 25
+
+    $btnLoadCredentials = New-Object System.Windows.Forms.Button
+    $btnLoadCredentials.Location = New-Object System.Drawing.Point(20, $yPos)
+    $btnLoadCredentials.Size = New-Object System.Drawing.Size(120, 25)
+    $btnLoadCredentials.Text = "Load Saved"
+    $btnLoadCredentials.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnLoadCredentials.ForeColor = [System.Drawing.Color]::White
+    $btnLoadCredentials.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnLoadCredentials.FlatAppearance.BorderSize = 0
+    $btnLoadCredentials.Add_Click({
+        $savedCredentials = Load-ConnectSecureCredentials
+        if ($savedCredentials) {
+        $txtBaseUrl.Text = $savedCredentials.BaseUrl
+        $txtTenant.Text = $savedCredentials.TenantName
+        $txtClientId.Text = $savedCredentials.ClientId
+        $txtClientSecret.Text = $savedCredentials.ClientSecret
+
+        # Populate company dropdown from cache if available
+        $comboCompany.Items.Clear()
+        $allOpt = [PSCustomObject]@{ Id = 0; DisplayName = "All Companies" }
+        $comboCompany.Items.Add($allOpt) | Out-Null
+        $cachedCompanies = Load-ConnectSecureCompaniesCache -BaseUrl $savedCredentials.BaseUrl -TenantName $savedCredentials.TenantName
+        if ($cachedCompanies -and $cachedCompanies.Count -gt 0) {
+            foreach ($c in $cachedCompanies) {
+                $comboCompany.Items.Add([PSCustomObject]@{ Id = $c.Id; DisplayName = $c.DisplayName }) | Out-Null
+            }
+        }
+
+        # Set company selection if saved
+        $savedCompanyId = $savedCredentials.CompanyId
+        foreach ($item in $comboCompany.Items) {
+            if ($item.Id -eq $savedCompanyId) {
+                $comboCompany.SelectedItem = $item
+                break
+            }
+        }
+        if ($comboCompany.SelectedIndex -lt 0 -and $comboCompany.Items.Count -gt 0) {
+            $comboCompany.SelectedIndex = 0
+        }
+
+        $chkSaveCredentials.Checked = $true
+        [System.Windows.Forms.MessageBox]::Show("Credentials loaded successfully!", "Success",
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("No saved credentials found.", "Not Found",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    })
+    $dialog.Controls.Add($btnLoadCredentials)
+
+    $btnSaveCredentials = New-Object System.Windows.Forms.Button
+    $btnSaveCredentials.Location = New-Object System.Drawing.Point(150, $yPos)
+    $btnSaveCredentials.Size = New-Object System.Drawing.Size(120, 25)
+    $btnSaveCredentials.Text = "Save Now"
+    $btnSaveCredentials.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)
+    $btnSaveCredentials.ForeColor = [System.Drawing.Color]::White
+    $btnSaveCredentials.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnSaveCredentials.FlatAppearance.BorderSize = 0
+    $btnSaveCredentials.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtTenant.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientId.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+            [System.Windows.Forms.MessageBox]::Show("Please fill in all ConnectSecure API credentials before saving.", "Validation Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        
+        $selectedCompanyId = 0
+        if ($comboCompany.SelectedItem) {
+            $selectedCompanyId = $comboCompany.SelectedItem.Id
+        }
+        
+        if (Save-ConnectSecureCredentials `
+                -BaseUrl $txtBaseUrl.Text `
+                -TenantName $txtTenant.Text `
+                -ClientId $txtClientId.Text `
+                -ClientSecret $txtClientSecret.Text `
+                -CompanyId $selectedCompanyId) {
+            $chkSaveCredentials.Checked = $true
+            [System.Windows.Forms.MessageBox]::Show("Credentials saved successfully!`n`nLocation: $script:ConnectSecureCredentialsPath", "Success",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Failed to save credentials.", "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+    $dialog.Controls.Add($btnSaveCredentials)
+
+    $btnClearCredentials = New-Object System.Windows.Forms.Button
+    $btnClearCredentials.Location = New-Object System.Drawing.Point(280, $yPos)
+    $btnClearCredentials.Size = New-Object System.Drawing.Size(120, 25)
+    $btnClearCredentials.Text = "Clear Fields"
+    $btnClearCredentials.BackColor = [System.Drawing.Color]::FromArgb(128, 128, 128)
+    $btnClearCredentials.ForeColor = [System.Drawing.Color]::White
+    $btnClearCredentials.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnClearCredentials.FlatAppearance.BorderSize = 0
+    $btnClearCredentials.Add_Click({
+        $txtBaseUrl.Text = "https://pod104.myconnectsecure.com"
+        $txtTenant.Text = "river-run"
+        $txtClientId.Text = ""
+        $txtClientSecret.Text = ""
+        $comboCompany.Items.Clear()
+        $allCompaniesOption = [PSCustomObject]@{
+            Id = 0
+            DisplayName = "All Companies"
+        }
+        $comboCompany.Items.Add($allCompaniesOption) | Out-Null
+        if ($comboCompany.Items.Count -gt 0) {
+            if ($comboCompany.Items.Count -gt 0) {
+                $comboCompany.SelectedIndex = 0
+            }
+        }
+        $chkSaveCredentials.Checked = $false
+    })
+    $dialog.Controls.Add($btnClearCredentials)
+    $yPos += 35
+
+    # Save Credentials Checkbox (for auto-save on generate)
+    $chkSaveCredentials = New-Object System.Windows.Forms.CheckBox
+    $chkSaveCredentials.Location = New-Object System.Drawing.Point(20, $yPos)
+    $chkSaveCredentials.Size = New-Object System.Drawing.Size(400, 20)
+    $chkSaveCredentials.Text = "Auto-save credentials when generating reports"
+    $chkSaveCredentials.Checked = $false
+    $dialog.Controls.Add($chkSaveCredentials)
+    $yPos += 30
+
+    # Initialize company dropdown with "All Companies" option
+    $comboCompany.Items.Clear()
+    $allCompaniesOption = [PSCustomObject]@{
+        Id = 0
+        DisplayName = "All Companies"
+    }
+    $comboCompany.Items.Add($allCompaniesOption) | Out-Null
+
+    # Load saved credentials after all controls are created
+    $savedCredentials = Load-ConnectSecureCredentials
+    if ($savedCredentials) {
+        $txtBaseUrl.Text = $savedCredentials.BaseUrl
+        $txtTenant.Text = $savedCredentials.TenantName
+        $txtClientId.Text = $savedCredentials.ClientId
+        $txtClientSecret.Text = $savedCredentials.ClientSecret
+
+        # Try to load companies from cache (keyed by BaseUrl + TenantName)
+        $cachedCompanies = Load-ConnectSecureCompaniesCache -BaseUrl $savedCredentials.BaseUrl -TenantName $savedCredentials.TenantName
+        if ($cachedCompanies -and $cachedCompanies.Count -gt 0) {
+            foreach ($c in $cachedCompanies) {
+                $comboCompany.Items.Add([PSCustomObject]@{ Id = $c.Id; DisplayName = $c.DisplayName }) | Out-Null
+            }
+        }
+
+        # Set company selection if saved
+        $savedCompanyId = $savedCredentials.CompanyId
+        foreach ($item in $comboCompany.Items) {
+            if ($item.Id -eq $savedCompanyId) {
+                $comboCompany.SelectedItem = $item
+                break
+            }
+        }
+        if ($comboCompany.SelectedIndex -lt 0 -and $comboCompany.Items.Count -gt 0) {
+            $comboCompany.SelectedIndex = 0
+        }
+
+        $chkSaveCredentials.Checked = $true
+    }
+    if ($comboCompany.SelectedIndex -lt 0 -and $comboCompany.Items.Count -gt 0) {
+        $comboCompany.SelectedIndex = 0
+    }
+
+    # Scan Date (client name is taken from selected Company)
+    $lblScanDate = New-Object System.Windows.Forms.Label
+    $lblScanDate.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblScanDate.Size = New-Object System.Drawing.Size(200, 20)
+    $lblScanDate.Text = "Scan Date:"
+    $dialog.Controls.Add($lblScanDate)
+
+    $datePickerScanDate = New-Object System.Windows.Forms.DateTimePicker
+    $datePickerScanDate.Location = New-Object System.Drawing.Point(20, ($yPos + 25))
+    $datePickerScanDate.Size = New-Object System.Drawing.Size(200, 20)
+    $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
+    $datePickerScanDate.Value = Get-Date
+    $dialog.Controls.Add($datePickerScanDate)
+    $yPos += 60
+
+    # Report Selection
+    $lblReports = New-Object System.Windows.Forms.Label
+    $lblReports.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblReports.Size = New-Object System.Drawing.Size(200, 20)
+    $lblReports.Text = "Select Reports to Generate:"
+    $lblReports.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $dialog.Controls.Add($lblReports)
+    $yPos += 25
+
+    # Standard reports - order matches ConnectSecure
+    $chkAllVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkAllVulnerabilities.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkAllVulnerabilities.Size = New-Object System.Drawing.Size(280, 20)
+    $chkAllVulnerabilities.Text = "All Vulnerabilities Report (XLSX)"
+    $chkAllVulnerabilities.Checked = $true
+    $dialog.Controls.Add($chkAllVulnerabilities)
+    $yPos += 25
+
+    $chkSuppressedVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkSuppressedVulnerabilities.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkSuppressedVulnerabilities.Size = New-Object System.Drawing.Size(280, 20)
+    $chkSuppressedVulnerabilities.Text = "Suppressed Vulnerabilities (XLSX)"
+    $chkSuppressedVulnerabilities.Checked = $true
+    $dialog.Controls.Add($chkSuppressedVulnerabilities)
+    $yPos += 25
+
+    $chkExternalVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkExternalVulnerabilities.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkExternalVulnerabilities.Size = New-Object System.Drawing.Size(280, 20)
+    $chkExternalVulnerabilities.Text = "External Scan (XLSX)"
+    $chkExternalVulnerabilities.Checked = $true
+    $dialog.Controls.Add($chkExternalVulnerabilities)
+    $yPos += 25
+
+    $chkExecutiveSummary = New-Object System.Windows.Forms.CheckBox
+    $chkExecutiveSummary.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkExecutiveSummary.Size = New-Object System.Drawing.Size(280, 20)
+    $chkExecutiveSummary.Text = "Executive Summary Report (DOCX)"
+    $chkExecutiveSummary.Checked = $true
+    $dialog.Controls.Add($chkExecutiveSummary)
+    $yPos += 25
+
+    $lblTopN = New-Object System.Windows.Forms.Label
+    $lblTopN.Location = New-Object System.Drawing.Point(60, $yPos)
+    $lblTopN.Size = New-Object System.Drawing.Size(100, 20)
+    $lblTopN.Text = "Top vulnerabilities:"
+    $dialog.Controls.Add($lblTopN)
+    $comboTopN = New-Object System.Windows.Forms.ComboBox
+    $comboTopN.Location = New-Object System.Drawing.Point(160, ($yPos - 2))
+    $comboTopN.Size = New-Object System.Drawing.Size(80, 25)
+    $comboTopN.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    @("10", "20", "30", "40", "50", "Custom") | ForEach-Object { [void]$comboTopN.Items.Add($_) }
+    $comboTopN.SelectedIndex = 0
+    $dialog.Controls.Add($comboTopN)
+    $numCustomTopN = New-Object System.Windows.Forms.NumericUpDown
+    $numCustomTopN.Location = New-Object System.Drawing.Point(250, ($yPos - 2))
+    $numCustomTopN.Size = New-Object System.Drawing.Size(60, 25)
+    $numCustomTopN.Minimum = 1
+    $numCustomTopN.Maximum = 500
+    $numCustomTopN.Value = 25
+    $numCustomTopN.Visible = $false
+    $dialog.Controls.Add($numCustomTopN)
+    $comboTopN.Add_SelectedIndexChanged({
+        $numCustomTopN.Visible = ($comboTopN.SelectedItem -eq "Custom")
+    })
+    $yPos += 30
+
+    $chkPendingEPSS = New-Object System.Windows.Forms.CheckBox
+    $chkPendingEPSS.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkPendingEPSS.Size = New-Object System.Drawing.Size(280, 20)
+    $chkPendingEPSS.Text = "Pending Remediation EPSS Score Reports (XLSX)"
+    $chkPendingEPSS.Checked = $true
+    $dialog.Controls.Add($chkPendingEPSS)
+    $yPos += 25
+
+    $chkDebugLimit = New-Object System.Windows.Forms.CheckBox
+    $chkDebugLimit.Location = New-Object System.Drawing.Point(40, $yPos)
+    $chkDebugLimit.Size = New-Object System.Drawing.Size(320, 20)
+    $chkDebugLimit.Text = "Debug: Limit to 10 records per report (fast test)"
+    $chkDebugLimit.Checked = $false
+    $chkDebugLimit.ForeColor = [System.Drawing.Color]::Gray
+    $dialog.Controls.Add($chkDebugLimit)
+    $yPos += 40
+
+    # Status label (used by Test Base URL / Test Credentials)
+    $lblApiStatus = New-Object System.Windows.Forms.Label
+    $lblApiStatus.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblApiStatus.Size = New-Object System.Drawing.Size(640, 20)
+    $lblApiStatus.Text = ""
+    $lblApiStatus.ForeColor = [System.Drawing.Color]::Gray
+    $dialog.Controls.Add($lblApiStatus)
+    $yPos += 25
+
+    # Progress Label
+    $lblProgress = New-Object System.Windows.Forms.Label
+    $lblProgress.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblProgress.Size = New-Object System.Drawing.Size(640, 20)
+    $lblProgress.Text = ""
+    $lblProgress.ForeColor = [System.Drawing.Color]::Blue
+    $dialog.Controls.Add($lblProgress)
+    $yPos += 30
+
+    # Buttons
+    $btnGenerate = New-Object System.Windows.Forms.Button
+    $btnGenerate.Location = New-Object System.Drawing.Point(400, $yPos)
+    $btnGenerate.Size = New-Object System.Drawing.Size(120, 30)
+    $btnGenerate.Text = "Generate & Download"
+    $btnGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnGenerate.ForeColor = [System.Drawing.Color]::White
+    $btnGenerate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnGenerate.FlatAppearance.BorderSize = 0
+    $btnGenerate.Add_Click({
+        # Validate ConnectSecure credentials
+        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtTenant.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientId.Text) -or 
+            [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+            [System.Windows.Forms.MessageBox]::Show("Please fill in all ConnectSecure API credentials.", "Validation Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        # Check if at least one report is selected
+        if (-not ($chkPendingEPSS.Checked -or $chkExecutiveSummary.Checked -or $chkAllVulnerabilities.Checked -or 
+                  $chkExternalVulnerabilities.Checked -or $chkSuppressedVulnerabilities.Checked)) {
+            [System.Windows.Forms.MessageBox]::Show("Please select at least one report to generate.", "Validation Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        # Get selected company ID and name (used for report filenames)
+        $selectedCompanyId = 0
+        $clientName = "All Companies"
+        if ($comboCompany.SelectedItem) {
+            $selectedCompanyId = $comboCompany.SelectedItem.Id
+            $displayName = $comboCompany.SelectedItem.DisplayName
+            if ($displayName -and $displayName -ne "All Companies") {
+                # Strip " (ID: 123)" suffix if present
+                $clientName = ($displayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
+                if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $displayName }
+            }
+        }
+
+        # Save credentials if checkbox is checked
+        if ($chkSaveCredentials.Checked) {
+            Save-ConnectSecureCredentials -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text `
+                -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text -CompanyId $selectedCompanyId
+        }
+
+        # Ask for download location
+        $saveDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $saveDialog.Description = "Select folder to save reports"
+        $saveDialog.ShowNewFolderButton = $true
+        if ($saveDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+            return
+        }
+        $downloadFolder = $saveDialog.SelectedPath
+
+        $btnGenerate.Enabled = $false
+        $lblProgress.Text = "Connecting to ConnectSecure..."
+        $dialog.Refresh()
+
+        try {
+            # Connect to ConnectSecure
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text `
+                -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+            if (-not $connected) {
+                [System.Windows.Forms.MessageBox]::Show("Failed to authenticate with ConnectSecure API.", "Authentication Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                return
+            }
+
+            $scanDate = $datePickerScanDate.Value.ToString("MM/dd/yyyy")
+            $successCount = 0
+            $failCount = 0
+            $lastErrorDetail = $null
+
+            $reports = @()
+            if ($chkAllVulnerabilities.Checked) { $reports += @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" } }
+            if ($chkSuppressedVulnerabilities.Checked) { $reports += @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" } }
+            if ($chkExternalVulnerabilities.Checked) { $reports += @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" } }
+            if ($chkExecutiveSummary.Checked) { $reports += @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" } }
+            if ($chkPendingEPSS.Checked) { $reports += @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" } }
+
+            $topCount = 10
+            if ($chkExecutiveSummary.Checked) {
+                $topSel = $comboTopN.SelectedItem
+                if ($topSel -eq "Custom") { $topCount = [int]$numCustomTopN.Value } else { $topCount = [int]$topSel }
+            }
+
+            $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+            # Batch flow: 1) Trigger creation of all report jobs 2) Wait for all to finish 3) Download each
+            $outputPathScript = { param($r) Join-Path $downloadFolder "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+            try {
+                $debugLimit = if ($chkDebugLimit.Checked) { 10 } else { 0 }
+                $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript `
+                    -CompanyId $selectedCompanyId -ClientName $clientName -ScanDate $scanDate `
+                    -TopCount $topCount -DebugLimit $debugLimit `
+                    -OnProgress { param($m) $lblProgress.Text = $m; $dialog.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
+                $successCount = $batchResult.Succeeded.Count
+                $failCount = $batchResult.Failed.Count
+                foreach ($report in $batchResult.Succeeded) {
+                    Write-Log "Generated: $(Join-Path $downloadFolder "$clientName - $($report.Name) - $timestamp.$($report.Ext)")" -Level Success
+                }
+                if ($failCount -gt 0) {
+                    $lastErrorDetail = ($batchResult.Failed | ForEach-Object { $_.Report.Name + ': ' + $_.Error }) -join "`n"
+                    Write-Log "Failed $failCount report(s): $lastErrorDetail" -Level Error
+                }
+            } catch {
+                $failCount = $reports.Count
+                $lastErrorDetail = $_.Exception.Message
+                $errMsg = if ($null -eq $lastErrorDetail) { 'Unknown error' } elseif ($lastErrorDetail -is [array]) { ($lastErrorDetail -join '; ') } else { [string]$lastErrorDetail }
+                Write-Log "Error: $errMsg" -Level Error
+            }
+
+            $lblProgress.Text = "Complete! Generated $successCount of $($reports.Count) reports."
+            
+            if ($successCount -gt 0) {
+                $result = [System.Windows.Forms.MessageBox]::Show(
+                    "Successfully generated $successCount report(s).`n`nOpen download folder?",
+                    "Reports Generated",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+                
+                if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    Start-Process $downloadFolder
+                }
+            }
+
+            if ($failCount -gt 0) {
+                $failMsg = "$failCount report(s) failed to generate."
+                if ($lastErrorDetail) {
+                    $failMsg += "`n`nError: $lastErrorDetail"
+                } else {
+                    $failMsg += "`n`nCheck the PowerShell console for details."
+                }
+                [System.Windows.Forms.MessageBox]::Show(
+                    $failMsg,
+                    "Some Reports Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+            }
+
+        } catch {
+            $errMsg = if ($null -eq $_.Exception.Message) { 'Unknown error' } elseif ($_.Exception.Message -is [array]) { ($_.Exception.Message -join '; ') } else { [string]$_.Exception.Message }
+            Write-Log "Error: $errMsg" -Level Error
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error generating reports: $errMsg",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        } finally {
+            $btnGenerate.Enabled = $true
+            $lblProgress.Text = ""
+        }
+    })
+    $dialog.Controls.Add($btnGenerate)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(530, $yPos)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 30)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($btnCancel)
+
+    $dialog.CancelButton = $btnCancel
+    $dialog.ShowDialog() | Out-Null
+}
 
 function Show-RemediationRulesDialog {
     # Load rules if not already loaded
@@ -4870,6 +5842,19 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenTicketNotes)
 
     # --- Action Buttons (Bottom Right) ---
+    $buttonDownloadReports = New-Object System.Windows.Forms.Button
+    $buttonDownloadReports.Location = New-Object System.Drawing.Point(160, 755)
+    $buttonDownloadReports.Size = New-Object System.Drawing.Size(130, 30)
+    $buttonDownloadReports.Text = "Download Reports"
+    $buttonDownloadReports.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)  # Teal - API action
+    $buttonDownloadReports.ForeColor = [System.Drawing.Color]::White
+    $buttonDownloadReports.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $buttonDownloadReports.FlatAppearance.BorderSize = 0
+    $buttonDownloadReports.Add_Click({
+        Show-DownloadReportsDialog
+    })
+    $form.Controls.Add($buttonDownloadReports)
+
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
     $buttonRemediationRules.Location = New-Object System.Drawing.Point(300, 755)
     $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
@@ -5179,4 +6164,7 @@ function Show-VScanMagicGUI {
 }
 
 # --- Main Execution ---
-Show-VScanMagicGUI
+# Only show GUI if not running in API mode
+if (-not $script:IsApiMode) {
+    Show-VScanMagicGUI
+}

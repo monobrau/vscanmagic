@@ -59,3 +59,9 @@ TestResults/
 All Vulnerabilities Report*.xlsx
 
 VScanMagic_Settings.json
+
+# API Configuration files (may contain credentials)
+ConnectSecure-Config.ps1
+*Config.ps1
+*Credentials.ps1
+ConnectSecure-Credentials.json
