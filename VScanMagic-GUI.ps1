@@ -892,7 +892,8 @@ function Read-SheetData {
 
 function Test-IsFullListFormat {
     param(
-        [object]$Workbook
+        [object]$Workbook,
+        [array]$SheetNames = $null
     )
     
     # Check for sheets that indicate full list format
@@ -906,10 +907,13 @@ function Test-IsFullListFormat {
     )
     
     $foundSheets = @()
-    foreach ($sheet in $Workbook.Worksheets) {
+    $namesToCheck = if ($SheetNames -and $SheetNames.Count -gt 0) { $SheetNames } else {
+        @($Workbook.Worksheets | ForEach-Object { $_.Name })
+    }
+    foreach ($sheetName in $namesToCheck) {
         foreach ($pattern in $fullListSheetPatterns) {
-            if ($sheet.Name -like $pattern) {
-                $foundSheets += $sheet.Name
+            if ($sheetName -like $pattern) {
+                $foundSheets += $sheetName
                 break
             }
         }
@@ -1082,18 +1086,30 @@ function Get-VulnerabilityData {
         $excel.DisplayAlerts = $false
 
         $workbook = $excel.Workbooks.Open($ExcelPath)
+        Start-Sleep -Milliseconds 300  # Allow Excel to fully load workbook
 
-        # Log all sheets found in workbook for debugging
+        # Log all sheets found in workbook (use Sheets - includes Worksheets and Charts)
         Write-Log "All sheets found in workbook:"
         $allSheetNames = @()
-        foreach ($sheet in $workbook.Worksheets) {
-            $allSheetNames += $sheet.Name
-            Write-Log "  - '$($sheet.Name)'"
+        $sheetCount = $workbook.Sheets.Count
+        for ($i = 1; $i -le $sheetCount; $i++) {
+            try {
+                $sheet = $workbook.Sheets.Item($i)
+                $allSheetNames += $sheet.Name
+                Write-Log "  - '$($sheet.Name)'"
+                Clear-ComObject $sheet
+            } catch {
+                Write-Log "  Could not read sheet $i : $($_.Exception.Message)" -Level Warning
+            }
         }
         Write-Log "Total sheets: $($allSheetNames.Count)"
         
+        if ($allSheetNames.Count -eq 0) {
+            throw "Workbook has no worksheets. The file may be empty, corrupt, or in an unsupported format. Please ensure the Excel file contains vulnerability data sheets."
+        }
+        
         # Check if this is a full list format file
-        $isFullListFormat = Test-IsFullListFormat -Workbook $workbook
+        $isFullListFormat = Test-IsFullListFormat -Workbook $workbook -SheetNames $allSheetNames
         
         if ($isFullListFormat) {
             Write-Log "Processing as full vulnerability list format..." -Level Info
@@ -1109,12 +1125,11 @@ function Get-VulnerabilityData {
             )
             
             $sourceSheets = @()
-            foreach ($sheet in $workbook.Worksheets) {
-                $sheetName = $sheet.Name
+            foreach ($sheetName in $allSheetNames) {
                 foreach ($pattern in $fullListSheetPatterns) {
                     if ($sheetName -like $pattern) {
                         Write-Log "Found vulnerability list sheet: $sheetName"
-                        $sourceSheets += $sheet
+                        $sourceSheets += $workbook.Sheets.Item($sheetName)
                         break
                     }
                 }
@@ -1207,9 +1222,7 @@ function Get-VulnerabilityData {
         # Find all sheets that match remediation patterns
         $sourceSheets = @()
         
-        foreach ($sheet in $workbook.Worksheets) {
-            $sheetName = $sheet.Name
-
+        foreach ($sheetName in $allSheetNames) {
             # Skip excluded sheets
             $shouldExclude = $false
             foreach ($excludePattern in $script:Config.ExcludeSheetPatterns) {
@@ -1221,7 +1234,6 @@ function Get-VulnerabilityData {
 
             if ($shouldExclude) {
                 Write-Log "Excluding sheet: $sheetName"
-                Clear-ComObject $sheet
                 continue
             }
 
@@ -1230,10 +1242,9 @@ function Get-VulnerabilityData {
 
             if ($isMatch) {
                 Write-Log "Found remediation sheet: $sheetName"
-                $sourceSheets += $sheet
+                $sourceSheets += $workbook.Sheets.Item($sheetName)
             } else {
                 Write-Log "Sheet '$sheetName' does not match remediation patterns (looking for: $($script:Config.SourceSheetPatterns -join ', '))"
-                Clear-ComObject $sheet
             }
         }
 
@@ -1322,12 +1333,12 @@ function Get-VulnerabilityData {
         throw
     } finally {
         if ($workbook) {
-            $workbook.Close($false)
-            Clear-ComObject $workbook
+            try { $workbook.Close($false) } catch { Write-Log "Workbook close: $($_.Exception.Message)" -Level Warning }
+            try { Clear-ComObject $workbook } catch { }
         }
         if ($excel) {
-            $excel.Quit()
-            Clear-ComObject $excel
+            try { $excel.Quit() } catch { Write-Log "Excel quit: $($_.Exception.Message)" -Level Warning }
+            try { Clear-ComObject $excel } catch { }
         }
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
@@ -2518,18 +2529,27 @@ function New-ExcelReport {
                     if ($header -match '^(Evidence Version)$') { $evidenceVersionCol = $headers[$header] }
                 }
                 
-                # Read vulnerabilities
+                # Read vulnerabilities (Excel Value2 can return Int32/Double - convert safely to avoid cast errors)
                 $rangeValues = $usedRange.Value2
                 for ($row = 2; $row -le $rowCount; $row++) {
-                    $hostName = if ($hostNameCol) { [string]$rangeValues[$row, $hostNameCol] } else { '' }
-                    $ip = if ($ipCol) { [string]$rangeValues[$row, $ipCol] } else { '' }
-                    $product = if ($productCol) { [string]$rangeValues[$row, $productCol] } else { '' }
+                    $rawVal = $null
+                    $hostName = ''
+                    if ($hostNameCol) { $rawVal = $rangeValues[$row, $hostNameCol]; $hostName = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
+                    $ip = ''
+                    if ($ipCol) { $rawVal = $rangeValues[$row, $ipCol]; $ip = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
+                    $product = ''
+                    if ($productCol) { $rawVal = $rangeValues[$row, $productCol]; $product = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
                     $product = $product -replace "^\[|'|\]$", "" -replace "^'|'$", ""
-                    $severity = if ($severityCol) { [string]$rangeValues[$row, $severityCol] } else { '' }
-                    $epssScore = if ($epssCol) { Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $epssCol]) } else { 0.0 }
-                    $fix = if ($fixCol) { [string]$rangeValues[$row, $fixCol] } else { '' }
-                    $evidencePath = if ($evidencePathCol) { [string]$rangeValues[$row, $evidencePathCol] } else { '' }
-                    $evidenceVersion = if ($evidenceVersionCol) { [string]$rangeValues[$row, $evidenceVersionCol] } else { '' }
+                    $severity = ''
+                    if ($severityCol) { $rawVal = $rangeValues[$row, $severityCol]; $severity = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
+                    $epssScore = 0.0
+                    if ($epssCol) { $rawVal = $rangeValues[$row, $epssCol]; $epssScore = Get-SafeDoubleValue -Value $(if ($null -eq $rawVal) { '' } else { $rawVal.ToString() }) }
+                    $fix = ''
+                    if ($fixCol) { $rawVal = $rangeValues[$row, $fixCol]; $fix = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
+                    $evidencePath = ''
+                    if ($evidencePathCol) { $rawVal = $rangeValues[$row, $evidencePathCol]; $evidencePath = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
+                    $evidenceVersion = ''
+                    if ($evidenceVersionCol) { $rawVal = $rangeValues[$row, $evidenceVersionCol]; $evidenceVersion = if ($null -eq $rawVal) { '' } else { $rawVal.ToString() } }
                     
                     if (-not [string]::IsNullOrWhiteSpace($product) -and -not [string]::IsNullOrWhiteSpace($severity)) {
                         $allVulnerabilities += [PSCustomObject]@{
@@ -2561,7 +2581,8 @@ function New-ExcelReport {
                 $medium = ($group.Group | Where-Object { $_.Severity -eq 'Medium' }).Count
                 $low = ($group.Group | Where-Object { $_.Severity -eq 'Low' }).Count
                 $vulnCount = $critical + $high + $medium + $low
-                $maxEPSS = ($group.Group | Measure-Object -Property 'EPSS Score' -Maximum).Maximum
+                $maxEPSSResult = $group.Group | Measure-Object -Property 'EPSS Score' -Maximum -ErrorAction SilentlyContinue
+                $maxEPSS = if ($maxEPSSResult -and $null -ne $maxEPSSResult.Maximum) { [double]$maxEPSSResult.Maximum } else { 0.0 }
                 
                 # Get first non-empty values for other fields
                 $fix = ($group.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Fix) } | Select-Object -First 1).Fix
@@ -2593,22 +2614,22 @@ function New-ExcelReport {
                 $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
             }
             
-            # Write aggregated data
+            # Write aggregated data (explicit conversion to avoid Excel COM Int32->String cast errors)
             $row = 2
             foreach ($item in $aggregatedData) {
-                $sourceDataSheet.Cells.Item($row, 1).Value2 = $item.'Remediation Type'
-                $sourceDataSheet.Cells.Item($row, 2).Value2 = $item.Product
-                $sourceDataSheet.Cells.Item($row, 3).Value2 = $item.'Host Name'
-                $sourceDataSheet.Cells.Item($row, 4).Value2 = $item.Fix
-                $sourceDataSheet.Cells.Item($row, 5).Value2 = $item.IP
-                $sourceDataSheet.Cells.Item($row, 6).Value2 = $item.'Evidence Path'
-                $sourceDataSheet.Cells.Item($row, 7).Value2 = $item.'Evidence Version'
-                $sourceDataSheet.Cells.Item($row, 8).Value2 = $item.Critical
-                $sourceDataSheet.Cells.Item($row, 9).Value2 = $item.High
-                $sourceDataSheet.Cells.Item($row, 10).Value2 = $item.Medium
-                $sourceDataSheet.Cells.Item($row, 11).Value2 = $item.Low
-                $sourceDataSheet.Cells.Item($row, 12).Value2 = $item.'Vulnerability Count'
-                $sourceDataSheet.Cells.Item($row, 13).Value2 = $item.'EPSS Score'
+                $sourceDataSheet.Cells.Item($row, 1).Value2 = if ($null -eq $item.'Remediation Type') { '' } else { [string]$item.'Remediation Type' }
+                $sourceDataSheet.Cells.Item($row, 2).Value2 = if ($null -eq $item.Product) { '' } else { [string]$item.Product }
+                $sourceDataSheet.Cells.Item($row, 3).Value2 = if ($null -eq $item.'Host Name') { '' } else { [string]$item.'Host Name' }
+                $sourceDataSheet.Cells.Item($row, 4).Value2 = if ($null -eq $item.Fix) { '' } else { [string]$item.Fix }
+                $sourceDataSheet.Cells.Item($row, 5).Value2 = if ($null -eq $item.IP) { '' } else { [string]$item.IP }
+                $sourceDataSheet.Cells.Item($row, 6).Value2 = if ($null -eq $item.'Evidence Path') { '' } else { [string]$item.'Evidence Path' }
+                $sourceDataSheet.Cells.Item($row, 7).Value2 = if ($null -eq $item.'Evidence Version') { '' } else { [string]$item.'Evidence Version' }
+                $sourceDataSheet.Cells.Item($row, 8).Value2 = [int]$item.Critical
+                $sourceDataSheet.Cells.Item($row, 9).Value2 = [int]$item.High
+                $sourceDataSheet.Cells.Item($row, 10).Value2 = [int]$item.Medium
+                $sourceDataSheet.Cells.Item($row, 11).Value2 = [int]$item.Low
+                $sourceDataSheet.Cells.Item($row, 12).Value2 = [int]$item.'Vulnerability Count'
+                $sourceDataSheet.Cells.Item($row, 13).Value2 = if ($null -ne $item.'EPSS Score') { [double]$item.'EPSS Score' } else { 0.0 }
                 $row++
             }
             
@@ -2825,7 +2846,8 @@ function New-ExcelReport {
                 try {
                     $cfRange = $dataField1.DataRange
                     $cfRange.FormatConditions.Delete()
-                    $cfCondition = $cfRange.FormatConditions.Add(1, 5, "$($script:Config.ConditionalFormatThreshold)")
+                    $cfThreshold = [string]$script:Config.ConditionalFormatThreshold.ToString()
+                    $cfCondition = $cfRange.FormatConditions.Add(1, 5, $cfThreshold)
                     $cfCondition.Interior.ColorIndex = 3  # Red
                     Write-Log "Applied conditional formatting (EPSS > $($script:Config.ConditionalFormatThreshold))" -Level Info
                     Clear-ComObject $cfCondition
@@ -2835,10 +2857,10 @@ function New-ExcelReport {
                 }
             }
 
-            # Add color key
+            # Add color key (convert COM Double to int to avoid Double->String cast errors)
             try {
-                $keyStartCol = $pivotTable.TableRange2.Column + $pivotTable.TableRange2.Columns.Count + 1
-                $keyStartRow = $pivotTable.TableRange1.Row
+                $keyStartCol = [int]($pivotTable.TableRange2.Column + $pivotTable.TableRange2.Columns.Count + 1)
+                $keyStartRow = [int]$pivotTable.TableRange1.Row
 
                 $headerCell = $pivotSheet.Cells.Item($keyStartRow, $keyStartCol)
                 $headerCell.Value2 = "Key"
@@ -2856,7 +2878,7 @@ function New-ExcelReport {
                 )
 
                 foreach ($item in $keyData) {
-                    $keyCell = $pivotSheet.Cells.Item($keyCurrentRow, $keyStartCol)
+                    $keyCell = $pivotSheet.Cells.Item([int]$keyCurrentRow, [int]$keyStartCol)
                     $keyCell.Value2 = $item.Text
                     $keyCell.Interior.ColorIndex = $item.BgColorIndex
                     $keyCell.Font.ColorIndex = $item.FontColorIndex
@@ -2865,7 +2887,10 @@ function New-ExcelReport {
                     $keyCurrentRow++
                 }
 
-                $keyColumn = $pivotSheet.Columns.Item($keyStartCol)
+                # Use column letter to avoid COM Int32->String cast issues with Columns.Item(index)
+                $keyStartColInt = [int]$keyStartCol
+                $colLetter = if ($keyStartColInt -le 26) { [string][char](64 + $keyStartColInt) } else { [string]([char](64 + [Math]::Floor(($keyStartColInt - 1) / 26))) + [string]([char](65 + (($keyStartColInt - 1) % 26))) }
+                $keyColumn = $pivotSheet.Columns.Item($colLetter)
                 $keyColumn.AutoFit() | Out-Null
                 Clear-ComObject $keyColumn
 
