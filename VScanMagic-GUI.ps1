@@ -760,6 +760,13 @@ function Get-SafeDoubleValue {
     return $DefaultValue
 }
 
+function Get-SafeExcelString {
+    <# Ensures a value is a string for Excel COM to avoid Double->String cast errors. #>
+    param([object]$Value)
+    if ($null -eq $Value) { return '' }
+    try { return $Value.ToString() } catch { return '' }
+}
+
 function Test-SheetMatch {
     param(
         [string]$SheetName,
@@ -2607,32 +2614,44 @@ function New-ExcelReport {
             }
             
             Write-Log "Aggregated to $($aggregatedData.Count) Host/Product combinations" -Level Info
-            
-            # Write headers to Source Data sheet
+
+            # Bypass COM type casting: write to temp CSV, then Excel copies from CSV workbook
+            $csvPath = [System.IO.Path]::GetTempFileName() + ".csv"
             $headers = @('Remediation Type', 'Product', 'Host Name', 'Fix', 'IP', 'Evidence Path', 'Evidence Version', 'Critical', 'High', 'Medium', 'Low', 'Vulnerability Count', 'EPSS Score')
-            for ($col = 1; $col -le $headers.Count; $col++) {
-                $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
-            }
-            
-            # Write aggregated data (explicit conversion to avoid Excel COM Int32->String cast errors)
-            $row = 2
+            $csvLines = @(($headers | ForEach-Object { "`"$_`"" }) -join ',')
             foreach ($item in $aggregatedData) {
-                $sourceDataSheet.Cells.Item($row, 1).Value2 = if ($null -eq $item.'Remediation Type') { '' } else { [string]$item.'Remediation Type' }
-                $sourceDataSheet.Cells.Item($row, 2).Value2 = if ($null -eq $item.Product) { '' } else { [string]$item.Product }
-                $sourceDataSheet.Cells.Item($row, 3).Value2 = if ($null -eq $item.'Host Name') { '' } else { [string]$item.'Host Name' }
-                $sourceDataSheet.Cells.Item($row, 4).Value2 = if ($null -eq $item.Fix) { '' } else { [string]$item.Fix }
-                $sourceDataSheet.Cells.Item($row, 5).Value2 = if ($null -eq $item.IP) { '' } else { [string]$item.IP }
-                $sourceDataSheet.Cells.Item($row, 6).Value2 = if ($null -eq $item.'Evidence Path') { '' } else { [string]$item.'Evidence Path' }
-                $sourceDataSheet.Cells.Item($row, 7).Value2 = if ($null -eq $item.'Evidence Version') { '' } else { [string]$item.'Evidence Version' }
-                $sourceDataSheet.Cells.Item($row, 8).Value2 = [int]$item.Critical
-                $sourceDataSheet.Cells.Item($row, 9).Value2 = [int]$item.High
-                $sourceDataSheet.Cells.Item($row, 10).Value2 = [int]$item.Medium
-                $sourceDataSheet.Cells.Item($row, 11).Value2 = [int]$item.Low
-                $sourceDataSheet.Cells.Item($row, 12).Value2 = [int]$item.'Vulnerability Count'
-                $sourceDataSheet.Cells.Item($row, 13).Value2 = if ($null -ne $item.'EPSS Score') { [double]$item.'EPSS Score' } else { 0.0 }
-                $row++
+                $s1 = (Get-SafeExcelString -Value $item.'Remediation Type') -replace '"','""'
+                $s2 = (Get-SafeExcelString -Value $item.Product) -replace '"','""'
+                $s3 = (Get-SafeExcelString -Value $item.'Host Name') -replace '"','""'
+                $s4 = (Get-SafeExcelString -Value $item.Fix) -replace '"','""'
+                $s5 = (Get-SafeExcelString -Value $item.IP) -replace '"','""'
+                $s6 = (Get-SafeExcelString -Value $item.'Evidence Path') -replace '"','""'
+                $s7 = (Get-SafeExcelString -Value $item.'Evidence Version') -replace '"','""'
+                $n8 = 0 + $item.Critical
+                $n9 = 0 + $item.High
+                $n10 = 0 + $item.Medium
+                $n11 = 0 + $item.Low
+                $n12 = 0 + $item.'Vulnerability Count'
+                $n13 = 0.0 + $item.'EPSS Score'
+                $rowParts = @(
+                    "`"$s1`"","`"$s2`"","`"$s3`"","`"$s4`"","`"$s5`"","`"$s6`"","`"$s7`"",
+                    $n8,$n9,$n10,$n11,$n12,$n13
+                )
+                $csvLines += $rowParts -join ','
             }
-            
+            $csvLines | Out-File -FilePath $csvPath -Encoding UTF8 -Force
+
+            Write-Log "Copying Source Data from CSV (bypasses COM type cast)" -Level Info
+            $csvBook = $excel.Workbooks.Open($csvPath)
+            $csvSheet = $csvBook.Sheets.Item(1)
+            $csvUsed = $csvSheet.UsedRange
+            $csvUsed.Copy() | Out-Null
+            $sourceDataSheet.Range("A1").PasteSpecial(-4163) | Out-Null  # xlPasteValues
+            $csvBook.Close($false)
+            Clear-ComObject $csvUsed
+            Clear-ComObject $csvSheet
+            Clear-ComObject $csvBook
+            if (Test-Path $csvPath) { Remove-Item $csvPath -Force -ErrorAction SilentlyContinue }
             Write-Log "Data consolidation complete for full list format" -Level Info
             
             # Release source sheet references
@@ -2720,7 +2739,6 @@ function New-ExcelReport {
                         # Copy and paste values only (not formulas/formatting)
                         $sourceDataRange.Copy()
                         $targetCell.PasteSpecial(-4163)  # xlPasteValues = -4163
-                        $excel.Application.CutCopyMode = $false  # Clear clipboard
 
                         $rowsCopied = $sourceRows - 1
                         $destRow += $rowsCopied
@@ -2846,7 +2864,7 @@ function New-ExcelReport {
                 try {
                     $cfRange = $dataField1.DataRange
                     $cfRange.FormatConditions.Delete()
-                    $cfThreshold = [string]$script:Config.ConditionalFormatThreshold.ToString()
+                    $cfThreshold = [double]$script:Config.ConditionalFormatThreshold
                     $cfCondition = $cfRange.FormatConditions.Add(1, 5, $cfThreshold)
                     $cfCondition.Interior.ColorIndex = 3  # Red
                     Write-Log "Applied conditional formatting (EPSS > $($script:Config.ConditionalFormatThreshold))" -Level Info
@@ -2887,9 +2905,9 @@ function New-ExcelReport {
                     $keyCurrentRow++
                 }
 
-                # Use column letter to avoid COM Int32->String cast issues with Columns.Item(index)
+                # Use column letter (string) to avoid COM Int32->String cast issues
                 $keyStartColInt = [int]$keyStartCol
-                $colLetter = if ($keyStartColInt -le 26) { [string][char](64 + $keyStartColInt) } else { [string]([char](64 + [Math]::Floor(($keyStartColInt - 1) / 26))) + [string]([char](65 + (($keyStartColInt - 1) % 26))) }
+                $colLetter = if ($keyStartColInt -le 26) { [char](64 + $keyStartColInt) } else { ([char](64 + [Math]::Floor(($keyStartColInt - 1) / 26))).ToString() + ([char](65 + (($keyStartColInt - 1) % 26))).ToString() }
                 $keyColumn = $pivotSheet.Columns.Item($colLetter)
                 $keyColumn.AutoFit() | Out-Null
                 Clear-ComObject $keyColumn
@@ -4506,7 +4524,7 @@ function Show-VScanMagicGUI {
     $labelInputFile = New-Object System.Windows.Forms.Label
     $labelInputFile.Location = New-Object System.Drawing.Point(20, 15)
     $labelInputFile.Size = New-Object System.Drawing.Size(200, 20)
-    $labelInputFile.Text = "Pending EPSS Report (XLSX):"
+    $labelInputFile.Text = "Vulnerability Report (XLSX):"
     $form.Controls.Add($labelInputFile)
 
     $textBoxInputFile = New-Object System.Windows.Forms.TextBox
@@ -4522,7 +4540,7 @@ function Show-VScanMagicGUI {
     $buttonBrowseInput.Add_Click({
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
         $openFileDialog.Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
-        $openFileDialog.Title = "Select Pending EPSS Report"
+        $openFileDialog.Title = "Select Vulnerability Report (EPSS or All Vulnerabilities)"
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $textBoxInputFile.Text = $openFileDialog.FileName
@@ -4537,9 +4555,17 @@ function Show-VScanMagicGUI {
             Write-Log "Attempting to extract company name from filename: $fileName"
 
             $companyName = $null
+            # Pattern 0: "All Vulnerabilities Report-{CompanyName}_{timestamp}"
+            if (-not $companyName -and $fileName -match 'All Vulnerabilities Report[-_]\s*([^_]+?)(?:_\d|$)') {
+                $rawName = $matches[1].Trim()
+                if ($rawName.Length -gt 0) {
+                    $companyName = $rawName
+                    Write-Log "Matched Pattern 0 (All Vulnerabilities Report-Company_): $companyName"
+                }
+            }
             # Pattern 1: "...Reports-{CompanyName}_{timestamp}" or "...Report-{CompanyName}_..." or "...Reports-{CompanyName} "
             # Captures company name with spaces until underscore, end of string, or space before date/timestamp
-            if ($fileName -match 'Reports?[-_]\s*([^_]+?)(?:_\d|$|\s+\d)') {
+            if (-not $companyName -and $fileName -match 'Reports?[-_]\s*([^_]+?)(?:_\d|$|\s+\d)') {
                 $rawName = $matches[1].Trim()
                 # Skip if it's a report-related keyword
                 if ($rawName -notmatch '^(Pending|EPSS|Report|Reports?|Vulnerability|Security)$') {
