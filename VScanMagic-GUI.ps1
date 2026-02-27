@@ -2626,18 +2626,19 @@ function New-ExcelReport {
                     if ($header -match '^(Evidence Version)$') { $evidenceVersionCol = $headers[$header] }
                 }
                 
-                # Read vulnerabilities
+                # Read vulnerabilities (use ToString() to avoid Int32-to-String cast errors when Excel stores text as numbers)
                 $rangeValues = $usedRange.Value2
+                $safeStr = { param($v) if ($null -eq $v -or ($v -is [DBNull])) { '' } else { $v.ToString().Trim() } }
                 for ($row = 2; $row -le $rowCount; $row++) {
-                    $hostName = if ($hostNameCol) { [string]$rangeValues[$row, $hostNameCol] } else { '' }
-                    $ip = if ($ipCol) { [string]$rangeValues[$row, $ipCol] } else { '' }
-                    $product = if ($productCol) { [string]$rangeValues[$row, $productCol] } else { '' }
+                    $hostName = if ($hostNameCol) { & $safeStr $rangeValues[$row, $hostNameCol] } else { '' }
+                    $ip = if ($ipCol) { & $safeStr $rangeValues[$row, $ipCol] } else { '' }
+                    $product = if ($productCol) { & $safeStr $rangeValues[$row, $productCol] } else { '' }
                     $product = $product -replace "^\[|'|\]$", "" -replace "^'|'$", ""
-                    $severity = if ($severityCol) { [string]$rangeValues[$row, $severityCol] } else { '' }
-                    $epssScore = if ($epssCol) { Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $epssCol]) } else { 0.0 }
-                    $fix = if ($fixCol) { [string]$rangeValues[$row, $fixCol] } else { '' }
-                    $evidencePath = if ($evidencePathCol) { [string]$rangeValues[$row, $evidencePathCol] } else { '' }
-                    $evidenceVersion = if ($evidenceVersionCol) { [string]$rangeValues[$row, $evidenceVersionCol] } else { '' }
+                    $severity = if ($severityCol) { & $safeStr $rangeValues[$row, $severityCol] } else { '' }
+                    $epssScore = if ($epssCol) { Get-SafeDoubleValue -Value (& $safeStr $rangeValues[$row, $epssCol]) } else { 0.0 }
+                    $fix = if ($fixCol) { & $safeStr $rangeValues[$row, $fixCol] } else { '' }
+                    $evidencePath = if ($evidencePathCol) { & $safeStr $rangeValues[$row, $evidencePathCol] } else { '' }
+                    $evidenceVersion = if ($evidenceVersionCol) { & $safeStr $rangeValues[$row, $evidenceVersionCol] } else { '' }
                     
                     if (-not [string]::IsNullOrWhiteSpace($product) -and -not [string]::IsNullOrWhiteSpace($severity)) {
                         $allVulnerabilities += [PSCustomObject]@{
@@ -2670,6 +2671,7 @@ function New-ExcelReport {
                 $low = ($group.Group | Where-Object { $_.Severity -eq 'Low' }).Count
                 $vulnCount = $critical + $high + $medium + $low
                 $maxEPSS = ($group.Group | Measure-Object -Property 'EPSS Score' -Maximum).Maximum
+                if ($null -eq $maxEPSS) { $maxEPSS = 0.0 }
                 
                 # Get first non-empty values for other fields
                 $fix = ($group.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Fix) } | Select-Object -First 1).Fix
@@ -2701,22 +2703,22 @@ function New-ExcelReport {
                 $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
             }
             
-            # Write aggregated data
+            # Write aggregated data (ensure text columns are strings to avoid Int32-to-String cast in Pivot Table)
             $row = 2
             foreach ($item in $aggregatedData) {
-                $sourceDataSheet.Cells.Item($row, 1).Value2 = $item.'Remediation Type'
-                $sourceDataSheet.Cells.Item($row, 2).Value2 = $item.Product
-                $sourceDataSheet.Cells.Item($row, 3).Value2 = $item.'Host Name'
-                $sourceDataSheet.Cells.Item($row, 4).Value2 = $item.Fix
-                $sourceDataSheet.Cells.Item($row, 5).Value2 = $item.IP
-                $sourceDataSheet.Cells.Item($row, 6).Value2 = $item.'Evidence Path'
-                $sourceDataSheet.Cells.Item($row, 7).Value2 = $item.'Evidence Version'
-                $sourceDataSheet.Cells.Item($row, 8).Value2 = $item.Critical
-                $sourceDataSheet.Cells.Item($row, 9).Value2 = $item.High
-                $sourceDataSheet.Cells.Item($row, 10).Value2 = $item.Medium
-                $sourceDataSheet.Cells.Item($row, 11).Value2 = $item.Low
-                $sourceDataSheet.Cells.Item($row, 12).Value2 = $item.'Vulnerability Count'
-                $sourceDataSheet.Cells.Item($row, 13).Value2 = $item.'EPSS Score'
+                $sourceDataSheet.Cells.Item($row, 1).Value2 = [string]($item.'Remediation Type')
+                $sourceDataSheet.Cells.Item($row, 2).Value2 = [string]($item.Product)
+                $sourceDataSheet.Cells.Item($row, 3).Value2 = [string]($item.'Host Name')
+                $sourceDataSheet.Cells.Item($row, 4).Value2 = [string]($item.Fix)
+                $sourceDataSheet.Cells.Item($row, 5).Value2 = [string]($item.IP)
+                $sourceDataSheet.Cells.Item($row, 6).Value2 = [string]($item.'Evidence Path')
+                $sourceDataSheet.Cells.Item($row, 7).Value2 = [string]($item.'Evidence Version')
+                $sourceDataSheet.Cells.Item($row, 8).Value2 = [int]($item.Critical)
+                $sourceDataSheet.Cells.Item($row, 9).Value2 = [int]($item.High)
+                $sourceDataSheet.Cells.Item($row, 10).Value2 = [int]($item.Medium)
+                $sourceDataSheet.Cells.Item($row, 11).Value2 = [int]($item.Low)
+                $sourceDataSheet.Cells.Item($row, 12).Value2 = [int]($item.'Vulnerability Count')
+                $epssVal = $item.'EPSS Score'; $sourceDataSheet.Cells.Item($row, 13).Value2 = if ($null -ne $epssVal) { [double]$epssVal } else { 0.0 }
                 $row++
             }
             
@@ -4030,7 +4032,7 @@ function Show-DownloadReportsDialog {
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.AutoScroll = $true
-    $dialog.AutoScrollMinSize = New-Object System.Drawing.Size(680, 570)
+    $dialog.AutoScrollMinSize = New-Object System.Drawing.Size(680, 650)
 
     $yPos = 20
 
@@ -4355,7 +4357,7 @@ function Show-DownloadReportsDialog {
             }
             $comboCompany.Items.Add($allCompaniesOption) | Out-Null
             
-            # Add companies (use helper for API property name variations)
+            # Add companies (use helper for API property name variations), sorted alphabetically by DisplayName
             $idx = 1
             $toCache = [System.Collections.ArrayList]::new()
             foreach ($company in $companies) {
@@ -4373,11 +4375,14 @@ function Show-DownloadReportsDialog {
                     Id = $info.Id
                     DisplayName = $displayName
                 }
-                $comboCompany.Items.Add($companyOption) | Out-Null
                 [void]$toCache.Add($companyOption)
                 $idx++
             }
-            Save-ConnectSecureCompaniesCache -BaseUrl $txtBaseUrl.Text -TenantName ($txtTenant.Text.Trim()) -Companies @($toCache)
+            $sorted = @($toCache) | Sort-Object { $_.DisplayName }
+            foreach ($companyOption in $sorted) {
+                $comboCompany.Items.Add($companyOption) | Out-Null
+            }
+            Save-ConnectSecureCompaniesCache -BaseUrl $txtBaseUrl.Text -TenantName ($txtTenant.Text.Trim()) -Companies @($sorted)
             
             # Select "All Companies" by default
             if ($comboCompany.Items.Count -gt 0) {
@@ -4430,13 +4435,13 @@ function Show-DownloadReportsDialog {
         $txtClientId.Text = $savedCredentials.ClientId
         $txtClientSecret.Text = $savedCredentials.ClientSecret
 
-        # Populate company dropdown from cache if available
+        # Populate company dropdown from cache if available (sorted alphabetically)
         $comboCompany.Items.Clear()
         $allOpt = [PSCustomObject]@{ Id = 0; DisplayName = "All Companies" }
         $comboCompany.Items.Add($allOpt) | Out-Null
         $cachedCompanies = Load-ConnectSecureCompaniesCache -BaseUrl $savedCredentials.BaseUrl -TenantName $savedCredentials.TenantName
         if ($cachedCompanies -and $cachedCompanies.Count -gt 0) {
-            foreach ($c in $cachedCompanies) {
+            foreach ($c in ($cachedCompanies | Sort-Object { $_.DisplayName })) {
                 $comboCompany.Items.Add([PSCustomObject]@{ Id = $c.Id; DisplayName = $c.DisplayName }) | Out-Null
             }
         }
@@ -4556,10 +4561,10 @@ function Show-DownloadReportsDialog {
         $txtClientId.Text = $savedCredentials.ClientId
         $txtClientSecret.Text = $savedCredentials.ClientSecret
 
-        # Try to load companies from cache (keyed by BaseUrl + TenantName)
+        # Try to load companies from cache (keyed by BaseUrl + TenantName), sorted alphabetically
         $cachedCompanies = Load-ConnectSecureCompaniesCache -BaseUrl $savedCredentials.BaseUrl -TenantName $savedCredentials.TenantName
         if ($cachedCompanies -and $cachedCompanies.Count -gt 0) {
-            foreach ($c in $cachedCompanies) {
+            foreach ($c in ($cachedCompanies | Sort-Object { $_.DisplayName })) {
                 $comboCompany.Items.Add([PSCustomObject]@{ Id = $c.Id; DisplayName = $c.DisplayName }) | Out-Null
             }
         }
@@ -4681,6 +4686,81 @@ function Show-DownloadReportsDialog {
     $dialog.Controls.Add($chkDebugLimit)
     $yPos += 40
 
+    # Download by Job ID (fallback when API report creation fails)
+    $lblDownloadByJobId = New-Object System.Windows.Forms.Label
+    $lblDownloadByJobId.Location = New-Object System.Drawing.Point(20, $yPos)
+    $lblDownloadByJobId.Size = New-Object System.Drawing.Size(600, 20)
+    $lblDownloadByJobId.Text = "Download existing report by Job ID (when API report creation fails):"
+    $lblDownloadByJobId.ForeColor = [System.Drawing.Color]::Gray
+    $dialog.Controls.Add($lblDownloadByJobId)
+    $yPos += 22
+
+    $lblJobId = New-Object System.Windows.Forms.Label
+    $lblJobId.Location = New-Object System.Drawing.Point(40, $yPos)
+    $lblJobId.Size = New-Object System.Drawing.Size(60, 20)
+    $lblJobId.Text = "Job ID:"
+    $dialog.Controls.Add($lblJobId)
+    $txtJobId = New-Object System.Windows.Forms.TextBox
+    $txtJobId.Location = New-Object System.Drawing.Point(105, ($yPos - 2))
+    $txtJobId.Size = New-Object System.Drawing.Size(380, 22)
+    $txtJobId.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $dialog.Controls.Add($txtJobId)
+    $btnDownloadByJobId = New-Object System.Windows.Forms.Button
+    $btnDownloadByJobId.Location = New-Object System.Drawing.Point(495, ($yPos - 2))
+    $btnDownloadByJobId.Size = New-Object System.Drawing.Size(120, 26)
+    $btnDownloadByJobId.Text = "Download by Job ID"
+    $btnDownloadByJobId.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or
+            [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+            [System.Windows.Forms.MessageBox]::Show("Please fill in ConnectSecure API credentials first.", "Validation Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        $jobId = $txtJobId.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($jobId)) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter a Job ID.", "Validation Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        $selectedCompanyId = 0
+        if ($comboCompany.SelectedItem) { $selectedCompanyId = $comboCompany.SelectedItem.Id }
+        $saveDlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $saveDlg.Description = "Select folder to save report"
+        $saveDlg.ShowNewFolderButton = $true
+        if ($saveDlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+        $btnDownloadByJobId.Enabled = $false
+        $lblProgress.Text = "Connecting..."
+        $dialog.Refresh()
+        try {
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text `
+                -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+            if (-not $connected) {
+                [System.Windows.Forms.MessageBox]::Show("Failed to authenticate with ConnectSecure API.", "Authentication Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                return
+            }
+            $lblProgress.Text = "Downloading report..."
+            $dialog.Refresh(); [System.Windows.Forms.Application]::DoEvents()
+            $outPath = Invoke-ConnectSecureReportDownloadByJobId -JobId $jobId -CompanyId $selectedCompanyId -OutputDir $saveDlg.SelectedPath
+            $lblProgress.Text = "Downloaded successfully."
+            $result = [System.Windows.Forms.MessageBox]::Show("Report saved to:`n$outPath`n`nOpen folder?",
+                "Download Complete", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+            if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Start-Process $saveDlg.SelectedPath
+            }
+        } catch {
+            $err = if ($_.Exception.Message) { $_.Exception.Message } else { "Unknown error" }
+            Write-Log "Download by Job ID failed: $err" -Level Error
+            [System.Windows.Forms.MessageBox]::Show("Download failed: $err", "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
+            $btnDownloadByJobId.Enabled = $true
+            $lblProgress.Text = ""
+        }
+    })
+    $dialog.Controls.Add($btnDownloadByJobId)
+    $yPos += 35
+
     # Status label (used by Test Base URL / Test Credentials)
     $lblApiStatus = New-Object System.Windows.Forms.Label
     $lblApiStatus.Location = New-Object System.Drawing.Point(20, $yPos)
@@ -4727,7 +4807,7 @@ function Show-DownloadReportsDialog {
             return
         }
 
-        # Get selected company ID and name (used for report filenames)
+        # Get selected company ID and name (used for report filenames and report content)
         $selectedCompanyId = 0
         $clientName = "All Companies"
         if ($comboCompany.SelectedItem) {
@@ -4737,6 +4817,17 @@ function Show-DownloadReportsDialog {
                 # Strip " (ID: 123)" suffix if present
                 $clientName = ($displayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
                 if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $displayName }
+                # When API returned no name, displayName is "Company (ID: 123)" -> clientName="Company" - fetch from API for report
+                if ($clientName -eq "Company" -and $selectedCompanyId -gt 0) {
+                    try {
+                        $companies = Get-ConnectSecureCompanies -Limit 5000
+                        $match = $companies | Where-Object { $c = $_; $cid = if ($c.id) { $c.id } elseif ($c.company_id) { $c.company_id } else { $c.companyId }; [int]$cid -eq $selectedCompanyId } | Select-Object -First 1
+                        if ($match) {
+                            $info = Get-ConnectSecureCompanyDisplayInfo -Company $match
+                            if (-not [string]::IsNullOrWhiteSpace($info.Name)) { $clientName = $info.Name.Trim() }
+                        }
+                    } catch { }
+                }
             }
         }
 
@@ -5587,21 +5678,21 @@ function Show-VScanMagicGUI {
     $checkBoxEmailTemplate.Location = New-Object System.Drawing.Point(20, 75)
     $checkBoxEmailTemplate.Size = New-Object System.Drawing.Size(300, 20)
     $checkBoxEmailTemplate.Text = "Generate Email Template (Text)"
-    $checkBoxEmailTemplate.Checked = $false
+    $checkBoxEmailTemplate.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxEmailTemplate)
 
     $checkBoxTicketInstructions = New-Object System.Windows.Forms.CheckBox
     $checkBoxTicketInstructions.Location = New-Object System.Drawing.Point(20, 100)
     $checkBoxTicketInstructions.Size = New-Object System.Drawing.Size(300, 20)
     $checkBoxTicketInstructions.Text = "Generate Ticket Instructions (Text)"
-    $checkBoxTicketInstructions.Checked = $false
+    $checkBoxTicketInstructions.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxTicketInstructions)
 
     $checkBoxTimeEstimate = New-Object System.Windows.Forms.CheckBox
     $checkBoxTimeEstimate.Location = New-Object System.Drawing.Point(20, 125)
     $checkBoxTimeEstimate.Size = New-Object System.Drawing.Size(300, 20)
     $checkBoxTimeEstimate.Text = "Generate Time Estimate (Text)"
-    $checkBoxTimeEstimate.Checked = $false
+    $checkBoxTimeEstimate.Checked = $true
     $groupBoxOutput.Controls.Add($checkBoxTimeEstimate)
 
     # --- Top Ten Filters ---

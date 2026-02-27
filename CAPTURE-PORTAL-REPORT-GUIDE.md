@@ -1,0 +1,50 @@
+# Capturing ConnectSecure Portal Report Creation
+
+Capture the exact API calls the ConnectSecure web UI makes when creating a standard report. Use this to compare with API-based creation and find differences (e.g. why portal-created reports work with `get_report_link` but API-created ones return 404).
+
+## Method 1: Console Script (Recommended)
+
+1. **Log into ConnectSecure** in Chrome or Edge
+2. **Open DevTools** (F12) → go to the **Console** tab
+3. **Paste the contents** of `Capture-PortalReportCreation.js` into the console and press Enter
+4. You should see: `[Report Capturer Active] Create a report in the UI...`
+5. **Create a report** in the portal:
+   - Go to Reports (or equivalent menu)
+   - Select a standard report type
+   - Choose company (e.g. 15853)
+   - Click Generate / Create / Download
+   - Wait for the report to be ready and downloaded
+6. **Export captured data**:
+   - Run in console: `copy(JSON.stringify(window.__capturedReportCalls, null, 2))`
+   - This copies the captured calls to your clipboard
+   - Paste into a file (e.g. `portal-report-capture.json`) for analysis
+
+## Method 2: DevTools Network Tab
+
+1. **Open DevTools** (F12) → **Network** tab
+2. Enable **Preserve log**
+3. Filter by **Fetch/XHR** (or filter for `report`, `create_report`, `get_report`)
+4. Create a report in the UI
+5. **Right-click** a request → **Copy** → **Copy as cURL** or **Copy as HAR**
+6. Inspect:
+   - `create_report_job` (or similar) – request body and response
+   - `get_report_link` – parameters and response
+   - Any polling or status-check calls
+
+## What to Look For
+
+- **Request payload** for create: `company_id`, `company_name`, `reportId`, `reportType`, `reportFilter`, etc.
+- **Headers**: `X-USER-ID`, `Authorization`, any custom headers
+- **Polling pattern**: How often does the UI poll for status or the download link?
+- **Endpoint paths**: `/report_builder/` vs `/r/report_builder/`
+- **Job ID**: Where it appears in responses and how it’s used for the download link
+
+## Portal Findings (2026-02-27 capture)
+
+- **create_report_job**: `reportType: "Standard"`, `isFilter: true`, `reportName` without spaces (e.g. AllVulnerabilitiesReport)
+- **get_report_link**: `job_id=["uuid"]` (JSON array), **no company_id** - scripts updated to try this first
+- **Large reports**: Returns ZIP with CSV when data is large
+
+## Use the Capture
+
+Compare the portal’s payload and sequence with what `Invoke-CreateReportJob.ps1` and `Invoke-CreateAndDownloadReport.ps1` send. Differences may explain why portal jobs work with `get_report_link` and API jobs do not.

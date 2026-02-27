@@ -34,6 +34,20 @@ $script:ConnectSecureConfig = @{
 
 # --- Helper Functions ---
 
+function Remove-SensitiveDataFromObject {
+    param([object]$Obj)
+    if ($null -eq $Obj) { return $null }
+    try {
+        $json = $Obj | ConvertTo-Json -Depth 5
+        $sensitiveKeys = @('access_token', 'token', 'refresh_token', 'user_id', 'client_secret', 'Client-Auth-Token', 'Authorization')
+        foreach ($key in $sensitiveKeys) {
+            $json = $json -replace "`"$key`"\s*:\s*`"[^`"]*`"", "`"$key`":`"***REDACTED***`""
+            $json = $json -replace "`"$key`"\s*:\s*null", "`"$key`":null"
+        }
+        return $json
+    } catch { return "[Unable to serialize]" }
+}
+
 function Write-CSApiLog {
     param(
         [string]$Message,
@@ -181,11 +195,11 @@ function Invoke-ConnectSecureRequest {
                         $reader = New-Object System.IO.StreamReader($respStream)
                         $body = $reader.ReadToEnd()
                         $reader.Close()
-                        Write-CSApiLog "401 response body: $body" -Level Warning
+                        $safeBody = Remove-SensitiveDataFromObject ($body | ConvertFrom-Json -ErrorAction SilentlyContinue)
+                        if ($safeBody) { Write-CSApiLog "401 response: $safeBody" -Level Warning } else { Write-CSApiLog "401 received (response body not JSON)" -Level Warning }
                     }
                 } catch { }
-                $tokenPreview = if ($script:ConnectSecureConfig.AccessToken) { $script:ConnectSecureConfig.AccessToken.Substring(0, [Math]::Min(50, $script:ConnectSecureConfig.AccessToken.Length)) } else { "NULL" }
-                Write-CSApiLog "Unauthorized (401). Token sent (first 50 chars): $tokenPreview..." -Level Warning
+                Write-CSApiLog "Unauthorized (401). Token invalid or expired." -Level Warning
                 Write-CSApiLog "Refreshing token..." -Level Warning
                 Connect-ConnectSecureAPI -BaseUrl $script:ConnectSecureConfig.BaseUrl `
                                           -TenantName $script:ConnectSecureConfig.TenantName `
@@ -266,24 +280,15 @@ function Connect-ConnectSecureAPI {
     $ClientId = $ClientId -replace "`r`n|`r|`n", ""
     $TenantName = $TenantName -replace "`r`n|`r|`n", ""
     
-    Write-CSApiLog "Client Secret length: $($ClientSecret.Length) characters" -Level Info
-    
     # Construct auth string: tenant+client_id:client_secret
     # Format matches official documentation exactly: tenantname+Client_id:client_secret
     # Use ${} syntax to properly delimit variables when using : separator
     $authString = "${TenantName}+${ClientId}:${ClientSecret}"
     
-    # Log auth string format (without secret) for debugging
-    $authStringPreview = "${TenantName}+${ClientId}:***"
-    Write-CSApiLog "Auth string format: $authStringPreview" -Level Info
-    Write-CSApiLog "Auth string length: $($authString.Length) characters" -Level Info
-    
     try {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($authString)
         $base64Auth = [System.Convert]::ToBase64String($bytes)
-        Write-CSApiLog "Base64 encoding successful (UTF8)" -Level Info
-        Write-CSApiLog "Base64 token length: $($base64Auth.Length) characters" -Level Info
-        Write-CSApiLog "Base64 token (first 50 chars): $($base64Auth.Substring(0, [Math]::Min(50, $base64Auth.Length)))..." -Level Info
+        Write-CSApiLog "Auth encoding successful" -Level Info
     } catch {
         Write-CSApiLog "Error encoding auth string: $($_.Exception.Message)" -Level Error
         return $false
@@ -300,19 +305,8 @@ function Connect-ConnectSecureAPI {
 
         $authUrl = "$($script:ConnectSecureConfig.BaseUrl)/w/authorize"
         Write-CSApiLog "Authenticating at: $authUrl" -Level Info
-        Write-CSApiLog "Using tenant: $TenantName" -Level Info
-        Write-CSApiLog "Headers being sent:" -Level Info
-        Write-CSApiLog "  accept: application/json" -Level Info
-        Write-CSApiLog "  Content-Type: application/json" -Level Info
-        Write-CSApiLog "  Client-Auth-Token: $($base64Auth.Substring(0, [Math]::Min(80, $base64Auth.Length)))..." -Level Info
-        Write-CSApiLog "  Client-Auth-Token length: $($base64Auth.Length) characters" -Level Info
 
         $authUri = [System.Uri]$authUrl
-        Write-CSApiLog "Constructed API URL: $authUri" -Level Info
-        if (-not $script:ConnectSecureConfig.ManualVerificationLogged) {
-            $script:ConnectSecureConfig.ManualVerificationLogged = $true
-            Write-CSApiLog "Manual verification: format ${TenantName}+${ClientId}:<secret>, UTF8 base64 at base64encode.org" -Level Info
-        }
 
         $maxAuthRetries = 3
         $response = $null
@@ -335,7 +329,10 @@ function Connect-ConnectSecureAPI {
                     } catch { }
 
                     Write-CSApiLog "HTTP Error: Status Code $statusCode" -Level Error
-                    if ($errorDetails) { Write-CSApiLog "Response body: $errorDetails" -Level Error }
+                    if ($errorDetails) {
+                        $safeErr = try { $parsed = $errorDetails | ConvertFrom-Json; Remove-SensitiveDataFromObject $parsed } catch { $errorDetails -replace '"access_token"\s*:\s*"[^"]*"', '"access_token":"***"' }
+                        Write-CSApiLog "Response: $safeErr" -Level Error
+                    }
 
                     if ($statusCode -eq 502) {
                         Write-CSApiLog "502 Gateway Error - often encoding or credentials format. Verify: tenant+client_id:client_secret" -Level Error
@@ -357,24 +354,16 @@ function Connect-ConnectSecureAPI {
                 }
             }
 
-            # Log full response for debugging
-            Write-CSApiLog "Response received. Checking for access token..." -Level Info
-            if ($response) {
-                $responseKeys = $response | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
-                $keyDelim = ", "
-                Write-CSApiLog "Response contains keys: $($responseKeys -join $keyDelim)" -Level Info
-                Write-CSApiLog "Full response: $($response | ConvertTo-Json -Depth 3)" -Level Info
-            }
+            Write-CSApiLog "Response received" -Level Info
 
             # Check for error response first
             if ($response.status -eq $false -or ($response.message -and $response.message.Length -gt 0)) {
             $errorMsg = if ($response.message) { $response.message } else { "Authentication failed" }
             
             # Check if this is a different type of error (not auth failure)
-            if ($errorMsg -ne "Failed to authorize") {
+                if ($errorMsg -ne "Failed to authorize") {
                 Write-CSApiLog "API returned error message: $errorMsg" -Level Warning
                 Write-CSApiLog "This is different from Failed to authorize - credentials appear correct but API returned an error." -Level Warning
-                Write-CSApiLog "Full response: $($response | ConvertTo-Json -Depth 3)" -Level Warning
                 
                 # "Failed to create customer" is unexpected for a simple auth test
                 if ($errorMsg -eq "Failed to create customer") {
@@ -414,7 +403,7 @@ function Connect-ConnectSecureAPI {
                     $script:ConnectSecureConfig.AccessToken = $accessToken
                     $script:ConnectSecureConfig.UserId = $userId
                     $script:ConnectSecureConfig.TokenExpiry = (Get-Date).AddHours(1)
-                    Write-CSApiLog "Successfully authenticated. User ID: $userId" -Level Success
+                    Write-CSApiLog "Successfully authenticated" -Level Success
                     return $true
                 }
                 # Retry on "Failed to create customer" - known intermittent ConnectSecure API issue
@@ -426,68 +415,10 @@ function Connect-ConnectSecureAPI {
             }
             
             Write-CSApiLog "Authentication failed: $errorMsg" -Level Error
-            Write-CSApiLog "Full response: $($response | ConvertTo-Json -Depth 3)" -Level Error
             
-            # Show what was sent (for debugging)
-            Write-CSApiLog "Debugging info:" -Level Error
-            Write-CSApiLog "  Tenant Name: $TenantName (Length: $($TenantName.Length))" -Level Error
-            Write-CSApiLog "  Client ID: $ClientId (Length: $($ClientId.Length))" -Level Error
-            Write-CSApiLog "  Client Secret: *** (Length: $($ClientSecret.Length) characters)" -Level Error
-            Write-CSApiLog "  Base URL: $($script:ConnectSecureConfig.BaseUrl)" -Level Error
-            
-            # Check if secret might have hidden characters
-            if ($ClientSecret -match "`r|`n|`t") {
-                Write-CSApiLog "  WARNING: Client Secret contains newlines or tabs - these have been removed" -Level Warning
-            }
-            
-            # Provide specific troubleshooting based on error
-            Write-CSApiLog "Troubleshooting steps:" -Level Error
-            Write-CSApiLog "  CRITICAL: Verify Base URL and Tenant Name" -Level Error
-            Write-CSApiLog "     Base URL: $($script:ConnectSecureConfig.BaseUrl)" -Level Error
-            Write-CSApiLog "     Tenant Name: $TenantName" -Level Error
-            Write-CSApiLog "     Client ID: $ClientId" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "  🔍 TENANT NAME VERIFICATION (Most Likely Issue):" -Level Error
-            Write-CSApiLog "     The tenant name format is critical and must match EXACTLY." -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "     Steps to find correct tenant name:" -Level Error
-            Write-CSApiLog "     1. Log into ConnectSecure portal: $($script:ConnectSecureConfig.BaseUrl)" -Level Error
-            Write-CSApiLog "     2. Go to Global, Settings, Users, select your user, Action, API Key" -Level Error
-            Write-CSApiLog "     3. Look for Tenant Name or Tenant field on that page" -Level Error
-            Write-CSApiLog "     4. Copy it EXACTLY as shown - case-sensitive, no spaces" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "     Common tenant name formats:" -Level Error
-            Write-CSApiLog "     - Company identifier: river-run, acme-corp (MOST COMMON - found on API Key page)" -Level Error
-            Write-CSApiLog "     - Email address: user@company.com (sometimes used)" -Level Error
-            Write-CSApiLog "     - UUID/GUID format" -Level Error
-            Write-CSApiLog "     - Numeric ID" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "     IMPORTANT: Tenant name is typically the company identifier (e.g. river-run)" -Level Error
-            Write-CSApiLog "     IMPORTANT: Found on API Key page as Tenant Name field" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "     Current tenant name: $TenantName" -Level Error
-            Write-CSApiLog "     If this does not match what is on the API Key page, that is the problem!" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "     IMPORTANT: The tenant name might be:" -Level Error
-            Write-CSApiLog "     - Your email address (not river-run)" -Level Error
-            Write-CSApiLog "     - A different format entirely" -Level Error
-            Write-CSApiLog "     - Case-sensitive (River-Run vs river-run)" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "  2. VERIFY API KEY STATUS:" -Level Error
-            Write-CSApiLog "     - Ensure API key shows as Active (not expired/revoked)" -Level Error
-            Write-CSApiLog "     - If you just reset it, wait a few seconds and try again" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "  3. RUN MANUAL TEST SCRIPT:" -Level Error
-            $authTest = ('     - Run: .\Test-ConnectSecure-Auth.ps1 -BaseUrl {0} -TenantName {1} -ClientId {2} -ClientSecret your-secret' -f $script:ConnectSecureConfig.BaseUrl, $TenantName, $ClientId)
-Write-CSApiLog $authTest -Level Error
-            Write-CSApiLog "     - This will test the exact request and show detailed debugging" -Level Error
-            Write-CSApiLog "" -Level Error
-            Write-CSApiLog "  4. MANUAL BASE64 TEST:" -Level Error
-            Write-CSApiLog "     - Use the base64 token shown above in Postman/curl" -Level Error
-            Write-CSApiLog "     - Or regenerate at: https://www.base64encode.org/" -Level Error
-            Write-CSApiLog "     - Format: ${TenantName}+${ClientId}:<your-secret>" -Level Error
-            Write-CSApiLog "     - Select UTF8 encoding" -Level Error
-            
+            # Debugging info (no secrets)
+            Write-CSApiLog "Debugging: Verify Tenant Name and Client ID on API Key page; ensure API key is Active" -Level Error
+            Write-CSApiLog "Troubleshooting: Verify Base URL, Tenant Name, and Client ID on ConnectSecure API Key page (Global > Settings > Users > API Key). Ensure API key is Active." -Level Error
             return $false
         }
         
@@ -508,7 +439,7 @@ Write-CSApiLog $authTest -Level Error
             # Set token expiry to 1 hour from now (tokens typically expire after some time)
             $script:ConnectSecureConfig.TokenExpiry = (Get-Date).AddHours(1)
             
-            Write-CSApiLog "Successfully authenticated. User ID: $userId" -Level Success
+            Write-CSApiLog "Successfully authenticated" -Level Success
             return $true
         } else {
             Write-CSApiLog "Authentication failed: No access_token in response" -Level Error
@@ -566,10 +497,10 @@ function Get-ConnectSecureCompanyDisplayInfo {
     }
     
     # name.keyword (Elasticsearch keyword field)
-    if ([string]::IsNullOrWhiteSpace($name) -and $Company["name.keyword"]) { $name = $Company["name.keyword"] }
-    if ([string]::IsNullOrWhiteSpace($name) -and $Company._source["name.keyword"]) { $name = $Company._source["name.keyword"] }
+    if ([string]::IsNullOrWhiteSpace($name) -and $Company['name.keyword']) { $name = $Company['name.keyword'] }
+    if ([string]::IsNullOrWhiteSpace($name) -and $Company._source['name.keyword']) { $name = $Company._source['name.keyword'] }
     
-    # Fallback: any property containing "name" with a non-empty value
+    # Fallback: any property containing name with a non-empty value
     if ([string]::IsNullOrWhiteSpace($name)) {
         foreach ($prop in $Company.PSObject.Properties) {
             if ($prop.Name -match 'name' -and $prop.Value -and $prop.Value -is [string] -and $prop.Value.Trim()) {
@@ -738,10 +669,31 @@ $script:VulnEndpoints = @{
 $script:VulnMaxRecords = 25000
 # When using asset_wise_vulnerabilities: aggregate to one row per unique vuln with AffectedHosts (reduces 200k→~50k). Ignored for vulnerabilities_details.
 $script:VulnAggregateByVulnerability = $true
-# API filter - ConnectSecure may ignore this. Set to "" for no API filter.
-$script:VulnSeverityFilter = 'severity.keyword:(Critical OR High)'
-# Client-side filter: after download, keep only Critical and High (API filter often ignored). Set $false for all severities.
-$script:VulnFilterCriticalHighOnly = $true
+# API filter - ConnectSecure may ignore this. Set to empty string to request all severities from API.
+$script:VulnSeverityFilter = ''
+# Client-side filter: after download, keep only Critical and High (API filter often ignored). Set $false to include all severities (Critical, High, Medium, Low).
+$script:VulnFilterCriticalHighOnly = $false
+# Try server-side company filter via condition param (API may support it; tested formats caused 400/errors - keep false for now)
+$script:UseConditionForCompanyFilter = $false
+
+function Test-RowMatchesCompanyId {
+    <#
+    .SYNOPSIS
+    Returns $true if the row's company_ids or company_id contains the given CompanyId.
+    Handles company_ids, companyIds, company_id, _source nesting, string/array formats.
+    #>
+    param([object]$Row, [string]$CompanyIdStr)
+    if ([string]::IsNullOrWhiteSpace($CompanyIdStr)) { return $true }
+    $obj = $Row
+    if ($null -ne $Row._source) { $obj = $Row._source }
+    if ($null -eq $obj) { return $false }
+    $cids = $obj.company_ids
+    if ($null -eq $cids) { $cids = $obj.companyIds }
+    if ($null -eq $cids) { $cids = $obj.company_id }
+    if ($null -eq $cids) { return $false }
+    $cidsStr = if ($cids -is [array]) { ($cids | ForEach-Object { [string]$_ }) -join ';' } else { [string]$cids }
+    return $cidsStr -match ('(^|;)' + [regex]::Escape($CompanyIdStr) + '($|;)')
+}
 
 function Invoke-ConnectSecureVulnerabilityQuery {
     <#
@@ -786,7 +738,12 @@ function Invoke-ConnectSecureVulnerabilityQuery {
             sort  = $Sort
         }
 
-        if ($CompanyId -gt 0) { $queryParams.company_id = $CompanyId }
+        if ($CompanyId -gt 0) {
+            $queryParams.company_id = $CompanyId
+            if ($script:UseConditionForCompanyFilter) {
+                $queryParams.condition = 'company_ids:' + $CompanyId
+            }
+        }
         if (-not [string]::IsNullOrWhiteSpace($Filter)) { $queryParams.filter = $Filter }
 
         try {
@@ -843,7 +800,7 @@ function ConvertFrom-VulnerabilitiesDetailsFormat {
         $result += [PSCustomObject]@{
             problem_id = $r.problem_id
             problem_name = $r.problem_name
-            software_name = if ($r.software_name) { $r.software_name } else { "" }
+            software_name = if ($r.software_name) { $r.software_name } elseif ($r.problem_name) { [string]$r.problem_name } else { "" }
             severity = $r.severity
             description = $r.description
             epss_score = $r.epss_score
@@ -909,6 +866,15 @@ function Get-ConnectSecureVulnerabilities {
     $useFilter = if ([string]::IsNullOrWhiteSpace($Filter) -and $script:VulnSeverityFilter) { $script:VulnSeverityFilter } else { $Filter }
     $doFetchAll = if ($FetchAll) { $true } else { $false }
     $data = Invoke-ConnectSecureVulnerabilityQuery -VulnType 'application' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $useFilter -Sort $Sort -FetchAll $doFetchAll
+    # Client-side filter by company_ids: API returns tenant-wide data (vulnerabilities_details ignores company_id param per swagger)
+    if ($CompanyId -gt 0 -and $data -and $data.Count -gt 0) {
+        $before = $data.Count
+        $cidStr = [string]$CompanyId
+        $data = $data | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($data.Count -lt $before) {
+            Write-CSApiLog ('Filtered to company ' + $CompanyId + ': ' + $before + ' -> ' + $data.Count + ' rows') -Level Info
+        }
+    }
     if ($script:VulnFilterCriticalHighOnly -and $data -and $data.Count -gt 0) {
         $before = $data.Count
         $data = $data | Where-Object {
@@ -938,7 +904,16 @@ function Get-ConnectSecureExternalVulnerabilities {
         [switch]$FetchAll
     )
     $doFetchAll = if ($FetchAll) { $true } else { $false }
-    Invoke-ConnectSecureVulnerabilityQuery -VulnType 'external' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $Filter -Sort $Sort -FetchAll $doFetchAll
+    $data = Invoke-ConnectSecureVulnerabilityQuery -VulnType 'external' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $Filter -Sort $Sort -FetchAll $doFetchAll
+    if ($CompanyId -gt 0 -and $data -and $data.Count -gt 0) {
+        $before = $data.Count
+        $cidStr = [string]$CompanyId
+        $data = $data | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($data.Count -lt $before) {
+            Write-CSApiLog ('Filtered external to company ' + $CompanyId + ': ' + $before + ' -> ' + $data.Count + ' rows') -Level Info
+        }
+    }
+    return $data
 }
 
 function Get-ConnectSecureSuppressedVulnerabilities {
@@ -953,6 +928,14 @@ function Get-ConnectSecureSuppressedVulnerabilities {
     )
     $doFetchAll = if ($FetchAll) { $true } else { $false }
     $data = Invoke-ConnectSecureVulnerabilityQuery -VulnType 'suppressed' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $Filter -Sort $Sort -FetchAll $doFetchAll
+    if ($CompanyId -gt 0 -and $data -and $data.Count -gt 0) {
+        $before = $data.Count
+        $cidStr = [string]$CompanyId
+        $data = $data | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($data.Count -lt $before) {
+            Write-CSApiLog ('Filtered suppressed to company ' + $CompanyId + ': ' + $before + ' -> ' + $data.Count + ' rows') -Level Info
+        }
+    }
     if ($Raw) { return $data }
     if ($script:VulnEndpoints['suppressed'] -match 'vulnerabilities_details') {
         return ConvertFrom-VulnerabilitiesDetailsFormat -Data $data
@@ -1028,7 +1011,10 @@ function Get-ConnectSecureAssets {
     $pageNum = 0
     do {
         $queryParams = @{ limit = $pageSize; skip = $currentSkip }
-        if ($CompanyId -gt 0) { $queryParams.company_id = $CompanyId }
+        if ($CompanyId -gt 0 -and $script:UseConditionForCompanyFilter) {
+            $queryParams.condition = 'company_ids:' + $CompanyId
+        }
+        # Note: /r/asset/assets does NOT accept company_id per swagger (condition, skip, limit, order_by only). Passing company_id causes 400.
         try {
             $response = Invoke-ConnectSecureRequest -Endpoint '/r/asset/assets' -QueryParameters $queryParams
             $assets = @()
@@ -1050,6 +1036,141 @@ function Get-ConnectSecureAssets {
     } while ($doFetchAll)
     Write-CSApiLog ('Total assets retrieved: ' + $allData.Count) -Level Success
     return $allData
+}
+
+function Get-ConnectSecureAssetWiseVulnerabilities {
+    <#
+    .SYNOPSIS
+    Fetches asset-wise vulnerabilities (one row per host+vuln) from /r/report_queries/asset_wise_vulnerabilities.
+    Use for 13-column export: CVE ID, Severity, CVSS, EPSS, Asset Name, OS, IP, Description, Application Name, Product Name, First Seen, Last Seen, Owner.
+    #>
+    param(
+        [int]$CompanyId = 0,
+        [int]$Limit = 5000,
+        [int]$Skip = 0,
+        [string]$Filter = "",
+        [string]$Sort = 'severity.keyword:desc',
+        [switch]$FetchAll
+    )
+    $endpoint = '/r/report_queries/asset_wise_vulnerabilities'
+    $doFetchAll = if ($FetchAll) { $true } else { $false }
+    Write-CSApiLog ('Fetching asset-wise vulnerabilities (CompanyId: ' + $CompanyId + ', Limit: ' + $Limit + ', Skip: ' + $Skip + ')...') -Level Info
+    $allData = @()
+    $currentSkip = $Skip
+    $pageSize = $Limit
+    $maxPages = 200
+    do {
+        $queryParams = @{ limit = $pageSize; skip = $currentSkip; sort = $Sort }
+        if ($CompanyId -gt 0) {
+            $queryParams.company_id = $CompanyId
+            if ($script:UseConditionForCompanyFilter) {
+                $queryParams.condition = 'company_ids:' + $CompanyId
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Filter)) { $queryParams.filter = $Filter }
+        try {
+            $response = Invoke-ConnectSecureRequest -Endpoint $endpoint -QueryParameters $queryParams
+            if ($response.status -and $response.data) {
+                $allData += $response.data
+                $pageNum = [Math]::Floor($currentSkip / $pageSize) + 1
+                Write-CSApiLog ('Page ' + $pageNum + ': retrieved ' + $response.data.Count + ' (Total: ' + $allData.Count + ')') -Level Info
+                $maxRec = $script:VulnMaxRecords
+                if ($maxRec -gt 0 -and $allData.Count -ge $maxRec) {
+                    Write-CSApiLog ('Reached record limit (' + $maxRec + ').') -Level Warning
+                    break
+                }
+                if ($doFetchAll -and $response.data.Count -eq $pageSize -and $pageNum -lt $maxPages) {
+                    $currentSkip += $pageSize
+                } else { break }
+            } else { break }
+        } catch {
+            Write-CSApiLog ('Error fetching asset-wise vulnerabilities: ' + $_.Exception.Message) -Level Error
+            throw
+        }
+    } while ($doFetchAll)
+    # Client-side filter by company_ids: API returns tenant-wide data (asset_wise ignores company_id per swagger)
+    if ($CompanyId -gt 0 -and $allData.Count -gt 0) {
+        $before = $allData.Count
+        $cidStr = [string]$CompanyId
+        $allData = $allData | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($allData.Count -lt $before) {
+            Write-CSApiLog ('Filtered asset-wise to company ' + $CompanyId + ': ' + $before + ' -> ' + $allData.Count + ' rows') -Level Info
+        }
+    }
+    Write-CSApiLog ('Total asset-wise vulnerabilities retrieved: ' + $allData.Count) -Level Success
+    return $allData
+}
+
+function Get-ConnectSecureAssetDetailMap {
+    <#
+    .SYNOPSIS
+    Builds hashtable asset_id -> @{os_name; os_version; asset_owner} for 13-column OS/Owner enrichment.
+    #>
+    param([array]$Assets)
+    $map = @{}
+    if (-not $Assets -or $Assets.Count -eq 0) { return $map }
+    foreach ($a in $Assets) {
+        $id = $null
+        if ($null -ne $a.id) { $id = $a.id }
+        elseif ($null -ne $a.asset_id) { $id = $a.asset_id }
+        if ($null -eq $id) { continue }
+        $key = [string]$id
+        if ($map.ContainsKey($key)) { continue }
+        $osName = ''
+        if ($null -ne $a.os_name -and -not [string]::IsNullOrWhiteSpace([string]$a.os_name)) { $osName = [string]$a.os_name }
+        elseif ($null -ne $a.os_full_name -and -not [string]::IsNullOrWhiteSpace([string]$a.os_full_name)) { $osName = [string]$a.os_full_name }
+        $osVer = if ($null -ne $a.os_version -and -not [string]::IsNullOrWhiteSpace([string]$a.os_version)) { [string]$a.os_version } else { '' }
+        $owner = if ($null -ne $a.asset_owner -and -not [string]::IsNullOrWhiteSpace([string]$a.asset_owner)) { [string]$a.asset_owner } else { '' }
+        $map[$key] = @{ os_name = $osName; os_version = $osVer; asset_owner = $owner }
+    }
+    return $map
+}
+
+function ConvertTo-ConnectSecure13ColumnFormat {
+    <#
+    .SYNOPSIS
+    Converts asset_wise vulnerability data to 13-column format with OS/Owner enrichment.
+    #>
+    param(
+        [array]$AssetWiseData,
+        [hashtable]$AssetDetailMap
+    )
+    if (-not $AssetWiseData -or $AssetWiseData.Count -eq 0) { return @() }
+    $result = @()
+    foreach ($v in $AssetWiseData) {
+        $aid = $v.asset_ids
+        $assetId = ''
+        if ($null -ne $aid) {
+            if ($aid -is [array] -and $aid.Count -gt 0) { $assetId = [string]$aid[0] }
+            elseif ($aid -is [string]) { $assetId = ($aid -split ';')[0].Trim() }
+            else { $assetId = [string]$aid }
+        }
+        $osVal = ''; $ownerVal = ''
+        if ($assetId -and $AssetDetailMap -and $AssetDetailMap.ContainsKey($assetId)) {
+            $d = $AssetDetailMap[$assetId]
+            $osVal = $d.os_name
+            if ($d.os_version) { $osVal = ($osVal + ' ' + $d.os_version).Trim() }
+            $ownerVal = $d.asset_owner
+        }
+        $app = $v.software_name
+        $appStr = if ($null -eq $app) { '' } elseif ($app -is [array]) { ($app | ForEach-Object { [string]$_ }) -join '; ' } else { [string]$app }
+        $result += [PSCustomObject]@{
+            'CVE ID'           = if ($v.problem_name) { [string]$v.problem_name } else { '' }
+            'Severity'         = if ($v.severity) { [string]$v.severity } else { '' }
+            'CVSS Score'       = if ($null -ne $v.base_score) { $v.base_score } else { '' }
+            'EPSS Score'       = if ($null -ne $v.epss_score) { $v.epss_score } else { '' }
+            'Asset Name'       = if ($v.host_name) { [string]$v.host_name } else { '' }
+            'OS'               = $osVal
+            'IP Address'       = if ($v.ip) { [string]$v.ip } else { '' }
+            'Description'      = if ($v.description) { [string]$v.description } else { '' }
+            'Application Name' = $appStr
+            'Product Name'     = $appStr
+            'First Seen'       = if ($v.discovered) { [string]$v.discovered } else { '' }
+            'Last Seen'        = if ($v.last_discovered_time) { [string]$v.last_discovered_time } else { '' }
+            'Owner'            = $ownerVal
+        }
+    }
+    return $result
 }
 
 function Get-ConnectSecureAssetIdToNameMap {
@@ -1571,9 +1692,21 @@ function New-AllVulnerabilitiesReportFromConnectSecure {
     param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [array]$VulnerabilityData = $null, [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
     $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
     $fetchAll = ($DebugLimit -le 0)
-    $allVulns = if ($null -ne $VulnerabilityData) { $VulnerabilityData } else { Get-ConnectSecureVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll -Raw }
-    if ($null -eq $allVulns) { $allVulns = @() }
-    $allVulns = Invoke-AssetNameResolution -Data $allVulns -CompanyId $CompanyId
+    # Use asset_wise_vulnerabilities for 13-column format (CVE ID, Severity, CVSS, EPSS, Asset Name, OS, IP, Description, App Name, Product Name, First Seen, Last Seen, Owner)
+    $assetWise = Get-ConnectSecureAssetWiseVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
+    if ($null -eq $assetWise) { $assetWise = @() }
+    if ($assetWise.Count -eq 0) {
+        Export-ConnectSecureDataToExcel -Data @() -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
+        return
+    }
+    $assets = @()
+    try {
+        $assets = Get-ConnectSecureAssets -CompanyId $CompanyId -Limit 5000 -FetchAll:$true
+    } catch {
+        Write-CSApiLog ('Asset fetch failed (OS/Owner will be empty): ' + $_.Exception.Message) -Level Warning
+    }
+    $assetDetailMap = Get-ConnectSecureAssetDetailMap -Assets $assets
+    $allVulns = ConvertTo-ConnectSecure13ColumnFormat -AssetWiseData $assetWise -AssetDetailMap $assetDetailMap
     Export-ConnectSecureDataToExcel -Data $allVulns -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
 }
 
@@ -1631,14 +1764,20 @@ function Get-ConnectSecureStandardReports {
                 foreach ($m in $msg) {
                     if ($m.Reports) {
                         foreach ($r in $m.Reports) {
-                            if ($r.reports) { $reports += $r.reports }
+                            if ($r.reports) {
+                                $desc = if ($r.description) { $r.description.ToString().ToLower() } else { '' }
+                                foreach ($rep in $r.reports) {
+                                    $rep | Add-Member -NotePropertyName '_category' -NotePropertyValue $desc -Force
+                                    $reports += $rep
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-        if ($response.data) { $reports += $response.data }
-        Write-CSApiLog ('Standard reports: ' + $reports.Count + ' items') -Level Success
+        if ($response.data -and $reports.Count -eq 0) { $reports = @($response.data) }
+        if ($reports.Count -gt 0) { Write-CSApiLog ('Standard reports: ' + $reports.Count + ' items') -Level Info }
         return $reports
     } catch {
         Write-CSApiLog ('standard_reports: ' + $_.Exception.Message) -Level Warning
@@ -1646,77 +1785,226 @@ function Get-ConnectSecureStandardReports {
     }
 }
 
+function Get-StandardReportIdForType {
+    <#
+    .SYNOPSIS
+    Resolves our InternalReportType to a report ID from standard_reports API.
+    Uses only tenant-provided standard reports - no hardcoded IDs.
+    #>
+    param(
+        [string]$InternalReportType,
+        [string]$ReportFormat = 'xlsx',
+        [int]$CompanyId = 0
+    )
+    $isGlobal = ($CompanyId -eq 0)
+    $reports = Get-ConnectSecureStandardReports -IsGlobal $isGlobal
+    if (-not $reports -or $reports.Count -eq 0) {
+        Write-CSApiLog 'No standard reports returned - cannot create report' -Level Warning
+        return $null
+    }
+    $wantFormat = if ($ReportFormat -eq 'docx') { 'docx' } elseif ($ReportFormat -eq 'pdf') { 'pdf' } else { 'xlsx' }
+    $categoryPatterns = @{
+        'all-vulnerabilities' = 'all vulnerabilities report'
+        'suppressed-vulnerabilities' = 'suppressed vulnerabilities'
+        'external-vulnerabilities' = 'external scan'
+        'executive-summary' = 'executive summary report'
+        'pending-epss' = 'pending remediation epss score reports'
+    }
+    $pattern = $categoryPatterns[$InternalReportType]
+    $candidates = @()
+    foreach ($r in $reports) {
+        $rt = if ($r.reportType) { $r.reportType.ToString().ToLower() } else { '' }
+        if ($rt -ne $wantFormat) { continue }
+        $cat = if ($r._category) { $r._category.ToString().ToLower() } else { '' }
+        if ($pattern -and $cat -like ('*' + $pattern + '*')) {
+            $candidates += $r
+            break
+        }
+    }
+    if ($candidates.Count -eq 0 -and $pattern) {
+        foreach ($r in $reports) {
+            $rt = if ($r.reportType) { $r.reportType.ToString().ToLower() } else { '' }
+            if ($rt -ne $wantFormat) { continue }
+            $cat = if ($r._category) { $r._category.ToString().ToLower() } else { '' }
+            if ($cat -match ($pattern -replace '\s+', '.*')) {
+                $candidates += $r
+                break
+            }
+        }
+    }
+    if ($candidates.Count -eq 0) {
+        $formatMatches = @($reports | Where-Object { ($_.reportType -or '').ToString().ToLower() -eq $wantFormat })
+        if ($formatMatches.Count -eq 1) {
+            $id = $formatMatches[0].id
+            if ($id) { Write-CSApiLog ('Using only ' + $wantFormat + ' report from standard_reports: ' + $id) -Level Info; return $id }
+        }
+        if ($formatMatches.Count -gt 0) {
+            $id = $formatMatches[0].id
+            if ($id) { Write-CSApiLog ('Using first ' + $wantFormat + ' report (no name match for ' + $InternalReportType + '): ' + $id) -Level Info; return $id }
+        }
+        # Fallback: use known IDs when dynamic match fails (API structure may vary by tenant)
+        if ($categoryPatterns[$InternalReportType]) {
+            $knownIds = @{
+                'all-vulnerabilities'        = 'f836d6a4e4d54ac6a9d2967254796373'
+                'suppressed-vulnerabilities'   = '1d091564830b44c485a0ddc35ace9ac6'
+                'external-vulnerabilities'    = '01beb6b930744e11b690bb9dc25118fb'
+                'executive-summary'           = '1cd4f45884264d15bee4173dc58b6a57'
+                'pending-epss'                = '85d4913c0dbc4fc782b858f0d27dd180'
+            }
+            $knownId = $knownIds[$InternalReportType]
+            $exists = $reports | Where-Object { $_.id -eq $knownId }
+            if ($knownId -and $exists) {
+                Write-CSApiLog ('Using known report id for ' + $InternalReportType + ': ' + $knownId) -Level Info
+                return $knownId
+            }
+        }
+        Write-CSApiLog ('No ' + $wantFormat + ' report found in standard_reports for ' + $InternalReportType) -Level Warning
+        return $null
+    }
+    $id = $candidates[0].id
+    if ($id) { Write-CSApiLog ('Matched ' + $InternalReportType + ' to standard report: ' + $id) -Level Info }
+    return $id
+}
+
 function New-ConnectSecureReportJob {
     <#
     .SYNOPSIS
     Creates a report generation job in ConnectSecure.
+    Tries multiple endpoints and parameter formats for compatibility.
     Swagger: POST /report_builder/create_report_job
     .PARAMETER ReportType
-    Report id (string) or reportType from standard_reports, e.g. pending_remediation_epss or id from API.
+    Report id (string) or reportType from standard_reports.
     .PARAMETER CompanyId
     Company ID (0 for all companies).
     .PARAMETER ReportFormat
     Format: xlsx, docx, pdf.
+    .PARAMETER ReportName
+    Optional display name (reportName in camelCase format).
     #>
     param(
         [Parameter(Mandatory=$true)]
         [object]$ReportType,
         [int]$CompanyId = 0,
         [string]$ReportFormat = 'xlsx',
+        [string]$ReportName = '',
+        [string]$ClientName = '',
         [hashtable]$AdditionalParams = @{}
     )
 
-    $body = @{ company_id = $CompanyId; report_format = $ReportFormat } + $AdditionalParams
+    $reportIdStr = $null
     if ($ReportType -is [int]) {
-        $body.report_id = $ReportType
+        $reportIdStr = $ReportType.ToString()
     } elseif ($ReportType -match '^\d+$') {
-        $body.report_id = $ReportType
+        $reportIdStr = $ReportType.ToString()
     } elseif ($ReportType -match '^[a-fA-F0-9]{32}$') {
-        # Standard report ID (hex) from report_builder/standard_reports
-        $body.report_id = $ReportType.ToString()
-    } else {
-        $body.reportType = $ReportType.ToString()
+        $reportIdStr = $ReportType.ToString()
+    } elseif ($ReportType) {
+        $reportIdStr = $ReportType.ToString()
     }
 
-    try {
-        $response = Invoke-ConnectSecureRequest -Endpoint '/report_builder/create_report_job' -Method POST -Body $body
-        if (-not $response.status) { throw 'create_report_job returned status=false' }
-
-        # Extract job_id from various possible response shapes (API structure varies by ConnectSecure version)
-        $jobId = $null
+    # Company name for report header (Prepared for X) - prefer ClientName from caller, then API fetch
+    $companyName = "Company $CompanyId"
+    if (-not [string]::IsNullOrWhiteSpace($ClientName) -and $ClientName -ne "Company" -and $ClientName -ne "All Companies") {
+        $companyName = $ClientName.Trim()
+    } elseif ($CompanyId -gt 0) {
         try {
-            if ($null -ne $response.data) {
-                $d = $response.data
-                if ($null -ne $d.job_id) { $jobId = $d.job_id }
-                elseif ($null -ne $d.id) { $jobId = $d.id }
-                elseif ($null -ne $d.jobId) { $jobId = $d.jobId }
-                elseif ($d -is [string]) { $jobId = $d }
-                elseif ($d -is [int] -or $d -is [long]) { $jobId = $d.ToString() }
+            $compResp = Invoke-ConnectSecureRequest -Endpoint '/r/company/companies' -Method GET -QueryParameters @{ limit = 5000; skip = 0 }
+            $companies = @()
+            if ($compResp.data) { $companies = @($compResp.data) }
+            $match = $companies | Where-Object { $cid = $_.id -or $_.company_id -or $_.companyId; [int]$cid -eq $CompanyId } | Select-Object -First 1
+            if ($match) {
+                $companyName = ($match.name -or $match.company_name -or $match.companyName -or '').ToString().Trim()
+                if ([string]::IsNullOrWhiteSpace($companyName)) { $companyName = "Company $CompanyId" }
             }
-            if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.job_id) { $jobId = $response.job_id }
-            if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.id) { $jobId = $response.id }
-            if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.message) {
-                $msg = $response.message
-                if ($msg -is [string] -and $msg -match '^\d+$') { $jobId = $msg }
-                elseif ($null -ne $msg.job_id) { $jobId = $msg.job_id }
-            }
-        } catch { /* ignore property access errors */ }
-
-        if (-not [string]::IsNullOrWhiteSpace($jobId)) {
-            Write-CSApiLog ('Report job created: ' + $jobId) -Level Success
-            return $jobId.ToString()
-        }
-
-        # Debug: log actual response structure when job_id not found (helps diagnose API differences)
-        try {
-            $respJson = $response | ConvertTo-Json -Depth 6 -Compress
-            Write-CSApiLog ('create_report_job response (no job_id found): ' + $respJson) -Level Warning
         } catch { }
-        throw 'No job_id in response'
-    } catch {
-        Write-CSApiLog ('create_report_job: ' + $_.Exception.Message) -Level Error
-        throw 'ConnectSecure create_report_job failed. Ensure report type (id or reportType from standard_reports) is valid.'
     }
+
+    # Portal-style reportName: no spaces (e.g. AllVulnerabilitiesReport)
+    $reportNameCompact = ($ReportName -replace '\s', '')
+    if ([string]::IsNullOrWhiteSpace($reportNameCompact)) { $reportNameCompact = 'Report' }
+
+    # Build body variants - portal format FIRST (reportType=Standard, isFilter=true)
+    $bodyPortal = @{
+        reportId     = $reportIdStr
+        reportName   = $reportNameCompact
+        reportType   = 'Standard'
+        isFilter     = $true
+        fileType     = $ReportFormat
+        reportFilter = @{}
+        company_id   = $CompanyId
+        company_name = $companyName
+    }
+    foreach ($k in $AdditionalParams.Keys) { $bodyPortal[$k] = $AdditionalParams[$k] }
+
+    $bodySnake = @{ company_id = $CompanyId; report_format = $ReportFormat }
+    if ($reportIdStr -match '^[a-fA-F0-9]{32}$') {
+        $bodySnake.report_id = $reportIdStr
+    } else {
+        $bodySnake.reportType = $reportIdStr
+    }
+    $bodySnake += $AdditionalParams
+
+    $bodyCamel = @{
+        company_id = $CompanyId
+        reportId = $reportIdStr
+        reportType = $ReportFormat
+        fileType = $ReportFormat
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReportName)) { $bodyCamel.reportName = $ReportName }
+    foreach ($k in $AdditionalParams.Keys) { $bodyCamel[$k] = $AdditionalParams[$k] }
+
+    $endpoints = @('/report_builder/create_report_job', '/r/report_builder/create_report_job')
+    $bodyVariants = @($bodyPortal, $bodySnake, $bodyCamel)
+    $lastErr = $null
+
+    foreach ($ep in $endpoints) {
+        foreach ($body in $bodyVariants) {
+            try {
+                $response = Invoke-ConnectSecureRequest -Endpoint $ep -Method POST -Body $body
+                if ($response.status -eq $false -or (-not $response.status -and $null -ne $response.status)) {
+                    $msg = if ($response.message) { $response.message } else { 'status=false' }
+                    $msgStr = if ($msg -is [string]) { $msg } else { $msg | ConvertTo-Json -Compress }
+                    $lastErr = $msgStr
+                    if ($msgStr -match 'Please Contact Support') { continue }
+                    continue  # try next variant
+                }
+
+                $jobId = $null
+                try {
+                    if ($null -ne $response.data) {
+                        $d = $response.data
+                        if ($null -ne $d.job_id) { $jobId = $d.job_id }
+                        elseif ($null -ne $d.id) { $jobId = $d.id }
+                        elseif ($null -ne $d.jobId) { $jobId = $d.jobId }
+                        elseif ($d -is [string]) { $jobId = $d }
+                        elseif ($d -is [int] -or $d -is [long]) { $jobId = $d.ToString() }
+                    }
+                    if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.job_id) { $jobId = $response.job_id }
+                    if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.id) { $jobId = $response.id }
+                    if ([string]::IsNullOrWhiteSpace($jobId) -and $null -ne $response.message) {
+                        $msg = $response.message
+                        if ($msg -is [string] -and $msg -match '^[a-fA-F0-9-]{36}$') { $jobId = $msg }
+                        elseif ($msg -is [string] -and $msg -match '^\d+$') { $jobId = $msg }
+                        elseif ($null -ne $msg.job_id) { $jobId = $msg.job_id }
+                    }
+                } catch { }
+
+                if (-not [string]::IsNullOrWhiteSpace($jobId)) {
+                    Write-CSApiLog ('Report job created: ' + $jobId + ' (company_id=' + $CompanyId + ')') -Level Success
+                    return $jobId.ToString()
+                }
+            } catch {
+                $lastErr = $_.Exception.Message
+                if ($lastErr -match 'Please Contact Support') { continue }
+                throw $_
+            }
+        }
+    }
+
+    if ($lastErr -match 'Please Contact Support') {
+        Write-CSApiLog 'Report Builder creation may be disabled for API. Use Download by Job ID with a report created in the portal.' -Level Warning
+    }
+    throw 'ConnectSecure create_report_job failed. ' + (if ($lastErr) { $lastErr } else { 'Try Download by Job ID for reports created in the portal.' })
 }
 
 function Get-ConnectSecureReportJobStatus {
@@ -1743,12 +2031,14 @@ function Get-ConnectSecureReportLink {
         [int]$CompanyId = 0
     )
     $isGlob = $IsGlobal.ToString().ToLower()
+    $jobIdArray = '["' + $JobId + '"]'  # Portal sends job_id as JSON array
     $paramVariants = @(
-        @{ job_id = $JobId; isGlobal = $isGlob },
-        @{ jobId = $JobId; isGlobal = $isGlob }
+        @{ job_id = $jobIdArray; isGlobal = $isGlob },
+        @{ job_id = $JobId; isGlobal = $isGlob }
     )
     if (-not $IsGlobal -and $CompanyId -ne 0) {
-        foreach ($p in $paramVariants) { $p['company_id'] = $CompanyId }
+        $paramVariants += @{ job_id = $jobIdArray; isGlobal = $isGlob; company_id = $CompanyId }
+        $paramVariants += @{ job_id = $JobId; isGlobal = $isGlob; company_id = $CompanyId }
     }
     $endpoints = @('/report_builder/get_report_link', '/r/report_builder/get_report_link')
     $response = $null
@@ -1756,7 +2046,8 @@ function Get-ConnectSecureReportLink {
     foreach ($ep in $endpoints) {
         foreach ($qp in $paramVariants) {
             try {
-                $response = Invoke-ConnectSecureRequest -Endpoint $ep -Method GET -QueryParameters $qp -RetryCount 6
+                # RetryCount 1 - our polling loop handles retries with delay; 404 means report still generating
+                $response = Invoke-ConnectSecureRequest -Endpoint $ep -Method GET -QueryParameters $qp -RetryCount 1
                 if ($response) { break }
             } catch { $lastErr = $_; continue }
         }
@@ -1770,6 +2061,63 @@ function Get-ConnectSecureReportLink {
     if ([string]::IsNullOrWhiteSpace($url)) { $url = $response.data.link }
     if ([string]::IsNullOrWhiteSpace($url)) { throw 'No download URL in get_report_link response' }
     return $url
+}
+
+function Invoke-ConnectSecureReportDownloadByJobId {
+    <#
+    .SYNOPSIS
+    Downloads a ConnectSecure report by job ID using get_report_link.
+    Use when report creation via API fails (e.g. Please Contact Support) but you have a job ID from the portal.
+    Pre-signed R2/S3 URLs are downloaded without Authorization header (prevents 400 Bad Request).
+    .PARAMETER JobId
+    Report job ID (GUID format, e.g. from ConnectSecure portal).
+    .PARAMETER CompanyId
+    Company ID (0 for global/all companies).
+    .PARAMETER OutputPath
+    Full path for the downloaded file. If not provided, saves to OutputDir with auto-generated filename.
+    .PARAMETER OutputDir
+    Directory to save the file when OutputPath is not specified.
+    .OUTPUTS
+    Full path of the downloaded file.
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$JobId,
+        [int]$CompanyId = 0,
+        [string]$OutputPath = '',
+        [string]$OutputDir = '.'
+    )
+    $JobId = $JobId.Trim()
+    if ([string]::IsNullOrWhiteSpace($JobId)) { throw 'JobId is required' }
+
+    $downloadUrl = Get-ConnectSecureReportLink -JobId $JobId -IsGlobal ($CompanyId -eq 0) -CompanyId $CompanyId
+    if (-not $downloadUrl.StartsWith('http')) {
+        $slash = [char]47
+        $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd($slash)
+        $path = $downloadUrl.TrimStart($slash)
+        $downloadUrl = $base + '/' + $path
+    }
+
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        $ext = if ($downloadUrl -match '\.(xlsx|xls|docx|doc|pdf|zip)(?:\?|$)') { $Matches[1] } else { 'xlsx' }
+        $safeDir = [System.IO.Path]::GetFullPath($OutputDir)
+        if (-not (Test-Path $safeDir)) { New-Item -ItemType Directory -Path $safeDir -Force | Out-Null }
+        $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $fileName = 'Report-' + $JobId + '-' + $ts + '.' + $ext
+        $OutputPath = Join-Path $safeDir $fileName
+    }
+
+    # Pre-signed R2/S3 URLs authenticate via query params - do NOT send Authorization (causes 400)
+    $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
+    $headers = @{}
+    if (-not $isPresigned) {
+        $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
+        if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
+            $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
+        }
+    }
+    Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
+    Write-CSApiLog ('Downloaded report by Job ID to ' + $OutputPath) -Level Success
+    return $OutputPath
 }
 
 function Invoke-ConnectSecureReportsBatch {
@@ -1800,7 +2148,7 @@ function Invoke-ConnectSecureReportsBatch {
 
     function Update-Prog { param($m) if ($OnProgress) { & $OnProgress $m } }
 
-    # Standard reports only - try Report Builder first (asset-level: Host, IP, CVE per row), fall back to data APIs
+    # Report Builder only - no vulnerability fetch or local fallback
     $standardTypes = @('all-vulnerabilities', 'suppressed-vulnerabilities', 'external-vulnerabilities', 'executive-summary', 'pending-epss')
     $reportTypes = $Reports | ForEach-Object { $_.Type } | Select-Object -Unique
 
@@ -1811,42 +2159,130 @@ function Invoke-ConnectSecureReportsBatch {
     }
 
     $script:CSReportBuilderUnavailable = $false
-
-    # Shared vuln data: fetch only when Report Builder fails (avoids 100k+ pull when Report Builder succeeds)
-    $sharedVulnTypes = @('all-vulnerabilities', 'executive-summary', 'pending-epss')
-    $allVulns = $null
+    $script:LastReportJobId = $null
 
     $succeeded = [System.Collections.ArrayList]::new()
     $failed = [System.Collections.ArrayList]::new()
+    $companyLabel = if ($CompanyId -eq 0) { 'All Companies' } else { ('company ' + $CompanyId) }
+    $isGlobal = ($CompanyId -eq 0)
+    $pollInterval = 2
+    $maxWaitSeconds = 600
 
+    # Phase 1: Create all report jobs in parallel (all start generating on server immediately)
+    $pending = [System.Collections.ArrayList]::new()
+    Update-Prog ('Creating ' + $Reports.Count + ' report jobs for ' + $companyLabel + '...')
     foreach ($report in $Reports) {
+        if ($script:CSReportBuilderUnavailable) { break }
         $path = & $OutputPathTemplate $report
-        Update-Prog ('Generating ' + $report.Name + '...')
         try {
             $reportFormat = if ($report.Ext -eq 'docx') { 'docx' } else { 'xlsx' }
-            $usedReportBuilder = Invoke-ConnectSecureReportBuilderDownload -InternalReportType $report.Type -OutputPath $path -CompanyId $CompanyId -ReportFormat $reportFormat -OnProgress $OnProgress
-            if (-not $usedReportBuilder) {
-                # Fetch shared data only when needed (Report Builder failed)
-                if ($report.Type -in $sharedVulnTypes) {
-                    if ($null -eq $allVulns) {
-                        Update-Prog 'Fetching vulnerability data (Report Builder unavailable)...'
-                        $fetchLimit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
-                        $fetchAll = ($DebugLimit -le 0)
-                        $allVulns = Get-ConnectSecureVulnerabilities -CompanyId $CompanyId -Limit $fetchLimit -FetchAll:$fetchAll
-                        if ($null -eq $allVulns) { $allVulns = @() }
-                        Write-CSApiLog ('Fetched ' + $allVulns.Count + ' vulnerabilities for local fallback') -Level Success
-                    }
-                Invoke-LocalReportFallback -InternalReportType $report.Type -OutputPath $path -CompanyId $CompanyId -ClientName $ClientName -ScanDate $ScanDate -VulnerabilityData $allVulns -TopCount $TopCount -OnProgress $OnProgress -DebugLimit $DebugLimit
-            } else {
-                Invoke-LocalReportFallback -InternalReportType $report.Type -OutputPath $path -CompanyId $CompanyId -ClientName $ClientName -ScanDate $ScanDate -VulnerabilityData $null -TopCount $TopCount -OnProgress $OnProgress -DebugLimit $DebugLimit
+            $ext = $reportFormat
+            $reportId = Get-StandardReportIdForType -InternalReportType $report.Type -ReportFormat $ext -CompanyId $CompanyId
+            if (-not $reportId) {
+                throw ('No standard report match for ' + $report.Type)
             }
-            }
-            Write-CSApiLog ('Generated: ' + $path) -Level Success
-            $null = $succeeded.Add($report)
+            $reportName = $script:CSReportNameMap[$report.Type]
+            $jobId = New-ConnectSecureReportJob -ReportType $reportId -CompanyId $CompanyId -ReportFormat $ext -ReportName $reportName -ClientName $ClientName
+            $script:LastReportJobId = $jobId
+            $null = $pending.Add([PSCustomObject]@{ Report = $report; JobId = $jobId; Path = $path })
         } catch {
             $errText = if ($null -eq $_.Exception.Message) { 'Unknown error' } elseif ($_.Exception.Message -is [array]) { ($_.Exception.Message -join '; ') } else { [string]$_.Exception.Message }
-            Write-CSApiLog ('Report failed (' + $report.Name + '): ' + $errText) -Level Error
+            if ($errText -match 'Please Contact Support') { $script:CSReportBuilderUnavailable = $true }
+            Write-CSApiLog ('Report job creation failed (' + $report.Name + '): ' + $errText) -Level Error
             $null = $failed.Add([PSCustomObject]@{ Report = $report; Path = $path; Error = $errText })
+        }
+    }
+
+    # Phase 2: Poll all jobs and download as each becomes ready
+    if ($pending.Count -gt 0) {
+        Start-Sleep -Seconds 5
+        $start = Get-Date
+        while ($pending.Count -gt 0) {
+            $elapsed = ((Get-Date) - $start).TotalSeconds
+            if ($elapsed -ge $maxWaitSeconds) {
+                foreach ($p in $pending) {
+                    Write-CSApiLog ('Report timed out (' + $p.Report.Name + '). Job ID ' + $p.JobId + ' - use Download by Job ID when ready.') -Level Warning
+                    $null = $failed.Add([PSCustomObject]@{ Report = $p.Report; Path = $p.Path; Error = 'Timed out' })
+                }
+                $pending.Clear()
+                break
+            }
+            $stillPending = [System.Collections.ArrayList]::new()
+            foreach ($p in $pending) {
+                Update-Prog ('Waiting for reports... (' + [int]$elapsed + 's, ' + $pending.Count + ' pending)')
+                $downloadUrl = $null
+                try {
+                    $downloadUrl = Get-ConnectSecureReportLink -JobId $p.JobId -IsGlobal $isGlobal -CompanyId $CompanyId
+                } catch {
+                    if ($_.Exception.Message -match '404') { $null = $stillPending.Add($p); continue }
+                    $null = $failed.Add([PSCustomObject]@{ Report = $p.Report; Path = $p.Path; Error = $_.Exception.Message })
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($downloadUrl)) { $null = $stillPending.Add($p); continue }
+                if (-not $downloadUrl.StartsWith('http')) {
+                    $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd('/')
+                    $downloadUrl = $base + '/' + $downloadUrl.TrimStart('/')
+                }
+                $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
+                $headers = @{}
+                if (-not $isPresigned) {
+                    $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
+                    if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
+                        $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
+                    }
+                }
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $p.Path -UseBasicParsing
+                    Write-CSApiLog ('Downloaded: ' + $p.Path) -Level Success
+                    $null = $succeeded.Add($p.Report)
+                } catch {
+                    if ($_.Exception.Message -match '404') {
+                        $null = $stillPending.Add($p)
+                    } else {
+                        $null = $failed.Add([PSCustomObject]@{ Report = $p.Report; Path = $p.Path; Error = $_.Exception.Message })
+                    }
+                }
+            }
+            $pending = $stillPending
+            if ($pending.Count -gt 0) { Start-Sleep -Seconds $pollInterval }
+        }
+    }
+
+    # Post-download: generate Top X report from vulnerability XLSX (when available)
+    # Prefer All Vulnerabilities - it has the full list format (Critical/High/Medium/Low sheets) that Get-VulnerabilityData expects
+    $vulnReport = $succeeded | Where-Object { $_.Type -eq 'all-vulnerabilities' } | Select-Object -First 1
+    if (-not $vulnReport) {
+        $vulnReport = $succeeded | Where-Object { $_.Type -in @('external-vulnerabilities', 'suppressed-vulnerabilities') } | Select-Object -First 1
+    }
+    if ($null -ne $vulnReport -and $vulnReport.Ext -eq 'xlsx') {
+        $avPath = & $OutputPathTemplate $vulnReport
+        if (Test-Path -LiteralPath $avPath) {
+            Update-Prog ('Generating Top ' + $TopCount + ' Vulnerabilities Report from ' + $vulnReport.Name + '...')
+            try {
+                if ((Get-Command -Name 'Get-VulnerabilityData' -ErrorAction SilentlyContinue) -and
+                    (Get-Command -Name 'Get-Top10Vulnerabilities' -ErrorAction SilentlyContinue) -and
+                    (Get-Command -Name 'New-WordReport' -ErrorAction SilentlyContinue)) {
+                    $vulnData = Get-VulnerabilityData -ExcelPath $avPath
+                    if ($null -ne $vulnData -and $vulnData.Count -gt 0) {
+                        $top10 = Get-Top10Vulnerabilities -VulnData $vulnData -Count $TopCount
+                        $outputDir = Split-Path -Path $avPath -Parent
+                        $stem = [System.IO.Path]::GetFileNameWithoutExtension($avPath)
+                        $reportNamePart = [regex]::Escape($vulnReport.Name)
+                        $topXStem = $stem -replace (' - ' + $reportNamePart + ' - '), (' - Top ' + $TopCount + ' Vulnerabilities Report - ')
+                        $topXPath = Join-Path $outputDir ($topXStem + '.docx')
+                        New-WordReport -OutputPath $topXPath -ClientName $ClientName -ScanDate $ScanDate -Top10Data $top10 -TimeEstimates $null -IsRMITPlus $false -GeneralRecommendations @() -ReportTitle ('Top ' + $TopCount + ' Vulnerabilities Report')
+                        Write-CSApiLog ('Generated: ' + $topXPath) -Level Success
+                        $null = $succeeded.Add([PSCustomObject]@{ Type = 'top-vulnerabilities'; Name = ('Top ' + $TopCount + ' Vulnerabilities Report'); Ext = 'docx' })
+                    } else {
+                        Write-CSApiLog ('No vulnerability data found in ' + $avPath + ' - skipping Top X generation') -Level Warning
+                    }
+                } else {
+                    Write-CSApiLog 'Report generation functions not available (requires VScanMagic-GUI)' -Level Info
+                }
+            } catch {
+                $errText = if ($null -eq $_.Exception.Message) { 'Unknown error' } elseif ($_.Exception.Message -is [array]) { ($_.Exception.Message -join '; ') } else { [string]$_.Exception.Message }
+                Write-CSApiLog ('Post-download Top X generation failed: ' + $errText) -Level Warning
+            }
         }
     }
 
@@ -1916,15 +2352,15 @@ function Invoke-ConnectSecureReportDownload {
         $downloadUrl = $base + '/' + $path
     }
 
-    # Download file (use same auth headers for ConnectSecure link)
-    $bearerToken = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
-    $headers = @{
-        'Authorization' = $bearerToken
+    # Pre-signed R2/S3 URLs authenticate via query params - do NOT send Authorization (causes 400)
+    $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
+    $headers = @{}
+    if (-not $isPresigned) {
+        $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
+        if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
+            $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
+        }
     }
-    if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
-        $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
-    }
-
     Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
     Write-CSApiLog ('Downloaded report from ConnectSecure to ' + $OutputPath) -Level Success
 }
@@ -1941,66 +2377,97 @@ function Invoke-ConnectSecureReportBuilderDownload {
         [Parameter(Mandatory=$true)][string]$OutputPath,
         [int]$CompanyId = 0,
         [string]$ReportFormat = 'xlsx',
-        [int]$PollIntervalSeconds = 5,
-        [int]$MaxWaitSeconds = 420,
+        [int]$PollIntervalSeconds = 2,
+        [int]$MaxWaitSeconds = 600,
         [scriptblock]$OnProgress = $null
     )
     function Update-Prog { param($m) if ($OnProgress) { & $OnProgress $m } }
 
     if ($script:CSReportBuilderUnavailable) { return $false }
-    $reportId = $script:CSReportIdMap[$InternalReportType]
-    if (-not $reportId) { return $false }
-
     $ext = if ($ReportFormat -eq 'docx') { 'docx' } elseif ($ReportFormat -eq 'pdf') { 'pdf' } else { 'xlsx' }
+    $reportId = Get-StandardReportIdForType -InternalReportType $InternalReportType -ReportFormat $ext -CompanyId $CompanyId
+    if (-not $reportId) {
+        Write-CSApiLog ('No standard report match for ' + $InternalReportType + ' - check standard_reports API') -Level Warning
+        return $false
+    }
+    $reportName = $script:CSReportNameMap[$InternalReportType]
     try {
-        Update-Prog 'Requesting report from ConnectSecure Report Builder...'
-        $jobId = New-ConnectSecureReportJob -ReportType $reportId -CompanyId $CompanyId -ReportFormat $ext
+        $companyLabel = if ($CompanyId -eq 0) { 'All Companies' } else { ('company ' + $CompanyId) }
+        Update-Prog ('Creating report for ' + $companyLabel + '...')
+        $jobId = New-ConnectSecureReportJob -ReportType $reportId -CompanyId $CompanyId -ReportFormat $ext -ReportName $reportName
         $start = Get-Date
         $isGlobal = ($CompanyId -eq 0)
 
-        # Poll get_report_link (404 may mean report not ready yet for large datasets)
-        Start-Sleep -Seconds 15
-        $downloadUrl = $null
+        # Poll get_report_link and validate via download - URL can 404 until report is actually ready
+        $script:LastReportJobId = $jobId
+        Update-Prog 'Polling for download link...'
+        Start-Sleep -Seconds 5
         $retries = 0
-        $maxRetries = 30
+        $maxRetriesByTime = [Math]::Max(60, [int]($MaxWaitSeconds / 5))
         while ($true) {
             $elapsed = ((Get-Date) - $start).TotalSeconds
             if ($elapsed -ge $MaxWaitSeconds) {
-                Write-CSApiLog ('Report job timed out after ' + $MaxWaitSeconds + ' seconds') -Level Warning
+                Write-CSApiLog ('Report job timed out after ' + $MaxWaitSeconds + 's. Job ID ' + $jobId + ' - use Download by Job ID when ready.') -Level Warning
                 return $false
             }
-            Update-Prog ('Waiting for report... (' + [int]$elapsed + 's)')
+            Update-Prog ('Waiting for report to be ready... (' + [int]$elapsed + 's)')
+            $downloadUrl = $null
             try {
                 $downloadUrl = Get-ConnectSecureReportLink -JobId $jobId -IsGlobal $isGlobal -CompanyId $CompanyId
-                if (-not [string]::IsNullOrWhiteSpace($downloadUrl)) { break }
             } catch {
                 $retries++
-                if ($retries -ge $maxRetries) { throw }
-                $delay = [Math]::Min(5 + ($retries * 3), 30)
-                Write-CSApiLog ('Report not ready, retrying in ' + $delay + 's (' + $retries + '/' + $maxRetries + ')...') -Level Warning
+                $delay = [Math]::Min(5 + ($retries * 2), 20)
+                $errMsg = $_.Exception.Message
+                if ($errMsg -match '404') {
+                    Write-CSApiLog ('Report still generating (404) - retry ' + $retries + '/' + $maxRetriesByTime + ', waiting ' + $delay + 's...') -Level Info
+                } else {
+                    Write-CSApiLog ('Report not ready - retry ' + $retries + '/' + $maxRetriesByTime + ', waiting ' + $delay + 's...') -Level Warning
+                }
+                if ($retries -ge $maxRetriesByTime) { throw }
                 Start-Sleep -Seconds $delay
+                Start-Sleep -Seconds $PollIntervalSeconds
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+                Start-Sleep -Seconds $PollIntervalSeconds
+                continue
+            }
+            if (-not $downloadUrl.StartsWith('http')) {
+                $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd('/')
+                $downloadUrl = $base + '/' + $downloadUrl.TrimStart('/')
+            }
+            # Try download - if 404, URL is a placeholder, treat as not ready and keep polling
+            $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
+            $headers = @{}
+            if (-not $isPresigned) {
+                $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
+                if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
+                    $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
+                }
+            }
+            try {
+                Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
+                Write-CSApiLog ('Report Builder: Downloaded asset-level report to ' + $OutputPath) -Level Success
+                return $true
+            } catch {
+                $dlErr = $_.Exception.Message
+                if ($dlErr -match '404') {
+                    Write-CSApiLog ('Download 404 - URL not ready yet, continuing to poll...') -Level Info
+                    $retries++
+                    if ($retries -ge $maxRetriesByTime) { throw }
+                    Start-Sleep -Seconds 5
+                } else {
+                    throw
+                }
             }
             Start-Sleep -Seconds $PollIntervalSeconds
         }
-        if (-not $downloadUrl.StartsWith('http')) {
-            $slash = [char]47
-            $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd($slash)
-            $path = $downloadUrl.TrimStart($slash)
-            $downloadUrl = $base + '/' + $path
-        }
-        Update-Prog 'Downloading report...'
-        $bearerToken = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
-        $headers = @{ 'Authorization' = $bearerToken }
-        if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
-            $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
-        }
-        Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
-        Write-CSApiLog ('Report Builder: Downloaded asset-level report to ' + $OutputPath) -Level Success
-        return $true
     } catch {
         $msg = $_.Exception.Message
-        if ($msg -match '404|Not Found|report builder') { $script:CSReportBuilderUnavailable = $true }
-        Write-CSApiLog ('Report Builder failed (' + $InternalReportType + '): ' + $msg) -Level Warning
+        # Only set when create_report_job returns Please Contact Support - 404 on get_report_link means report still generating
+        if ($msg -match 'Please Contact Support') { $script:CSReportBuilderUnavailable = $true }
+        $jobHint = if ($script:LastReportJobId) { ' Job ID ' + $script:LastReportJobId + ' - use Download by Job ID when ready.' } else { '' }
+        Write-CSApiLog ('Report Builder failed (' + $InternalReportType + '): ' + $msg + $jobHint) -Level Warning
         return $false
     }
 }
@@ -2015,6 +2482,13 @@ $script:CSReportIdMap = @{
     'external-vulnerabilities' = '01beb6b930744e11b690bb9dc25118fb'
     'executive-summary' = '1cd4f45884264d15bee4173dc58b6a57'
     'pending-epss' = '85d4913c0dbc4fc782b858f0d27dd180'
+}
+$script:CSReportNameMap = @{
+    'all-vulnerabilities' = 'All Vulnerabilities Report'
+    'suppressed-vulnerabilities' = 'Suppressed Vulnerabilities'
+    'external-vulnerabilities' = 'External Scan'
+    'executive-summary' = 'Executive Summary Report'
+    'pending-epss' = 'Pending Remediation EPSS Score Reports'
 }
 
 # Report type mapping: our internal type -> possible ConnectSecure report_type/report_id values to try
