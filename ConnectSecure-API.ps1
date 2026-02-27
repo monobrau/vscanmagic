@@ -2148,7 +2148,8 @@ function Invoke-ConnectSecureReportsBatch {
         [bool]$IncludeMedium = $true,
         [bool]$IncludeLow = $true,
         [scriptblock]$OnProgress = $null,
-        [int]$DebugLimit = 0
+        [int]$DebugLimit = 0,
+        [switch]$SkipPostDownloadTopX = $false
     )
 
     function Update-Prog { param($m) if ($OnProgress) { & $OnProgress $m } }
@@ -2254,7 +2255,8 @@ function Invoke-ConnectSecureReportsBatch {
     }
 
     # Post-download: generate Top X report from vulnerability XLSX (when available)
-    # Prefer All Vulnerabilities - it has the full list format (Critical/High/Medium/Low sheets) that Get-VulnerabilityData expects
+    # Skip when caller will process and generate their own (e.g. GUI download+process flow)
+    if (-not $SkipPostDownloadTopX) {
     $vulnReport = $succeeded | Where-Object { $_.Type -eq 'all-vulnerabilities' } | Select-Object -First 1
     if (-not $vulnReport) {
         $vulnReport = $succeeded | Where-Object { $_.Type -in @('external-vulnerabilities', 'suppressed-vulnerabilities') } | Select-Object -First 1
@@ -2291,6 +2293,7 @@ function Invoke-ConnectSecureReportsBatch {
                 Write-CSApiLog ('Post-download Top X generation failed: ' + $errText) -Level Warning
             }
         }
+    }
     }
 
     return @{ Succeeded = [array]$succeeded; Failed = [array]$failed }
