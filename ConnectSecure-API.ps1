@@ -2142,6 +2142,11 @@ function Invoke-ConnectSecureReportsBatch {
         [string]$ClientName = 'Client',
         [string]$ScanDate = "",
         [int]$TopCount = 10,
+        [double]$MinEPSS = 0,
+        [bool]$IncludeCritical = $true,
+        [bool]$IncludeHigh = $true,
+        [bool]$IncludeMedium = $true,
+        [bool]$IncludeLow = $true,
         [scriptblock]$OnProgress = $null,
         [int]$DebugLimit = 0
     )
@@ -2264,7 +2269,9 @@ function Invoke-ConnectSecureReportsBatch {
                     (Get-Command -Name 'New-WordReport' -ErrorAction SilentlyContinue)) {
                     $vulnData = Get-VulnerabilityData -ExcelPath $avPath
                     if ($null -ne $vulnData -and $vulnData.Count -gt 0) {
-                        $top10 = Get-Top10Vulnerabilities -VulnData $vulnData -Count $TopCount
+                        $top10 = Get-Top10Vulnerabilities -VulnData $vulnData -Count $TopCount `
+                            -MinEPSS $MinEPSS -IncludeCritical $IncludeCritical -IncludeHigh $IncludeHigh `
+                            -IncludeMedium $IncludeMedium -IncludeLow $IncludeLow
                         $outputDir = Split-Path -Path $avPath -Parent
                         $stem = [System.IO.Path]::GetFileNameWithoutExtension($avPath)
                         $reportNamePart = [regex]::Escape($vulnReport.Name)

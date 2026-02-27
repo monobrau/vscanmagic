@@ -5532,29 +5532,451 @@ function Show-VScanMagicGUI {
     # Load general recommendations from disk
     Load-GeneralRecommendations
 
+    # Load ConnectSecure API (used by Download section)
+    $scriptDir = $script:ScriptDirectory
+    if ([string]::IsNullOrWhiteSpace($scriptDir)) { $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
+    $connectSecureScriptPath = Join-Path $scriptDir "ConnectSecure-API.ps1"
+    if (Test-Path $connectSecureScriptPath) {
+        try { . $connectSecureScriptPath } catch { Write-Log "Could not load ConnectSecure API: $($_.Exception.Message)" -Level Warning }
+    }
+
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(710, 900)
+    $form.Size = New-Object System.Drawing.Size(750, 950)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
+    $form.AutoScroll = $true
+    $form.AutoScrollMinSize = New-Object System.Drawing.Size(720, 1700)
 
-    # --- Input File Section ---
+    # --- 1. Report Filters (shared) ---
+    $groupBoxTopTenFilters = New-Object System.Windows.Forms.GroupBox
+    $groupBoxTopTenFilters.Location = New-Object System.Drawing.Point(20, 20)
+    $groupBoxTopTenFilters.Size = New-Object System.Drawing.Size(680, 120)
+    $groupBoxTopTenFilters.Text = "Report Filters"
+    $form.Controls.Add($groupBoxTopTenFilters)
+
+    $labelMinEPSS = New-Object System.Windows.Forms.Label
+    $labelMinEPSS.Location = New-Object System.Drawing.Point(20, 25)
+    $labelMinEPSS.Size = New-Object System.Drawing.Size(150, 20)
+    $labelMinEPSS.Text = "Minimum EPSS Score:"
+    $groupBoxTopTenFilters.Controls.Add($labelMinEPSS)
+
+    $numericUpDownMinEPSS = New-Object System.Windows.Forms.NumericUpDown
+    $numericUpDownMinEPSS.Location = New-Object System.Drawing.Point(170, 23)
+    $numericUpDownMinEPSS.Size = New-Object System.Drawing.Size(80, 20)
+    $numericUpDownMinEPSS.Minimum = 0
+    $numericUpDownMinEPSS.Maximum = 1
+    $numericUpDownMinEPSS.DecimalPlaces = 3
+    $numericUpDownMinEPSS.Increment = 0.001
+    $numericUpDownMinEPSS.Value = 0
+    $groupBoxTopTenFilters.Controls.Add($numericUpDownMinEPSS)
+
+    $labelSeverity = New-Object System.Windows.Forms.Label
+    $labelSeverity.Location = New-Object System.Drawing.Point(20, 55)
+    $labelSeverity.Size = New-Object System.Drawing.Size(100, 20)
+    $labelSeverity.Text = "Include Severities:"
+    $groupBoxTopTenFilters.Controls.Add($labelSeverity)
+
+    $checkBoxSeverityCritical = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityCritical.Location = New-Object System.Drawing.Point(120, 55)
+    $checkBoxSeverityCritical.Size = New-Object System.Drawing.Size(70, 20)
+    $checkBoxSeverityCritical.Text = "Critical"
+    $checkBoxSeverityCritical.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityCritical)
+
+    $checkBoxSeverityHigh = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityHigh.Location = New-Object System.Drawing.Point(200, 55)
+    $checkBoxSeverityHigh.Size = New-Object System.Drawing.Size(60, 20)
+    $checkBoxSeverityHigh.Text = "High"
+    $checkBoxSeverityHigh.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityHigh)
+
+    $checkBoxSeverityMedium = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityMedium.Location = New-Object System.Drawing.Point(270, 55)
+    $checkBoxSeverityMedium.Size = New-Object System.Drawing.Size(70, 20)
+    $checkBoxSeverityMedium.Text = "Medium"
+    $checkBoxSeverityMedium.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityMedium)
+
+    $checkBoxSeverityLow = New-Object System.Windows.Forms.CheckBox
+    $checkBoxSeverityLow.Location = New-Object System.Drawing.Point(350, 55)
+    $checkBoxSeverityLow.Size = New-Object System.Drawing.Size(50, 20)
+    $checkBoxSeverityLow.Text = "Low"
+    $checkBoxSeverityLow.Checked = $true
+    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityLow)
+
+    $labelVulnCount = New-Object System.Windows.Forms.Label
+    $labelVulnCount.Location = New-Object System.Drawing.Point(20, 85)
+    $labelVulnCount.Size = New-Object System.Drawing.Size(150, 20)
+    $labelVulnCount.Text = "Top N:"
+    $groupBoxTopTenFilters.Controls.Add($labelVulnCount)
+
+    $comboBoxVulnCount = New-Object System.Windows.Forms.ComboBox
+    $comboBoxVulnCount.Location = New-Object System.Drawing.Point(170, 83)
+    $comboBoxVulnCount.Size = New-Object System.Drawing.Size(100, 20)
+    $comboBoxVulnCount.DropDownStyle = 'DropDownList'
+    $comboBoxVulnCount.Items.AddRange(@("10", "20", "50", "100", "All"))
+    $comboBoxVulnCount.SelectedIndex = 0
+    $groupBoxTopTenFilters.Controls.Add($comboBoxVulnCount)
+
+    # --- 2. Environment Verification (placeholder) ---
+    $groupBoxEnvVerify = New-Object System.Windows.Forms.GroupBox
+    $groupBoxEnvVerify.Location = New-Object System.Drawing.Point(20, 155)
+    $groupBoxEnvVerify.Size = New-Object System.Drawing.Size(680, 60)
+    $groupBoxEnvVerify.Text = "Environment Verification"
+    $form.Controls.Add($groupBoxEnvVerify)
+
+    $lblEnvVerifyPlaceholder = New-Object System.Windows.Forms.Label
+    $lblEnvVerifyPlaceholder.Location = New-Object System.Drawing.Point(20, 25)
+    $lblEnvVerifyPlaceholder.Size = New-Object System.Drawing.Size(500, 20)
+    $lblEnvVerifyPlaceholder.Text = "External IPs | Agent counts | Probes | Firewall (coming soon)"
+    $lblEnvVerifyPlaceholder.ForeColor = [System.Drawing.Color]::Gray
+    $groupBoxEnvVerify.Controls.Add($lblEnvVerifyPlaceholder)
+
+    # --- 3. Output Options (shared) ---
+    $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
+    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 230)
+    $groupBoxOutput.Size = New-Object System.Drawing.Size(680, 160)
+    $groupBoxOutput.Text = "Output Options"
+    $form.Controls.Add($groupBoxOutput)
+
+    $checkBoxExcel = New-Object System.Windows.Forms.CheckBox
+    $checkBoxExcel.Location = New-Object System.Drawing.Point(20, 25)
+    $checkBoxExcel.Size = New-Object System.Drawing.Size(250, 20)
+    $checkBoxExcel.Text = "Generate Pending EPSS Report (Excel)"
+    $checkBoxExcel.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxExcel)
+
+    $checkBoxWord = New-Object System.Windows.Forms.CheckBox
+    $checkBoxWord.Location = New-Object System.Drawing.Point(20, 50)
+    $checkBoxWord.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxWord.Text = "Generate Top Vulnerabilities Report (Word)"
+    $checkBoxWord.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxWord)
+
+    $checkBoxEmailTemplate = New-Object System.Windows.Forms.CheckBox
+    $checkBoxEmailTemplate.Location = New-Object System.Drawing.Point(20, 75)
+    $checkBoxEmailTemplate.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxEmailTemplate.Text = "Generate Email Template (Text)"
+    $checkBoxEmailTemplate.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxEmailTemplate)
+
+    $checkBoxTicketInstructions = New-Object System.Windows.Forms.CheckBox
+    $checkBoxTicketInstructions.Location = New-Object System.Drawing.Point(20, 100)
+    $checkBoxTicketInstructions.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxTicketInstructions.Text = "Generate Ticket Instructions (Text)"
+    $checkBoxTicketInstructions.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxTicketInstructions)
+
+    $checkBoxTimeEstimate = New-Object System.Windows.Forms.CheckBox
+    $checkBoxTimeEstimate.Location = New-Object System.Drawing.Point(20, 125)
+    $checkBoxTimeEstimate.Size = New-Object System.Drawing.Size(300, 20)
+    $checkBoxTimeEstimate.Text = "Generate Time Estimate (Text)"
+    $checkBoxTimeEstimate.Checked = $true
+    $groupBoxOutput.Controls.Add($checkBoxTimeEstimate)
+
+    # --- 4. Download from ConnectSecure (inline) ---
+    $groupBoxDownload = New-Object System.Windows.Forms.GroupBox
+    $groupBoxDownload.Location = New-Object System.Drawing.Point(20, 405)
+    $groupBoxDownload.Size = New-Object System.Drawing.Size(680, 820)
+    $groupBoxDownload.Text = "1. Download from ConnectSecure"
+    $form.Controls.Add($groupBoxDownload)
+
+    $dlgY = 25
+    $txtBaseUrl = New-Object System.Windows.Forms.TextBox
+    $txtBaseUrl.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $txtBaseUrl.Size = New-Object System.Drawing.Size(620, 20)
+    $txtBaseUrl.Text = "https://pod104.myconnectsecure.com"
+    $groupBoxDownload.Controls.Add($txtBaseUrl)
+    $lblBaseUrl = New-Object System.Windows.Forms.Label
+    $lblBaseUrl.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblBaseUrl.Size = New-Object System.Drawing.Size(200, 20)
+    $lblBaseUrl.Text = "Base URL:"
+    $groupBoxDownload.Controls.Add($lblBaseUrl)
+    $dlgY += 45
+
+    $lblTenant = New-Object System.Windows.Forms.Label
+    $lblTenant.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblTenant.Size = New-Object System.Drawing.Size(100, 20)
+    $lblTenant.Text = "Tenant:"
+    $groupBoxDownload.Controls.Add($lblTenant)
+    $txtTenant = New-Object System.Windows.Forms.TextBox
+    $txtTenant.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $txtTenant.Size = New-Object System.Drawing.Size(280, 20)
+    $txtTenant.Text = "river-run"
+    $groupBoxDownload.Controls.Add($txtTenant)
+    $dlgY += 35
+
+    $lblClientId = New-Object System.Windows.Forms.Label
+    $lblClientId.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblClientId.Size = New-Object System.Drawing.Size(100, 20)
+    $lblClientId.Text = "Client ID:"
+    $groupBoxDownload.Controls.Add($lblClientId)
+    $txtClientId = New-Object System.Windows.Forms.TextBox
+    $txtClientId.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $txtClientId.Size = New-Object System.Drawing.Size(280, 20)
+    $groupBoxDownload.Controls.Add($txtClientId)
+    $dlgY += 35
+
+    $lblClientSecret = New-Object System.Windows.Forms.Label
+    $lblClientSecret.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblClientSecret.Size = New-Object System.Drawing.Size(100, 20)
+    $lblClientSecret.Text = "Client Secret:"
+    $groupBoxDownload.Controls.Add($lblClientSecret)
+    $txtClientSecret = New-Object System.Windows.Forms.TextBox
+    $txtClientSecret.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $txtClientSecret.Size = New-Object System.Drawing.Size(280, 20)
+    $txtClientSecret.PasswordChar = '*'
+    $groupBoxDownload.Controls.Add($txtClientSecret)
+    $dlgY += 35
+
+    $lblCompany = New-Object System.Windows.Forms.Label
+    $lblCompany.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblCompany.Size = New-Object System.Drawing.Size(100, 20)
+    $lblCompany.Text = "Company:"
+    $groupBoxDownload.Controls.Add($lblCompany)
+    $comboCompany = New-Object System.Windows.Forms.ComboBox
+    $comboCompany.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $comboCompany.Size = New-Object System.Drawing.Size(400, 20)
+    $comboCompany.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $comboCompany.DisplayMember = "DisplayName"
+    $comboCompany.ValueMember = "Id"
+    $groupBoxDownload.Controls.Add($comboCompany)
+    $dlgY += 45
+
+    $btnRefreshCompanies = New-Object System.Windows.Forms.Button
+    $btnRefreshCompanies.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $btnRefreshCompanies.Size = New-Object System.Drawing.Size(100, 25)
+    $btnRefreshCompanies.Text = "Refresh List"
+    $btnRefreshCompanies.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnRefreshCompanies.ForeColor = [System.Drawing.Color]::White
+    $btnRefreshCompanies.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnRefreshCompanies.FlatAppearance.BorderSize = 0
+    $groupBoxDownload.Controls.Add($btnRefreshCompanies)
+    $dlgY += 35
+
+    $chkSaveCredentials = New-Object System.Windows.Forms.CheckBox
+    $chkSaveCredentials.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkSaveCredentials.Size = New-Object System.Drawing.Size(400, 20)
+    $chkSaveCredentials.Text = "Auto-save credentials when generating reports"
+    $chkSaveCredentials.Checked = $false
+    $groupBoxDownload.Controls.Add($chkSaveCredentials)
+    $dlgY += 30
+
+    $lblScanDateDlg = New-Object System.Windows.Forms.Label
+    $lblScanDateDlg.Location = New-Object System.Drawing.Point(20, ($dlgY - 20))
+    $lblScanDateDlg.Size = New-Object System.Drawing.Size(100, 20)
+    $lblScanDateDlg.Text = "Scan Date:"
+    $groupBoxDownload.Controls.Add($lblScanDateDlg)
+    $datePickerDownloadScanDate = New-Object System.Windows.Forms.DateTimePicker
+    $datePickerDownloadScanDate.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $datePickerDownloadScanDate.Size = New-Object System.Drawing.Size(200, 20)
+    $datePickerDownloadScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
+    $datePickerDownloadScanDate.Value = Get-Date
+    $groupBoxDownload.Controls.Add($datePickerDownloadScanDate)
+    $dlgY += 55
+
+    $chkAllVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkAllVulnerabilities.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkAllVulnerabilities.Size = New-Object System.Drawing.Size(320, 20)
+    $chkAllVulnerabilities.Text = "All Vulnerabilities Report (XLSX)"
+    $chkAllVulnerabilities.Checked = $true
+    $groupBoxDownload.Controls.Add($chkAllVulnerabilities)
+    $dlgY += 25
+    $chkSuppressedVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkSuppressedVulnerabilities.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkSuppressedVulnerabilities.Size = New-Object System.Drawing.Size(320, 20)
+    $chkSuppressedVulnerabilities.Text = "Suppressed Vulnerabilities (XLSX)"
+    $chkSuppressedVulnerabilities.Checked = $true
+    $groupBoxDownload.Controls.Add($chkSuppressedVulnerabilities)
+    $dlgY += 25
+    $chkExternalVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkExternalVulnerabilities.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkExternalVulnerabilities.Size = New-Object System.Drawing.Size(320, 20)
+    $chkExternalVulnerabilities.Text = "External Scan (XLSX)"
+    $chkExternalVulnerabilities.Checked = $true
+    $groupBoxDownload.Controls.Add($chkExternalVulnerabilities)
+    $dlgY += 25
+    $chkExecutiveSummary = New-Object System.Windows.Forms.CheckBox
+    $chkExecutiveSummary.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkExecutiveSummary.Size = New-Object System.Drawing.Size(320, 20)
+    $chkExecutiveSummary.Text = "Executive Summary Report (DOCX)"
+    $chkExecutiveSummary.Checked = $true
+    $groupBoxDownload.Controls.Add($chkExecutiveSummary)
+    $dlgY += 25
+    $chkPendingEPSS = New-Object System.Windows.Forms.CheckBox
+    $chkPendingEPSS.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $chkPendingEPSS.Size = New-Object System.Drawing.Size(320, 20)
+    $chkPendingEPSS.Text = "Pending Remediation EPSS Score Reports (XLSX)"
+    $chkPendingEPSS.Checked = $true
+    $groupBoxDownload.Controls.Add($chkPendingEPSS)
+    $dlgY += 30
+
+    $lblDownloadProgress = New-Object System.Windows.Forms.Label
+    $lblDownloadProgress.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $lblDownloadProgress.Size = New-Object System.Drawing.Size(620, 20)
+    $lblDownloadProgress.Text = ""
+    $lblDownloadProgress.ForeColor = [System.Drawing.Color]::Blue
+    $groupBoxDownload.Controls.Add($lblDownloadProgress)
+    $dlgY += 35
+
+    $btnDownloadGenerate = New-Object System.Windows.Forms.Button
+    $btnDownloadGenerate.Location = New-Object System.Drawing.Point(20, $dlgY)
+    $btnDownloadGenerate.Size = New-Object System.Drawing.Size(150, 30)
+    $btnDownloadGenerate.Text = "Download Reports"
+    $btnDownloadGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)
+    $btnDownloadGenerate.ForeColor = [System.Drawing.Color]::White
+    $btnDownloadGenerate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadGenerate.FlatAppearance.BorderSize = 0
+    $groupBoxDownload.Controls.Add($btnDownloadGenerate)
+
+    # Initialize comboCompany with All Companies
+    $comboCompany.Items.Clear()
+    $comboCompany.Items.Add([PSCustomObject]@{ Id = 0; DisplayName = "All Companies" }) | Out-Null
+    $savedCreds = Load-ConnectSecureCredentials
+    if ($savedCreds) {
+        $txtBaseUrl.Text = $savedCreds.BaseUrl
+        $txtTenant.Text = $savedCreds.TenantName
+        $txtClientId.Text = $savedCreds.ClientId
+        $txtClientSecret.Text = $savedCreds.ClientSecret
+        $cached = Load-ConnectSecureCompaniesCache -BaseUrl $savedCreds.BaseUrl -TenantName $savedCreds.TenantName
+        if ($cached) { foreach ($c in ($cached | Sort-Object { $_.DisplayName })) { $comboCompany.Items.Add([PSCustomObject]@{ Id = $c.Id; DisplayName = $c.DisplayName }) | Out-Null } }
+        foreach ($item in $comboCompany.Items) { if ($item.Id -eq $savedCreds.CompanyId) { $comboCompany.SelectedItem = $item; break } }
+        if ($comboCompany.SelectedIndex -lt 0 -and $comboCompany.Items.Count -gt 0) { $comboCompany.SelectedIndex = 0 }
+        $chkSaveCredentials.Checked = $true
+    }
+    if ($comboCompany.SelectedIndex -lt 0 -and $comboCompany.Items.Count -gt 0) { $comboCompany.SelectedIndex = 0 }
+
+    $btnRefreshCompanies.Add_Click({
+        $btnRefreshCompanies.Enabled = $false
+        $btnRefreshCompanies.Text = "Loading..."
+        $form.Refresh()
+        try {
+            if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Please fill in all ConnectSecure API credentials first.", "Credentials Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+            if (-not $connected) {
+                [System.Windows.Forms.MessageBox]::Show("Failed to authenticate.", "Authentication Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                return
+            }
+            $companies = Get-ConnectSecureCompanies -FetchAll
+            $comboCompany.Items.Clear()
+            $comboCompany.Items.Add([PSCustomObject]@{ Id = 0; DisplayName = "All Companies" }) | Out-Null
+            $toCache = [System.Collections.ArrayList]::new()
+            $idx = 1
+            foreach ($company in $companies) {
+                $info = Get-ConnectSecureCompanyDisplayInfo -Company $company
+                $idStr = if ($null -ne $info.Id -and $info.Id -ne "") { $info.Id.ToString() } else { $null }
+                $companyName = if ([string]::IsNullOrWhiteSpace($info.Name)) { $null } else { $info.Name }
+                $displayName = if ($companyName) { if ($idStr) { "$companyName (ID: $idStr)" } else { $companyName } } elseif ($idStr) { "Company (ID: $idStr)" } else { "Company $idx" }
+                $opt = [PSCustomObject]@{ Id = $info.Id; DisplayName = $displayName }
+                [void]$toCache.Add($opt)
+                $idx++
+            }
+            foreach ($o in ($toCache | Sort-Object { $_.DisplayName })) { $comboCompany.Items.Add($o) | Out-Null }
+            Save-ConnectSecureCompaniesCache -BaseUrl $txtBaseUrl.Text -TenantName ($txtTenant.Text.Trim()) -Companies @($toCache)
+            if ($comboCompany.Items.Count -gt 0) { $comboCompany.SelectedIndex = 0 }
+            [System.Windows.Forms.MessageBox]::Show("Loaded $($companies.Count) companies.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
+            $btnRefreshCompanies.Enabled = $true
+            $btnRefreshCompanies.Text = "Refresh List"
+        }
+    })
+
+    $btnDownloadGenerate.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+            [System.Windows.Forms.MessageBox]::Show("Please fill in all ConnectSecure API credentials.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        if (-not ($chkPendingEPSS.Checked -or $chkExecutiveSummary.Checked -or $chkAllVulnerabilities.Checked -or $chkExternalVulnerabilities.Checked -or $chkSuppressedVulnerabilities.Checked)) {
+            [System.Windows.Forms.MessageBox]::Show("Please select at least one report to generate.", "Validation Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        $selectedCompanyId = 0
+        $clientName = "All Companies"
+        if ($comboCompany.SelectedItem) {
+            $selectedCompanyId = $comboCompany.SelectedItem.Id
+            $dn = $comboCompany.SelectedItem.DisplayName
+            if ($dn -and $dn -ne "All Companies") {
+                $clientName = ($dn -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
+                if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $dn }
+            }
+        }
+        if ($chkSaveCredentials.Checked) { Save-ConnectSecureCredentials -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text -CompanyId $selectedCompanyId }
+        $saveDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $saveDialog.Description = "Select folder to save reports"
+        $saveDialog.ShowNewFolderButton = $true
+        if ($saveDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+        $downloadFolder = $saveDialog.SelectedPath
+        $btnDownloadGenerate.Enabled = $false
+        $lblDownloadProgress.Text = "Connecting..."
+        $form.Refresh()
+        try {
+            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+            if (-not $connected) {
+                [System.Windows.Forms.MessageBox]::Show("Failed to authenticate.", "Authentication Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                return
+            }
+            $scanDate = $datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")
+            $reports = @()
+            if ($chkAllVulnerabilities.Checked) { $reports += @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" } }
+            if ($chkSuppressedVulnerabilities.Checked) { $reports += @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" } }
+            if ($chkExternalVulnerabilities.Checked) { $reports += @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" } }
+            if ($chkExecutiveSummary.Checked) { $reports += @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" } }
+            if ($chkPendingEPSS.Checked) { $reports += @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" } }
+            $topCount = 10
+            $sel = $comboBoxVulnCount.SelectedItem
+            if ($sel) {
+                if ($sel -eq "All") { $topCount = 500 } else { $topCount = [int]$sel }
+            }
+            $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+            $outputPathScript = { param($r) Join-Path $downloadFolder "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+            $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $selectedCompanyId -ClientName $clientName -ScanDate $scanDate -TopCount $topCount -MinEPSS ([double]$numericUpDownMinEPSS.Value) -IncludeCritical $checkBoxSeverityCritical.Checked -IncludeHigh $checkBoxSeverityHigh.Checked -IncludeMedium $checkBoxSeverityMedium.Checked -IncludeLow $checkBoxSeverityLow.Checked -OnProgress { param($m) $lblDownloadProgress.Text = $m; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
+            $lblDownloadProgress.Text = "Complete! Generated $($batchResult.Succeeded.Count) of $($reports.Count) reports."
+            foreach ($report in $batchResult.Succeeded) { Write-Log "Generated: $(Join-Path $downloadFolder "$clientName - $($report.Name) - $timestamp.$($report.Ext)")" -Level Success }
+            if ($batchResult.Succeeded.Count -gt 0) {
+                if ([System.Windows.Forms.MessageBox]::Show("Successfully generated $($batchResult.Succeeded.Count) report(s).`n`nOpen download folder?", "Reports Generated", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information) -eq [System.Windows.Forms.DialogResult]::Yes) { Start-Process $downloadFolder }
+            }
+            if ($batchResult.Failed.Count -gt 0) {
+                $errDetail = ($batchResult.Failed | ForEach-Object { $_.Report.Name + ': ' + $_.Error }) -join "`n"
+                [System.Windows.Forms.MessageBox]::Show("$($batchResult.Failed.Count) report(s) failed.`n`n$errDetail", "Some Reports Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            }
+        } catch {
+            $lblDownloadProgress.Text = "Error: $($_.Exception.Message)"
+            Write-Log "Error: $($_.Exception.Message)" -Level Error
+            [System.Windows.Forms.MessageBox]::Show("Error: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        } finally {
+            $btnDownloadGenerate.Enabled = $true
+        }
+    })
+
+    # --- 5. Process from file ---
+    $groupBoxManual = New-Object System.Windows.Forms.GroupBox
+    $groupBoxManual.Location = New-Object System.Drawing.Point(20, 1240)
+    $groupBoxManual.Size = New-Object System.Drawing.Size(680, 180)
+    $groupBoxManual.Text = "2. Process from file"
+    $form.Controls.Add($groupBoxManual)
+
     $labelInputFile = New-Object System.Windows.Forms.Label
     $labelInputFile.Location = New-Object System.Drawing.Point(20, 15)
     $labelInputFile.Size = New-Object System.Drawing.Size(200, 20)
     $labelInputFile.Text = "Pending EPSS Report (XLSX):"
-    $form.Controls.Add($labelInputFile)
+    $groupBoxManual.Controls.Add($labelInputFile)
 
     $textBoxInputFile = New-Object System.Windows.Forms.TextBox
     $textBoxInputFile.Location = New-Object System.Drawing.Point(20, 40)
-    $textBoxInputFile.Size = New-Object System.Drawing.Size(570, 20)
+    $textBoxInputFile.Size = New-Object System.Drawing.Size(550, 20)
     $textBoxInputFile.ReadOnly = $true
-    $form.Controls.Add($textBoxInputFile)
+    $groupBoxManual.Controls.Add($textBoxInputFile)
 
     $buttonBrowseInput = New-Object System.Windows.Forms.Button
-    $buttonBrowseInput.Location = New-Object System.Drawing.Point(600, 38)
+    $buttonBrowseInput.Location = New-Object System.Drawing.Point(580, 38)
     $buttonBrowseInput.Size = New-Object System.Drawing.Size(80, 25)
     $buttonBrowseInput.Text = "Browse..."
     $buttonBrowseInput.Add_Click({
@@ -5567,7 +5989,7 @@ function Show-VScanMagicGUI {
 
             # Automatically set output directory to input file's directory
             $inputDirectory = [System.IO.Path]::GetDirectoryName($openFileDialog.FileName)
-            $textBoxOutputDir.Text = $inputDirectory
+            if ($textBoxOutputDir) { $textBoxOutputDir.Text = $inputDirectory }
 
             # Extract company name from filename
             # Try multiple patterns to detect company name
@@ -5618,32 +6040,32 @@ function Show-VScanMagicGUI {
             }
         }
     })
-    $form.Controls.Add($buttonBrowseInput)
+    $groupBoxManual.Controls.Add($buttonBrowseInput)
 
     # --- Client Name ---
     $labelClientName = New-Object System.Windows.Forms.Label
     $labelClientName.Location = New-Object System.Drawing.Point(20, 75)
     $labelClientName.Size = New-Object System.Drawing.Size(150, 20)
     $labelClientName.Text = "Client Name:"
-    $form.Controls.Add($labelClientName)
+    $groupBoxManual.Controls.Add($labelClientName)
 
     $textBoxClientName = New-Object System.Windows.Forms.TextBox
     $textBoxClientName.Location = New-Object System.Drawing.Point(20, 100)
     $textBoxClientName.Size = New-Object System.Drawing.Size(280, 20)
-    $form.Controls.Add($textBoxClientName)
+    $groupBoxManual.Controls.Add($textBoxClientName)
 
     # --- Scan Date ---
     $labelScanDate = New-Object System.Windows.Forms.Label
     $labelScanDate.Location = New-Object System.Drawing.Point(320, 75)
     $labelScanDate.Size = New-Object System.Drawing.Size(100, 20)
     $labelScanDate.Text = "Scan Date:"
-    $form.Controls.Add($labelScanDate)
+    $groupBoxManual.Controls.Add($labelScanDate)
 
     $datePickerScanDate = New-Object System.Windows.Forms.DateTimePicker
     $datePickerScanDate.Location = New-Object System.Drawing.Point(320, 100)
     $datePickerScanDate.Size = New-Object System.Drawing.Size(150, 20)
     $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
-    $form.Controls.Add($datePickerScanDate)
+    $groupBoxManual.Controls.Add($datePickerScanDate)
 
     # --- Client Type ---
     $checkBoxRMITPlus = New-Object System.Windows.Forms.CheckBox
@@ -5651,139 +6073,23 @@ function Show-VScanMagicGUI {
     $checkBoxRMITPlus.Size = New-Object System.Drawing.Size(100, 20)
     $checkBoxRMITPlus.Text = "RMIT+ Client?"
     $checkBoxRMITPlus.Checked = $false
-    $form.Controls.Add($checkBoxRMITPlus)
-
-    # --- Output Options ---
-    $groupBoxOutput = New-Object System.Windows.Forms.GroupBox
-    $groupBoxOutput.Location = New-Object System.Drawing.Point(20, 135)
-    $groupBoxOutput.Size = New-Object System.Drawing.Size(660, 160)
-    $groupBoxOutput.Text = "Output Options"
-    $form.Controls.Add($groupBoxOutput)
-
-    $checkBoxExcel = New-Object System.Windows.Forms.CheckBox
-    $checkBoxExcel.Location = New-Object System.Drawing.Point(20, 25)
-    $checkBoxExcel.Size = New-Object System.Drawing.Size(250, 20)
-    $checkBoxExcel.Text = "Generate Pending EPSS Report (Excel)"
-    $checkBoxExcel.Checked = $true
-    $groupBoxOutput.Controls.Add($checkBoxExcel)
-
-    $checkBoxWord = New-Object System.Windows.Forms.CheckBox
-    $checkBoxWord.Location = New-Object System.Drawing.Point(20, 50)
-    $checkBoxWord.Size = New-Object System.Drawing.Size(300, 20)
-    $checkBoxWord.Text = "Generate Top Vulnerabilities Report (Word)"
-    $checkBoxWord.Checked = $true
-    $groupBoxOutput.Controls.Add($checkBoxWord)
-
-    $checkBoxEmailTemplate = New-Object System.Windows.Forms.CheckBox
-    $checkBoxEmailTemplate.Location = New-Object System.Drawing.Point(20, 75)
-    $checkBoxEmailTemplate.Size = New-Object System.Drawing.Size(300, 20)
-    $checkBoxEmailTemplate.Text = "Generate Email Template (Text)"
-    $checkBoxEmailTemplate.Checked = $true
-    $groupBoxOutput.Controls.Add($checkBoxEmailTemplate)
-
-    $checkBoxTicketInstructions = New-Object System.Windows.Forms.CheckBox
-    $checkBoxTicketInstructions.Location = New-Object System.Drawing.Point(20, 100)
-    $checkBoxTicketInstructions.Size = New-Object System.Drawing.Size(300, 20)
-    $checkBoxTicketInstructions.Text = "Generate Ticket Instructions (Text)"
-    $checkBoxTicketInstructions.Checked = $true
-    $groupBoxOutput.Controls.Add($checkBoxTicketInstructions)
-
-    $checkBoxTimeEstimate = New-Object System.Windows.Forms.CheckBox
-    $checkBoxTimeEstimate.Location = New-Object System.Drawing.Point(20, 125)
-    $checkBoxTimeEstimate.Size = New-Object System.Drawing.Size(300, 20)
-    $checkBoxTimeEstimate.Text = "Generate Time Estimate (Text)"
-    $checkBoxTimeEstimate.Checked = $true
-    $groupBoxOutput.Controls.Add($checkBoxTimeEstimate)
-
-    # --- Top Ten Filters ---
-    $groupBoxTopTenFilters = New-Object System.Windows.Forms.GroupBox
-    $groupBoxTopTenFilters.Location = New-Object System.Drawing.Point(20, 305)
-    $groupBoxTopTenFilters.Size = New-Object System.Drawing.Size(660, 120)
-    $groupBoxTopTenFilters.Text = "Top Vulnerabilities Report Filters"
-    $form.Controls.Add($groupBoxTopTenFilters)
-
-    # Minimum EPSS Score
-    $labelMinEPSS = New-Object System.Windows.Forms.Label
-    $labelMinEPSS.Location = New-Object System.Drawing.Point(20, 25)
-    $labelMinEPSS.Size = New-Object System.Drawing.Size(150, 20)
-    $labelMinEPSS.Text = "Minimum EPSS Score:"
-    $groupBoxTopTenFilters.Controls.Add($labelMinEPSS)
-
-    $numericUpDownMinEPSS = New-Object System.Windows.Forms.NumericUpDown
-    $numericUpDownMinEPSS.Location = New-Object System.Drawing.Point(170, 23)
-    $numericUpDownMinEPSS.Size = New-Object System.Drawing.Size(80, 20)
-    $numericUpDownMinEPSS.Minimum = 0
-    $numericUpDownMinEPSS.Maximum = 1
-    $numericUpDownMinEPSS.DecimalPlaces = 3
-    $numericUpDownMinEPSS.Increment = 0.001
-    $numericUpDownMinEPSS.Value = 0
-    $groupBoxTopTenFilters.Controls.Add($numericUpDownMinEPSS)
-
-    # Severity Filters
-    $labelSeverity = New-Object System.Windows.Forms.Label
-    $labelSeverity.Location = New-Object System.Drawing.Point(20, 55)
-    $labelSeverity.Size = New-Object System.Drawing.Size(100, 20)
-    $labelSeverity.Text = "Include Severities:"
-    $groupBoxTopTenFilters.Controls.Add($labelSeverity)
-
-    $checkBoxSeverityCritical = New-Object System.Windows.Forms.CheckBox
-    $checkBoxSeverityCritical.Location = New-Object System.Drawing.Point(120, 55)
-    $checkBoxSeverityCritical.Size = New-Object System.Drawing.Size(70, 20)
-    $checkBoxSeverityCritical.Text = "Critical"
-    $checkBoxSeverityCritical.Checked = $true
-    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityCritical)
-
-    $checkBoxSeverityHigh = New-Object System.Windows.Forms.CheckBox
-    $checkBoxSeverityHigh.Location = New-Object System.Drawing.Point(200, 55)
-    $checkBoxSeverityHigh.Size = New-Object System.Drawing.Size(60, 20)
-    $checkBoxSeverityHigh.Text = "High"
-    $checkBoxSeverityHigh.Checked = $true
-    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityHigh)
-
-    $checkBoxSeverityMedium = New-Object System.Windows.Forms.CheckBox
-    $checkBoxSeverityMedium.Location = New-Object System.Drawing.Point(270, 55)
-    $checkBoxSeverityMedium.Size = New-Object System.Drawing.Size(70, 20)
-    $checkBoxSeverityMedium.Text = "Medium"
-    $checkBoxSeverityMedium.Checked = $true
-    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityMedium)
-
-    $checkBoxSeverityLow = New-Object System.Windows.Forms.CheckBox
-    $checkBoxSeverityLow.Location = New-Object System.Drawing.Point(350, 55)
-    $checkBoxSeverityLow.Size = New-Object System.Drawing.Size(50, 20)
-    $checkBoxSeverityLow.Text = "Low"
-    $checkBoxSeverityLow.Checked = $true
-    $groupBoxTopTenFilters.Controls.Add($checkBoxSeverityLow)
-
-    # Number of Vulnerabilities to Include
-    $labelVulnCount = New-Object System.Windows.Forms.Label
-    $labelVulnCount.Location = New-Object System.Drawing.Point(20, 85)
-    $labelVulnCount.Size = New-Object System.Drawing.Size(150, 20)
-    $labelVulnCount.Text = "Number to Include:"
-    $groupBoxTopTenFilters.Controls.Add($labelVulnCount)
-
-    $comboBoxVulnCount = New-Object System.Windows.Forms.ComboBox
-    $comboBoxVulnCount.Location = New-Object System.Drawing.Point(170, 83)
-    $comboBoxVulnCount.Size = New-Object System.Drawing.Size(100, 20)
-    $comboBoxVulnCount.DropDownStyle = 'DropDownList'
-    $comboBoxVulnCount.Items.AddRange(@("10", "20", "50", "100", "All"))
-    $comboBoxVulnCount.SelectedIndex = 0  # Default to 10
-    $groupBoxTopTenFilters.Controls.Add($comboBoxVulnCount)
+    $groupBoxManual.Controls.Add($checkBoxRMITPlus)
 
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 435)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 1440)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 460)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 1465)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(570, 20)
     $textBoxOutputDir.Text = [Environment]::GetFolderPath("Desktop")
     $form.Controls.Add($textBoxOutputDir)
 
     $buttonBrowseOutput = New-Object System.Windows.Forms.Button
-    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(600, 458)
+    $buttonBrowseOutput.Location = New-Object System.Drawing.Point(600, 1463)
     $buttonBrowseOutput.Size = New-Object System.Drawing.Size(80, 25)
     $buttonBrowseOutput.Text = "Browse..."
     $buttonBrowseOutput.Add_Click({
@@ -5799,14 +6105,14 @@ function Show-VScanMagicGUI {
 
     # --- Progress Section ---
     $script:StatusLabel = New-Object System.Windows.Forms.Label
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 495)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 1500)
     $script:StatusLabel.Size = New-Object System.Drawing.Size(660, 20)
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Visible = $false
     $form.Controls.Add($script:StatusLabel)
 
     $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
-    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 520)
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 1525)
     $script:ProgressBar.Size = New-Object System.Drawing.Size(660, 20)
     $script:ProgressBar.Style = 'Marquee'
     $script:ProgressBar.MarqueeAnimationSpeed = 30
@@ -5815,13 +6121,13 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 550)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 1555)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 575)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 1580)
     $script:LogTextBox.Size = New-Object System.Drawing.Size(660, 80)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
@@ -5831,7 +6137,7 @@ function Show-VScanMagicGUI {
 
     # --- View Reports Section Label ---
     $labelViewReports = New-Object System.Windows.Forms.Label
-    $labelViewReports.Location = New-Object System.Drawing.Point(20, 665)
+    $labelViewReports.Location = New-Object System.Drawing.Point(20, 1660)
     $labelViewReports.Size = New-Object System.Drawing.Size(200, 20)
     $labelViewReports.Text = "View Generated Reports:"
     $form.Controls.Add($labelViewReports)
@@ -5841,7 +6147,7 @@ function Show-VScanMagicGUI {
     $buttonWidth = 120
     $buttonSpacing = 15
     $startX = 20
-    $buttonY = 690
+    $buttonY = 1685
     
     $script:buttonOpenWord = New-Object System.Windows.Forms.Button
     $script:buttonOpenWord.Location = New-Object System.Drawing.Point($startX, $buttonY)
@@ -5905,14 +6211,14 @@ function Show-VScanMagicGUI {
 
     # --- Ticket Notes Section Label ---
     $labelTicketNotes = New-Object System.Windows.Forms.Label
-    $labelTicketNotes.Location = New-Object System.Drawing.Point(20, 590)
+    $labelTicketNotes.Location = New-Object System.Drawing.Point(20, 1720)
     $labelTicketNotes.Size = New-Object System.Drawing.Size(200, 20)
     $labelTicketNotes.Text = "Ticket Notes:"
     $form.Controls.Add($labelTicketNotes)
 
     # --- Ticket Notes Buttons ---
     $buttonCopyTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 720)
+    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 1745)
     $buttonCopyTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $buttonCopyTicketNotes.Text = "Copy to Clipboard"
     $buttonCopyTicketNotes.Add_Click({
@@ -5921,7 +6227,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonCopyTicketNotes)
 
     $script:buttonOpenTicketNotes = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 720)
+    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 1745)
     $script:buttonOpenTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenTicketNotes.Text = "View Ticket Notes"
     $script:buttonOpenTicketNotes.Enabled = $false
@@ -5933,21 +6239,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($script:buttonOpenTicketNotes)
 
     # --- Action Buttons (Bottom Right) ---
-    $buttonDownloadReports = New-Object System.Windows.Forms.Button
-    $buttonDownloadReports.Location = New-Object System.Drawing.Point(160, 755)
-    $buttonDownloadReports.Size = New-Object System.Drawing.Size(130, 30)
-    $buttonDownloadReports.Text = "Download Reports"
-    $buttonDownloadReports.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)  # Teal - API action
-    $buttonDownloadReports.ForeColor = [System.Drawing.Color]::White
-    $buttonDownloadReports.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $buttonDownloadReports.FlatAppearance.BorderSize = 0
-    $buttonDownloadReports.Add_Click({
-        Show-DownloadReportsDialog
-    })
-    $form.Controls.Add($buttonDownloadReports)
 
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
-    $buttonRemediationRules.Location = New-Object System.Drawing.Point(300, 755)
+    $buttonRemediationRules.Location = New-Object System.Drawing.Point(160, 1780)
     $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
     $buttonRemediationRules.Text = "Remediation Rules"
     $buttonRemediationRules.Add_Click({
@@ -5956,7 +6250,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonRemediationRules)
 
     $buttonSettings = New-Object System.Windows.Forms.Button
-    $buttonSettings.Location = New-Object System.Drawing.Point(450, 755)
+    $buttonSettings.Location = New-Object System.Drawing.Point(310, 1780)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
@@ -5965,9 +6259,9 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonSettings)
 
     $buttonGenerate = New-Object System.Windows.Forms.Button
-    $buttonGenerate.Location = New-Object System.Drawing.Point(20, 755)
+    $buttonGenerate.Location = New-Object System.Drawing.Point(20, 1780)
     $buttonGenerate.Size = New-Object System.Drawing.Size(130, 30)
-    $buttonGenerate.Text = "Generate Reports"
+    $buttonGenerate.Text = "Generate from File"
     $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)  # Blue - Primary action
     $buttonGenerate.ForeColor = [System.Drawing.Color]::White
     $buttonGenerate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
