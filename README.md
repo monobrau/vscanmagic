@@ -9,13 +9,18 @@ A PowerShell tool for vulnerability management and report generation from Connec
 A GUI application that processes vulnerability scan reports from **ConnectSecure** and generates professional Word and Excel reports with dynamic severity thresholds, email templates, ticket notes, and time estimates.
 
 **Features:**
-- **Download Standard Reports** – Download all 5 ConnectSecure reports (All Vulnerabilities, Suppressed, External Scan, Executive Summary DOCX, Pending EPSS) with retry logic
+- **Download Standard Reports** – Download the 5 core ConnectSecure reports (All Vulnerabilities, Suppressed, External Scan, Executive Summary DOCX, Pending EPSS) with retry logic
+- **Download Custom Report** – Choose any standard report from ConnectSecure (company-scoped) with format options (XLSX, DOCX, PDF)
+- **Download Global Reports** – Download global reports (tenant-wide, no company filter) in their own dialog with format options
 - **Professional Word Reports** – Color-coded Top Ten vulnerabilities reports with dynamic severity thresholds
 - **Excel Spreadsheets** – Detailed vulnerability spreadsheets with risk scoring
 - **Email Templates** – Professional email templates for client communication
 - **Ticket Notes** – ConnectWise-compatible ticket notes with randomized content
 - **Time Estimates** – RMIT/RMIT+ time estimation with covered software support
 - **Dynamic Severity Thresholds** – Adapts risk score thresholds based on your data
+- **General Help & API Help** – In-app help for workflow guidance and API credential setup
+
+**Recent updates (4.0.1):** All Vulnerabilities is now the primary input for report processing; Download Custom and Download Global dialogs for flexible report downloading; improved API Help (Base URL via user profile → API Documentation); General Help with workflow examples.
 
 ---
 
@@ -47,28 +52,30 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 
 #### ConnectSecure Download Flow
 
-1. Configure **API Settings** (Base URL, Tenant, Client ID, Client Secret)
+1. Configure **API Settings** (Base URL, Tenant, Client ID, Client Secret) – use **API Help** for credential setup
 2. Select **Company** and **Scan Date**
 3. Check desired reports (All Vulnerabilities, Executive Summary, Suppressed, Pending EPSS, External Scan)
-4. Click **Download Standard Reports Only** – downloads with retry logic and progress
-5. Or click **Generate** to download and process in one step
+4. Click **Download Standard Reports Only** – downloads the 5 core reports with retry logic
+5. Click **Download Custom…** to pick any standard report with format (XLSX/DOCX/PDF)
+6. Click **Download Global Reports** for tenant-wide reports (no company filter)
+7. Or click **Generate** to download and process in one step
 
 #### File Processing Flow
 
-1. Use **Browse** to select a previously downloaded Pending EPSS report (XLSX)
+1. Use **Browse** to select a previously downloaded **All Vulnerabilities** report (XLSX)
 2. Enter **Client** name and **Output Directory**
 3. Select **Output Options** (Word, Excel, Email Template, Ticket Instructions, Time Estimate)
-4. Click **Generate** to create reports
+4. Click **Generate** to create reports – Top N is derived from the All Vulnerabilities data
 
 ### Input File Requirements
 
-VScanMagic requires the **Pending EPSS report** from ConnectSecure. The Excel file must include columns such as Product/Software, EPSS Score, CVSS Severity, Host Name, IP Address, and vulnerability details.
+VScanMagic uses the **All Vulnerabilities report** from ConnectSecure as the primary input. The Excel file must include columns such as Software Name, Host Name, IP, EPSS Score, Severity, and vulnerability details. The full vulnerability list format (Critical/High/Medium/Low/END OF LIFE sheets) is supported.
 
 ### Documentation
 
 - [ConnectSecure API Usage](ConnectSecure-API-Usage.md) – API configuration and usage
 - [Quick Start](QUICK_START.md) – Step-by-step guide
-- [Release Notes](RELEASE_v4.0.0.md) – v4.0.0 changelog
+- [Release Notes](https://github.com/monobrau/vscanmagic/releases) – Changelog and downloads
 
 ---
 
