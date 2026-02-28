@@ -20,7 +20,7 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 - **Dynamic Severity Thresholds** – Adapts risk score thresholds based on your data
 - **General Help & API Help** – In-app help for workflow guidance and API credential setup
 
-**Recent updates (4.0.1):** All Vulnerabilities is now the primary input for report processing; Download Custom and Download Global dialogs for flexible report downloading; improved API Help (Base URL via user profile → API Documentation); General Help with workflow examples.
+**Recent updates (4.0.2):** Structured output paths with Network Documentation/Vulnerability Scans; quarter folder format (2026 - Q1); Processing Summary and Report Folder History for quick access to output folders; bulk processing skips completion popups; removed View Generated Reports section; Company Folder Mappings auto-normalization.
 
 ---
 
@@ -50,6 +50,8 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 
 ### Usage
 
+**Main button:** The green **Download and Generate Reports** button is the primary action. It both downloads reports from ConnectSecure (when API is configured) and processes data to generate Word, Excel, and other outputs. Use it as your main workflow step.
+
 #### ConnectSecure Download Flow
 
 1. Configure **API Settings** (Base URL, Tenant, Client ID, Client Secret) – use **API Help** for credential setup
@@ -58,14 +60,14 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 4. Click **Download Standard Reports Only** – downloads the 5 core reports with retry logic
 5. Click **Download Custom…** to pick any standard report with format (XLSX/DOCX/PDF)
 6. Click **Download Global Reports** for tenant-wide reports (no company filter)
-7. Or click **Generate** to download and process in one step
+7. Or click the main **Download and Generate Reports** button to download and process in one step
 
 #### File Processing Flow
 
 1. Use **Browse** to select a previously downloaded **All Vulnerabilities** report (XLSX)
 2. Enter **Client** name and **Output Directory**
 3. Select **Output Options** (Word, Excel, Email Template, Ticket Instructions, Time Estimate)
-4. Click **Generate** to create reports – Top N is derived from the All Vulnerabilities data
+4. Click the main **Download and Generate Reports** button – it downloads from ConnectSecure (if configured) and processes files to create all selected outputs
 
 ### Input File Requirements
 

@@ -428,8 +428,8 @@ function Show-TimeEstimateEntryDialog {
         $dataGridView.Rows[$row].Cells["TimeEstimate"].Value = ""
         $dataGridView.Rows[$row].Cells["AfterHours"].Value = $false
         if ($IsRMITPlus) {
-            # Default 3rd party status based on covered software list
-            $isThirdPartyDefault = Test-IsCoveredSoftware -ProductName $item.Product
+            # Default 3rd party status: first-party vendors (SonicWall, Fortinet, Microsoft, HP, Duo) are never 3rd party
+            $isThirdPartyDefault = if (Test-IsFirstPartyVendor -ProductName $item.Product) { $false } else { Test-IsCoveredSoftware -ProductName $item.Product }
             $dataGridView.Rows[$row].Cells["ThirdParty"].Value = $isThirdPartyDefault
             $dataGridView.Rows[$row].Cells["TicketGenerated"].Value = $false
         }
@@ -454,22 +454,16 @@ function Show-TimeEstimateEntryDialog {
     $timeDialog.Controls.Add($btnCancel)
     $timeDialog.CancelButton = $btnCancel
 
-    # Validation on OK
+    # Validation on OK (empty defaults to 0)
     $btnOK.Add_Click({
-        # Validate all time estimates are filled
         foreach ($row in $dataGridView.Rows) {
             if ($row.IsNewRow) { continue }
             $timeEstimate = [string]$row.Cells["TimeEstimate"].Value
-            if ([string]::IsNullOrWhiteSpace($timeEstimate)) {
-                [System.Windows.Forms.MessageBox]::Show("Please enter a time estimate for all items.", "Validation Error",
-                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                $timeDialog.DialogResult = [System.Windows.Forms.DialogResult]::None
-                return
-            }
-            # Validate it's a valid number
+            if ([string]::IsNullOrWhiteSpace($timeEstimate)) { continue }  # Empty = 0, no validation needed
+            # Validate entered value is a valid non-negative number
             $timeValue = 0
             if (-not [double]::TryParse($timeEstimate, [ref]$timeValue) -or $timeValue -lt 0) {
-                [System.Windows.Forms.MessageBox]::Show("Time estimate must be a valid positive number (hours).", "Validation Error",
+                [System.Windows.Forms.MessageBox]::Show("Time estimate must be a valid non-negative number (hours). Empty values default to 0.", "Validation Error",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
                 $timeDialog.DialogResult = [System.Windows.Forms.DialogResult]::None
                 return
@@ -480,13 +474,16 @@ function Show-TimeEstimateEntryDialog {
     $result = $timeDialog.ShowDialog()
 
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-        # Build result array
+        # Build result array (empty time estimate defaults to 0)
         $timeEstimates = @()
         foreach ($row in $dataGridView.Rows) {
             if ($row.IsNewRow) { continue }
+            $rawTime = [string]$row.Cells["TimeEstimate"].Value
+            $timeVal = 0.0
+            if (-not [string]::IsNullOrWhiteSpace($rawTime)) { [double]::TryParse($rawTime, [ref]$timeVal) | Out-Null }
             $timeEstimates += [PSCustomObject]@{
                 Product = $row.Cells["Product"].Value
-                TimeEstimate = [double]$row.Cells["TimeEstimate"].Value
+                TimeEstimate = $timeVal
                 AfterHours = [bool]$row.Cells["AfterHours"].Value
                 ThirdParty = if ($IsRMITPlus) { [bool]$row.Cells["ThirdParty"].Value } else { $false }
                 TicketGenerated = if ($IsRMITPlus) { [bool]$row.Cells["TicketGenerated"].Value } else { $false }
@@ -653,7 +650,6 @@ function New-TimeEstimate {
         }
 
         $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
-        Write-Log "Time estimate saved to: $OutputPath" -Level Success
 
     } catch {
         Write-Log "Error generating time estimate: $($_.Exception.Message)" -Level Error
@@ -788,7 +784,6 @@ function New-TicketInstructions {
         [void]$sb.AppendLine("=".PadRight(100, '='))
 
         $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
-        Write-Log "Ticket instructions saved to: $OutputPath" -Level Success
 
     } catch {
         Write-Log "Error generating ticket instructions: $($_.Exception.Message)" -Level Error
@@ -1482,7 +1477,7 @@ function Show-OutputOptionsDialog {
     $chkExcel = New-Object System.Windows.Forms.CheckBox
     $chkExcel.Location = New-Object System.Drawing.Point(20, 25)
     $chkExcel.Size = New-Object System.Drawing.Size(360, 20)
-    $chkExcel.Text = "Generate Pending EPSS Report (Excel)"
+    $chkExcel.Text = "Generate Excel Report (consolidated pivot)"
     $chkExcel.Checked = $script:OutputExcel
     $dlg.Controls.Add($chkExcel)
 
@@ -1545,10 +1540,364 @@ function Show-OutputOptionsDialog {
     }
 }
 
+function Show-AIApiKeysDialog {
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "AI API Keys"
+    $dlg.Size = New-Object System.Drawing.Size(480, 220)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $y = 20
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, $y)
+    $lblHint.Size = New-Object System.Drawing.Size(420, 48)
+    $lblHint.Text = "Store API keys for AI-assisted report generation. Future use: email templates, ticket notes, remediation instructions, remediation guidance, and time estimate guidance (factors + human input). Keys are saved locally."
+    $lblHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblHint.AutoSize = $false
+    $lblHint.Font = New-Object System.Drawing.Font($lblHint.Font.FontFamily, 8.5)
+    $dlg.Controls.Add($lblHint)
+    $y += 52
+
+    $providers = @(
+        @{ Name = "Microsoft Copilot"; Key = "AIApiKeyCopilot" }
+        @{ Name = "OpenAI (ChatGPT)"; Key = "AIApiKeyChatGPT" }
+        @{ Name = "Anthropic (Claude)"; Key = "AIApiKeyClaude" }
+    )
+    $textBoxes = @{}
+    foreach ($p in $providers) {
+        $lbl = New-Object System.Windows.Forms.Label
+        $lbl.Location = New-Object System.Drawing.Point(20, $y)
+        $lbl.Size = New-Object System.Drawing.Size(140, 20)
+        $lbl.Text = "$($p.Name):"
+        $dlg.Controls.Add($lbl)
+        $txt = New-Object System.Windows.Forms.TextBox
+        $txt.Location = New-Object System.Drawing.Point(165, $y)
+        $txt.Size = New-Object System.Drawing.Size(280, 22)
+        $txt.PasswordChar = [char]'*'
+        $txt.UseSystemPasswordChar = $true
+        $val = $script:UserSettings[$p.Key]; $txt.Text = if ($val) { $val } else { "" }
+        $dlg.Controls.Add($txt)
+        $textBoxes[$p.Key] = $txt
+        $y += 32
+    }
+
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Location = New-Object System.Drawing.Point(165, $y)
+    $btnSave.Size = New-Object System.Drawing.Size(90, 28)
+    $btnSave.Text = "Save"
+    $btnSave.Add_Click({
+        $script:UserSettings.AIApiKeyCopilot = $textBoxes["AIApiKeyCopilot"].Text
+        $script:UserSettings.AIApiKeyChatGPT = $textBoxes["AIApiKeyChatGPT"].Text
+        $script:UserSettings.AIApiKeyClaude = $textBoxes["AIApiKeyClaude"].Text
+        if (Save-UserSettings) {
+            [System.Windows.Forms.MessageBox]::Show("AI API keys saved.", "Saved", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $dlg.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        }
+    })
+    $dlg.Controls.Add($btnSave)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(265, $y)
+    $btnCancel.Size = New-Object System.Drawing.Size(80, 28)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dlg.Controls.Add($btnCancel)
+
+    $dlg.CancelButton = $btnCancel
+    $dlg.AcceptButton = $btnSave
+    $dlg.ShowDialog() | Out-Null
+}
+
+function Show-ProcessingSummaryDialog {
+    param([array]$ProcessedOutputs = @())
+    if (-not $ProcessedOutputs -or $ProcessedOutputs.Count -eq 0) { return }
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Processing Summary - Output Folders"
+    $dlg.Size = New-Object System.Drawing.Size(700, 380)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, 12)
+    $lblHint.Size = New-Object System.Drawing.Size(640, 32)
+    $lblHint.Text = "Reports saved to the following quarter folders. Double-click a row or click Open to open the folder in Explorer."
+    $lblHint.AutoSize = $false
+    $lblHint.MaximumSize = New-Object System.Drawing.Size(640, 0)
+    $dlg.Controls.Add($lblHint)
+
+    $listView = New-Object System.Windows.Forms.ListView
+    $listView.Location = New-Object System.Drawing.Point(20, 50)
+    $listView.Size = New-Object System.Drawing.Size(640, 240)
+    $listView.View = [System.Windows.Forms.View]::Details
+    $listView.FullRowSelect = $true
+    $listView.GridLines = $true
+    $listView.Columns.Add("Company", 140) | Out-Null
+    $listView.Columns.Add("Output folder (year-quarter)", 480) | Out-Null
+    foreach ($item in $ProcessedOutputs) {
+        $row = New-Object System.Windows.Forms.ListViewItem($item.CompanyName)
+        $row.SubItems.Add($item.OutputPath) | Out-Null
+        $row.Tag = $item.OutputPath
+        if (Test-Path $item.OutputPath) {
+            $listView.Items.Add($row) | Out-Null
+        }
+    }
+    $dlg.Controls.Add($listView)
+
+    $openSelected = {
+        $sel = $listView.SelectedItems
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag -and (Test-Path $sel[0].Tag)) {
+            Start-Process explorer.exe -ArgumentList $sel[0].Tag
+        }
+    }
+    $listView.Add_DoubleClick($openSelected)
+
+    $btnOpen = New-Object System.Windows.Forms.Button
+    $btnOpen.Location = New-Object System.Drawing.Point(20, 300)
+    $btnOpen.Size = New-Object System.Drawing.Size(100, 28)
+    $btnOpen.Text = "Open folder..."
+    $btnOpen.Add_Click($openSelected)
+    $dlg.Controls.Add($btnOpen)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(560, 300)
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.AcceptButton = $btnClose
+    $dlg.ShowDialog() | Out-Null
+}
+
+function Show-ReportFolderHistoryDialog {
+    $entries = @(Get-ReportFolderHistory)
+    if ($entries.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("No report folder history yet. History is built as you process reports.", "Report Folder History", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Report Folder History"
+    $dlg.Size = New-Object System.Drawing.Size(720, 420)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, 12)
+    $lblHint.Size = New-Object System.Drawing.Size(660, 32)
+    $lblHint.Text = "Previously processed report folders. Double-click a row or click Open to open the folder in Explorer. Use Remove to clear an entry from history."
+    $lblHint.AutoSize = $false
+    $lblHint.MaximumSize = New-Object System.Drawing.Size(660, 0)
+    $dlg.Controls.Add($lblHint)
+
+    $listView = New-Object System.Windows.Forms.ListView
+    $listView.Location = New-Object System.Drawing.Point(20, 50)
+    $listView.Size = New-Object System.Drawing.Size(660, 270)
+    $listView.View = [System.Windows.Forms.View]::Details
+    $listView.FullRowSelect = $true
+    $listView.GridLines = $true
+    $listView.Columns.Add("Company", 130) | Out-Null
+    $listView.Columns.Add("Processed", 90) | Out-Null
+    $listView.Columns.Add("Output folder", 420) | Out-Null
+    foreach ($item in $entries) {
+        $row = New-Object System.Windows.Forms.ListViewItem($item.CompanyName)
+        $row.SubItems.Add($item.ProcessedAt) | Out-Null
+        $row.SubItems.Add($item.OutputPath) | Out-Null
+        $row.Tag = $item
+        $listView.Items.Add($row) | Out-Null
+    }
+    $dlg.Controls.Add($listView)
+
+    $openSelected = {
+        $sel = $listView.SelectedItems
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag -and $sel[0].Tag.OutputPath -and (Test-Path $sel[0].Tag.OutputPath)) {
+            Start-Process explorer.exe -ArgumentList $sel[0].Tag.OutputPath
+        }
+    }
+    $listView.Add_DoubleClick($openSelected)
+
+    $btnOpen = New-Object System.Windows.Forms.Button
+    $btnOpen.Location = New-Object System.Drawing.Point(20, 330)
+    $btnOpen.Size = New-Object System.Drawing.Size(100, 28)
+    $btnOpen.Text = "Open folder..."
+    $btnOpen.Add_Click($openSelected)
+    $dlg.Controls.Add($btnOpen)
+
+    $btnRemove = New-Object System.Windows.Forms.Button
+    $btnRemove.Location = New-Object System.Drawing.Point(130, 330)
+    $btnRemove.Size = New-Object System.Drawing.Size(100, 28)
+    $btnRemove.Text = "Remove from history"
+    $btnRemove.Add_Click({
+        $sel = $listView.SelectedItems
+        if (-not $sel -or $sel.Count -eq 0) { return }
+        $toRemove = $sel[0].Tag.OutputPath
+        $newEntries = @(Get-ReportFolderHistory | Where-Object { $_.OutputPath -ne $toRemove })
+        $obj = @{ Entries = @($newEntries) }
+        Set-JsonFile -Path $script:ReportFolderHistoryPath -Object $obj -Depth 3 | Out-Null
+        $listView.Items.Remove($sel[0])
+    })
+    $dlg.Controls.Add($btnRemove)
+
+    $btnClearAll = New-Object System.Windows.Forms.Button
+    $btnClearAll.Location = New-Object System.Drawing.Point(240, 330)
+    $btnClearAll.Size = New-Object System.Drawing.Size(120, 28)
+    $btnClearAll.Text = "Clear all history"
+    $btnClearAll.Add_Click({
+        if ([System.Windows.Forms.MessageBox]::Show("Clear all report folder history?", "Confirm", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question) -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $obj = @{ Entries = @() }
+            Set-JsonFile -Path $script:ReportFolderHistoryPath -Object $obj -Depth 3 | Out-Null
+            $listView.Items.Clear()
+        }
+    })
+    $dlg.Controls.Add($btnClearAll)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(580, 330)
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.AcceptButton = $btnClose
+    $dlg.ShowDialog() | Out-Null
+}
+
+function Show-CompanyFolderMappingDialog {
+    if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -or -not (Test-Path $script:UserSettings.ReportsBasePath)) {
+        [System.Windows.Forms.MessageBox]::Show("Reports Base Path must be set in Settings first.", "Folder Mappings", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+    Load-CompanyFolderMap | Out-Null
+    $base = $script:UserSettings.ReportsBasePath.Trim()
+    $companyNames = @{}
+    $creds = Load-ConnectSecureCredentials
+    if ($creds) {
+        $cached = Load-ConnectSecureCompaniesCache -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName
+        if ($cached) {
+            foreach ($c in $cached) { $companyNames["$($c.Id)"] = ($c.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
+        }
+    }
+    $companyNames["0"] = "Global"
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Company Folder Mappings"
+    $dlg.Size = New-Object System.Drawing.Size(620, 420)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, 12)
+    $lblHint.Size = New-Object System.Drawing.Size(560, 32)
+    $lblHint.Text = "Map ConnectSecure companies to folder paths under the Reports Base Path. Select a mapping and click Edit or Remove."
+    $lblHint.AutoSize = $false
+    $lblHint.MaximumSize = New-Object System.Drawing.Size(560, 0)
+    $dlg.Controls.Add($lblHint)
+
+    $listView = New-Object System.Windows.Forms.ListView
+    $listView.Location = New-Object System.Drawing.Point(20, 50)
+    $listView.Size = New-Object System.Drawing.Size(560, 260)
+    $listView.View = [System.Windows.Forms.View]::Details
+    $listView.FullRowSelect = $true
+    $listView.GridLines = $true
+    $listView.Columns.Add("Company", 120) | Out-Null
+    $listView.Columns.Add("Folder path", 420) | Out-Null
+    $dlg.Controls.Add($listView)
+
+    # Normalize stored paths to include Network Documentation\Vulnerability Scans (fixes legacy mappings)
+    $needsSave = $false
+    foreach ($key in @($script:CompanyFolderMap.Keys)) {
+        $current = $script:CompanyFolderMap[$key]
+        $normalized = Resolve-VulnerabilityScansSubpath -FolderName $current
+        if ($current -ne $normalized) {
+            $script:CompanyFolderMap[$key] = $normalized
+            $needsSave = $true
+        }
+    }
+    if ($needsSave) { Save-CompanyFolderMap | Out-Null }
+
+    $script:RefreshMappings = {
+        $listView.Items.Clear()
+        $keys = @($script:CompanyFolderMap.Keys | Sort-Object { $_ })
+        foreach ($key in $keys) {
+            $name = if ($companyNames.ContainsKey($key)) { $companyNames[$key] } else { "Company $key" }
+            $path = Resolve-VulnerabilityScansSubpath -FolderName $script:CompanyFolderMap[$key]
+            $item = New-Object System.Windows.Forms.ListViewItem($name)
+            $item.SubItems.Add($path) | Out-Null
+            $item.Tag = $key
+            $listView.Items.Add($item) | Out-Null
+        }
+    }
+    & $script:RefreshMappings
+
+    $btnEdit = New-Object System.Windows.Forms.Button
+    $btnEdit.Location = New-Object System.Drawing.Point(20, 320)
+    $btnEdit.Size = New-Object System.Drawing.Size(100, 28)
+    $btnEdit.Text = "Edit..."
+    $btnEdit.Add_Click({
+        $sel = $listView.SelectedItems
+        if (-not $sel -or $sel.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Please select a mapping to edit.", "Edit", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $key = $sel[0].Tag
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select the Vulnerability Scans folder for this company (e.g. ...\Company\Network Documentation\Vulnerability Scans). The YYYY - QN folder will be created inside."
+        $folderBrowser.SelectedPath = $base
+        $currentPath = Join-Path $base $script:CompanyFolderMap[$key]
+        if (Test-Path $currentPath) { $folderBrowser.SelectedPath = $currentPath }
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $selectedFull = [System.IO.Path]::GetFullPath($folderBrowser.SelectedPath)
+            if ($selectedFull.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+                $rel = $selectedFull.Substring($base.Length).TrimStart([char]'\', [char]'/')
+                $folderName = if ([string]::IsNullOrWhiteSpace($rel)) { [System.IO.Path]::GetFileName($selectedFull) } else { $rel }
+            } else {
+                $folderName = [System.IO.Path]::GetFileName($selectedFull)
+            }
+            $folderName = Resolve-VulnerabilityScansSubpath -FolderName $folderName
+            $script:CompanyFolderMap[$key] = $folderName
+            Save-CompanyFolderMap | Out-Null
+            & $script:RefreshMappings
+        }
+    })
+    $dlg.Controls.Add($btnEdit)
+
+    $btnRemove = New-Object System.Windows.Forms.Button
+    $btnRemove.Location = New-Object System.Drawing.Point(130, 320)
+    $btnRemove.Size = New-Object System.Drawing.Size(100, 28)
+    $btnRemove.Text = "Remove"
+    $btnRemove.Add_Click({
+        $sel = $listView.SelectedItems
+        if (-not $sel -or $sel.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Please select a mapping to remove.", "Remove", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $key = $sel[0].Tag
+        $script:CompanyFolderMap.Remove($key) | Out-Null
+        Save-CompanyFolderMap | Out-Null
+        & $script:RefreshMappings
+    })
+    $dlg.Controls.Add($btnRemove)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(480, 320)
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $btnClose.Add_Click({ $dlg.Close() })
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.CancelButton = $btnClose
+    $dlg.ShowDialog() | Out-Null
+}
+
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(500, 500)
+    $settingsForm.Size = New-Object System.Drawing.Size(500, 550)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -1641,6 +1990,44 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($txtCompanyPhoneNumber)
     $y += 35
 
+    # Reports Base Path
+    $lblReportsBasePath = New-Object System.Windows.Forms.Label
+    $lblReportsBasePath.Location = New-Object System.Drawing.Point(20, $y)
+    $lblReportsBasePath.Size = New-Object System.Drawing.Size(150, 20)
+    $lblReportsBasePath.Text = "Reports Base Path:"
+    $settingsForm.Controls.Add($lblReportsBasePath)
+
+    $txtReportsBasePath = New-Object System.Windows.Forms.TextBox
+    $txtReportsBasePath.Location = New-Object System.Drawing.Point(180, $y)
+    $txtReportsBasePath.Size = New-Object System.Drawing.Size(200, 20)
+    $txtReportsBasePath.Text = if ($script:UserSettings.ReportsBasePath) { $script:UserSettings.ReportsBasePath } else { "" }
+    $settingsForm.Controls.Add($txtReportsBasePath)
+
+    $btnBrowseReportsBase = New-Object System.Windows.Forms.Button
+    $btnBrowseReportsBase.Location = New-Object System.Drawing.Point(390, ($y - 2))
+    $btnBrowseReportsBase.Size = New-Object System.Drawing.Size(70, 25)
+    $btnBrowseReportsBase.Text = "Browse..."
+    $btnBrowseReportsBase.Add_Click({
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select base folder for client output (e.g. OneDrive root). When mapping companies, you can select subfolders at any depth (e.g. ...\General\Accurate Metal\Network Documentation\Vulnerability Scans)."
+        $folderBrowser.ShowNewFolderButton = $true
+        $startPath = $txtReportsBasePath.Text.Trim()
+        if ($startPath -and (Test-Path $startPath)) { $folderBrowser.SelectedPath = $startPath }
+        elseif ($script:UserSettings.LastOutputDirectory -and (Test-Path $script:UserSettings.LastOutputDirectory)) { $folderBrowser.SelectedPath = $script:UserSettings.LastOutputDirectory }
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtReportsBasePath.Text = $folderBrowser.SelectedPath
+        }
+    })
+    $settingsForm.Controls.Add($btnBrowseReportsBase)
+
+    $btnEditMappings = New-Object System.Windows.Forms.Button
+    $btnEditMappings.Location = New-Object System.Drawing.Point(180, ($y + 2))
+    $btnEditMappings.Size = New-Object System.Drawing.Size(140, 22)
+    $btnEditMappings.Text = "Edit folder mappings..."
+    $btnEditMappings.Add_Click({ Show-CompanyFolderMappingDialog })
+    $settingsForm.Controls.Add($btnEditMappings)
+    $y += 35
+
     # Settings Directory
     $lblSettingsDirectory = New-Object System.Windows.Forms.Label
     $lblSettingsDirectory.Location = New-Object System.Drawing.Point(20, $y)
@@ -1687,7 +2074,23 @@ function Show-SettingsDialog {
         $txtSettingsDirectory.Text = Join-Path $env:LOCALAPPDATA "VScanMagic"
     })
     $settingsForm.Controls.Add($btnResetDir)
-    $y += 50
+    $y += 40
+
+    # AI API Keys (for future expansion)
+    $btnAIApiKeys = New-Object System.Windows.Forms.Button
+    $btnAIApiKeys.Location = New-Object System.Drawing.Point(20, $y)
+    $btnAIApiKeys.Size = New-Object System.Drawing.Size(120, 25)
+    $btnAIApiKeys.Text = "AI API Keys..."
+    $btnAIApiKeys.Add_Click({ Show-AIApiKeysDialog })
+    $settingsForm.Controls.Add($btnAIApiKeys)
+    $lblAIApiHint = New-Object System.Windows.Forms.Label
+    $lblAIApiHint.Location = New-Object System.Drawing.Point(150, ($y + 4))
+    $lblAIApiHint.Size = New-Object System.Drawing.Size(320, 18)
+    $lblAIApiHint.Text = "Copilot, ChatGPT, Claude - for future AI features"
+    $lblAIApiHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblAIApiHint.Font = New-Object System.Drawing.Font($lblAIApiHint.Font.FontFamily, 8.5)
+    $settingsForm.Controls.Add($lblAIApiHint)
+    $y += 40
 
     # Save Button
     $btnSave = New-Object System.Windows.Forms.Button
@@ -1701,6 +2104,7 @@ function Show-SettingsDialog {
         $script:UserSettings.Email = $txtEmail.Text
         $script:UserSettings.PhoneNumber = $txtPhoneNumber.Text
         $script:UserSettings.CompanyPhoneNumber = $txtCompanyPhoneNumber.Text
+        $script:UserSettings.ReportsBasePath = $txtReportsBasePath.Text.Trim()
         
         # Handle settings directory
         $selectedDir = $txtSettingsDirectory.Text.Trim()
@@ -1731,6 +2135,7 @@ function Show-SettingsDialog {
                 $oldRulesPath = Join-Path $oldDir "VScanMagic_RemediationRules.json"
                 $oldCoveredPath = Join-Path $oldDir "VScanMagic_CoveredSoftware.json"
                 $oldRecommendationsPath = Join-Path $oldDir "VScanMagic_GeneralRecommendations.json"
+                $oldCompanyFolderMapPath = Join-Path $oldDir "VScanMagic_CompanyFolderMap.json"
                 
                 if ((Test-Path $oldRulesPath) -and -not (Test-Path $script:RemediationRulesPath)) {
                     Copy-Item -Path $oldRulesPath -Destination $script:RemediationRulesPath -Force
@@ -1741,11 +2146,15 @@ function Show-SettingsDialog {
                 if ((Test-Path $oldRecommendationsPath) -and -not (Test-Path $script:GeneralRecommendationsPath)) {
                     Copy-Item -Path $oldRecommendationsPath -Destination $script:GeneralRecommendationsPath -Force
                 }
+                if ((Test-Path $oldCompanyFolderMapPath) -and -not (Test-Path $script:CompanyFolderMapPath)) {
+                    Copy-Item -Path $oldCompanyFolderMapPath -Destination $script:CompanyFolderMapPath -Force
+                }
                 
                 # Reload rules and covered software from new location
                 Load-RemediationRules
                 Load-CoveredSoftware
                 Load-GeneralRecommendations
+                Load-CompanyFolderMap
             } catch {
                 Write-Warning "Could not migrate files: $($_.Exception.Message)"
             }
@@ -1777,9 +2186,100 @@ function Show-SettingsDialog {
     $settingsForm.ShowDialog() | Out-Null
 }
 
-function Show-VScanMagicHelpDialog {
+function Show-VScanMagicOverviewHelpDialog {
+    # General overview - how the software works (broader than API-specific help)
     $helpForm = New-Object System.Windows.Forms.Form
-    $helpForm.Text = "VScanMagic Help"
+    $helpForm.Text = "VScanMagic - Overview"
+    $helpForm.Size = New-Object System.Drawing.Size(610, 640)
+    $helpForm.StartPosition = "CenterParent"
+    $helpForm.FormBorderStyle = "FixedDialog"
+    $helpForm.MaximizeBox = $false
+
+    $txt = New-Object System.Windows.Forms.RichTextBox
+    $txt.Location = New-Object System.Drawing.Point(12, 12)
+    $txt.Size = New-Object System.Drawing.Size(575, 545)
+    $txt.ReadOnly = $true
+    $txt.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+    $txt.BackColor = [System.Drawing.Color]::White
+    $txt.Text = @"
+WHAT IS VScanMagic?
+-------------------
+
+VScanMagic turns vulnerability scan data into client-ready reports. You give it
+scan results (from ConnectSecure or an Excel file), and it produces Word
+documents, Excel spreadsheets, email templates, and more - with risk scores
+and remediation guidance already calculated.
+
+HOW TO USE IT (SIMPLE)
+----------------------
+
+In short: pick your data, choose your outputs, then click the main
+"Download and Generate Reports" button (green, bottom-left).
+
+- If you use ConnectSecure: Enter your API credentials once, pick a company
+  and scan date, check which reports you want, and click Download & Generate
+  Reports. VScanMagic downloads the data, processes it, and saves the files
+  you selected.
+
+- If you have a file: Click Browse, select your All Vulnerabilities Excel
+  file, enter the client name and scan date, choose outputs, and click
+  Download and Generate Reports.
+
+EXAMPLE WORKFLOW
+----------------
+
+Scenario: Generate a quarterly vulnerability report for "Acme Corp" from
+ConnectSecure.
+
+1. API Settings: Enter Base URL, Tenant, Client ID, Client Secret. Test and Save.
+2. Refresh List: Load your companies, select "Acme Corp".
+3. Scan Date: Pick the date of the scan (e.g., last week).
+4. Reports: Ensure "All Vulnerabilities Report" is checked (required).
+   Optionally check Pending EPSS, Executive Summary, etc.
+5. Output Directory: Choose where to save the files (e.g., Desktop).
+6. Output Options: Check Word Report, Excel, Email Template - whatever you need.
+7. Download and Generate Reports: Click the main green button. VScanMagic will:
+   - Download reports from ConnectSecure
+   - Show a General Recommendations dialog (edit or keep defaults)
+   - Show a Hostname Review dialog (filter if needed)
+   - Generate your Word doc, Excel file, and other outputs
+
+Done. Your reports are in the output folder.
+
+KEY CONCEPTS
+------------
+
+- Risk Score: Combines severity (Critical/High/Medium/Low) and EPSS.
+  Higher score = fix it sooner.
+
+- Top 10: The highest-risk items. You can change the count in Report Filters.
+
+- All Vulnerabilities: The report VScanMagic uses for risk scoring. Required
+  when downloading from ConnectSecure.
+
+NEED MORE DETAIL?
+-----------------
+
+- API credentials and ConnectSecure setup: Click "API Help" (next to API Settings).
+- Full workflow options: Click "API Help", then see the Workflow tab.
+"@
+    $helpForm.Controls.Add($txt)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(488, 565)
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $helpForm.AcceptButton = $btnClose
+    $helpForm.Controls.Add($btnClose)
+
+    $helpForm.ShowDialog() | Out-Null
+}
+
+function Show-ConnectSecureApiHelpDialog {
+    # API-specific: credentials, workflow (shown when user needs ConnectSecure help)
+    $helpForm = New-Object System.Windows.Forms.Form
+    $helpForm.Text = "ConnectSecure API Help"
     $helpForm.Size = New-Object System.Drawing.Size(620, 580)
     $helpForm.StartPosition = "CenterParent"
     $helpForm.FormBorderStyle = "FixedDialog"
@@ -1878,8 +2378,8 @@ OPTION A: DOWNLOAD & PROCESS (Recommended)
 3. Set Scan Date: Choose the date for the vulnerability reports.
 
 4. Choose reports: Check the reports to download:
-   - Pending EPSS - required for full VScanMagic processing
-   - All Vulnerabilities, Suppressed, External, Executive Summary - optional
+   - All Vulnerabilities - required for full VScanMagic processing
+   - Pending EPSS, Suppressed, External, Executive Summary - optional
 
 5. Output Directory: Choose where files will be saved.
 
@@ -1887,7 +2387,7 @@ OPTION A: DOWNLOAD & PROCESS (Recommended)
 
 7. Output Options: (Button) Choose outputs: Excel, Word, Email Template, Ticket Instructions, Time Estimate.
 
-8. Click "Generate":
+8. Click "Download and Generate Reports" (main button):
    - Downloads reports from ConnectSecure for each selected company
    - Runs through General Recommendations and Hostname Review dialogs
    - Generates your selected outputs (Word report, Excel, etc.)
@@ -1895,13 +2395,13 @@ OPTION A: DOWNLOAD & PROCESS (Recommended)
 OPTION B: PROCESS FROM FILE
 ---------------------------
 
-1. In section 2, click "Browse..." and select a previously downloaded Pending EPSS report (XLSX).
+1. In section 2, click "Browse..." and select a previously downloaded All Vulnerabilities report (XLSX).
 
 2. Enter Client name and Scan Date (sometimes auto-filled from filename).
 
 3. Set Output Options and Report Filters if needed.
 
-4. Click "Generate" to process the file and create outputs.
+4. Click "Download and Generate Reports" to process the file and create outputs.
 
 QUICK ACTIONS
 -------------
@@ -1930,4 +2430,177 @@ QUICK ACTIONS
     $helpForm.Controls.Add($btnClose)
 
     $helpForm.ShowDialog() | Out-Null
+}
+
+function Show-DownloadCustomReportDialog {
+    <#
+    .SYNOPSIS
+    Shows a dialog to select standard reports and export formats for download only (no processing).
+    Dynamically loads report list from ConnectSecure API when connected; falls back to the 5 known types when not.
+    .PARAMETER CompanyId
+    First selected company ID - use for API (isGlobal=false). 0 = global context.
+    .PARAMETER GlobalReports
+    When true, fetches global reports (isGlobal=true) - Report Builder templates, no company scope.
+    .OUTPUTS
+    Array of @{ ReportId (optional); Type (optional); Name; Ext } for selected report+format combinations, or $null if cancelled.
+    #>
+    param([int]$CompanyId = 0, [switch]$GlobalReports = $false)
+    # Fallback when API not connected or returns no reports
+    $fallbackDefs = @(
+        @{ Type = 'all-vulnerabilities'; Name = 'All Vulnerabilities Report'; Formats = @('xlsx','docx','pdf') }
+        @{ Type = 'suppressed-vulnerabilities'; Name = 'Suppressed Vulnerabilities'; Formats = @('xlsx','docx','pdf') }
+        @{ Type = 'external-vulnerabilities'; Name = 'External Scan'; Formats = @('xlsx','docx','pdf') }
+        @{ Type = 'executive-summary'; Name = 'Executive Summary Report'; Formats = @('xlsx','docx','pdf') }
+        @{ Type = 'pending-epss'; Name = 'Pending Remediation EPSS Score Reports'; Formats = @('xlsx','docx','pdf') }
+    )
+
+    $reportDefs = @()
+    try {
+        # Ensure API connected so we can fetch full report list (ConnectSecure-API refreshes token if needed)
+        $creds = Load-ConnectSecureCredentials
+        if ($creds -and -not [string]::IsNullOrWhiteSpace($creds.ClientId)) {
+            $null = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+        }
+        $apiReports = if ($GlobalReports) {
+            Get-ConnectSecureStandardReports -IsGlobal $true -UseGlobalOnly
+        } else {
+            Get-ConnectSecureStandardReports -CompanyId $CompanyId
+        }
+        if ($apiReports -and $apiReports.Count -gt 0) {
+            # Group by _categoryDisplay, collect report entries (id, reportType) per category
+            $byCategory = @{}
+            foreach ($r in $apiReports) {
+                $cat = if ($r._categoryDisplay) { $r._categoryDisplay } else { $r._category }
+                if (-not $cat) { $cat = 'Unknown' }
+                $fmt = if ($r.reportType) { $r.reportType.ToString().ToLower() } else { 'xlsx' }
+                if ($fmt -notin @('xlsx','docx','pdf')) { continue }
+                if (-not $byCategory[$cat]) { $byCategory[$cat] = @{} }
+                if (-not $byCategory[$cat][$fmt]) {
+                    $byCategory[$cat][$fmt] = @{ ReportId = $r.id; Name = $cat; Ext = $fmt }
+                }
+            }
+            foreach ($key in ($byCategory.Keys | Sort-Object)) {
+                $fmts = $byCategory[$key]
+                $reportDefs += @{ ReportIdMap = $fmts; Name = $key }
+            }
+        }
+    } catch { }
+    if ($reportDefs.Count -eq 0) {
+        foreach ($def in $fallbackDefs) {
+            $reportDefs += @{ Type = $def.Type; Name = $def.Name; Formats = $def.Formats }
+        }
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = if ($GlobalReports) { 'Download Global Reports' } else { 'Download Standard Report (Company)' }
+    $form.Size = New-Object System.Drawing.Size(480, 580)
+    $form.StartPosition = 'CenterParent'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Location = New-Object System.Drawing.Point(12, 10)
+    $lbl.Size = New-Object System.Drawing.Size(440, 24)
+    $lbl.Text = if ($GlobalReports) { 'Select global report template(s) and format(s) to download:' } else { 'Select report(s) and format(s) to download (no processing):' }
+    $form.Controls.Add($lbl)
+
+    $flow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $flow.Location = New-Object System.Drawing.Point(12, 40)
+    $flow.Size = New-Object System.Drawing.Size(440, 430)
+    $flow.FlowDirection = [System.Windows.Forms.FlowDirection]::TopDown
+    $flow.AutoScroll = $true
+    $flow.WrapContents = $false
+    $flow.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+
+    $checkboxes = @{}
+    $formatsOrder = @('xlsx','docx','pdf')
+    foreach ($def in $reportDefs) {
+        $grp = New-Object System.Windows.Forms.GroupBox
+        $grp.Text = $def.Name
+        $grp.Size = New-Object System.Drawing.Size(420, 52)
+        $grp.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
+        $x = 8; $y = 20
+        if ($def.ReportIdMap) {
+            foreach ($ext in $formatsOrder) {
+                $entry = $def.ReportIdMap[$ext]
+                if (-not $entry) { continue }
+                $displayFmt = $ext.ToUpper()
+                $chk = New-Object System.Windows.Forms.CheckBox
+                $chk.Text = $displayFmt
+                $chk.Location = New-Object System.Drawing.Point($x, $y)
+                $chk.Size = New-Object System.Drawing.Size(60, 24)
+                $chk.Tag = @{ ReportId = $entry.ReportId; Name = $entry.Name; Ext = $entry.Ext }
+                $grp.Controls.Add($chk)
+                $checkboxes["$($def.Name)-$ext"] = $chk
+                $x += 70
+            }
+        } else {
+            foreach ($fmt in $def.Formats) {
+                $ext = $fmt
+                $displayFmt = $fmt.ToUpper()
+                $chk = New-Object System.Windows.Forms.CheckBox
+                $chk.Text = $displayFmt
+                $chk.Location = New-Object System.Drawing.Point($x, $y)
+                $chk.Size = New-Object System.Drawing.Size(60, 24)
+                $chk.Tag = @{ Type = $def.Type; Name = $def.Name; Ext = $ext }
+                $grp.Controls.Add($chk)
+                $checkboxes["$($def.Type)-$ext"] = $chk
+                $x += 70
+            }
+        }
+        $flow.Controls.Add($grp)
+    }
+
+    $form.Controls.Add($flow)
+
+    $btnSelectAll = New-Object System.Windows.Forms.Button
+    $btnSelectAll.Location = New-Object System.Drawing.Point(12, 478)
+    $btnSelectAll.Size = New-Object System.Drawing.Size(90, 28)
+    $btnSelectAll.Text = 'Select All'
+    $btnSelectAll.Add_Click({
+        foreach ($chk in $checkboxes.Values) { $chk.Checked = $true }
+    })
+    $form.Controls.Add($btnSelectAll)
+
+    $btnClearAll = New-Object System.Windows.Forms.Button
+    $btnClearAll.Location = New-Object System.Drawing.Point(108, 478)
+    $btnClearAll.Size = New-Object System.Drawing.Size(90, 28)
+    $btnClearAll.Text = 'Clear All'
+    $btnClearAll.Add_Click({
+        foreach ($chk in $checkboxes.Values) { $chk.Checked = $false }
+    })
+    $form.Controls.Add($btnClearAll)
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Location = New-Object System.Drawing.Point(290, 478)
+    $btnOk.Size = New-Object System.Drawing.Size(90, 28)
+    $btnOk.Text = 'Download'
+    $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.AcceptButton = $btnOk
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(392, 478)
+    $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
+    $btnCancel.Text = 'Cancel'
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.CancelButton = $btnCancel
+
+    $form.Controls.Add($btnOk)
+    $form.Controls.Add($btnCancel)
+
+    if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+
+    $selected = @()
+    foreach ($key in $checkboxes.Keys) {
+        $chk = $checkboxes[$key]
+        if ($chk.Checked) {
+            $tag = $chk.Tag
+            $item = @{ Name = $tag.Name; Ext = $tag.Ext }
+            if ($tag.ReportId) { $item.ReportId = $tag.ReportId }
+            else { $item.Type = $tag.Type }
+            $selected += $item
+        }
+    }
+    return $selected
 }

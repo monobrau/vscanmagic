@@ -18,6 +18,9 @@ function Show-VScanMagicGUI {
     # Ensure paths are updated after loading settings
     Update-SettingsPaths
     
+    # Load company folder mapping (for structured output paths)
+    Load-CompanyFolderMap
+    
     # Load remediation rules from disk
     Load-RemediationRules
     
@@ -38,12 +41,12 @@ function Show-VScanMagicGUI {
     # Create main form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
-    $form.Size = New-Object System.Drawing.Size(750, 955)
+    $form.Size = New-Object System.Drawing.Size(750, 945)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
     $form.AutoScroll = $true
-    $form.AutoScrollMinSize = New-Object System.Drawing.Size(720, 850)
+    $form.AutoScrollMinSize = New-Object System.Drawing.Size(720, 878)
 
     # --- Report Filters & Output Options (buttons, like API Settings) ---
     $btnReportFilters = New-Object System.Windows.Forms.Button
@@ -84,9 +87,20 @@ function Show-VScanMagicGUI {
     $lblOutputHint.Font = New-Object System.Drawing.Font($lblOutputHint.Font.FontFamily, 8.5)
     $form.Controls.Add($lblOutputHint)
 
+    $chkBulkProcessing = New-Object System.Windows.Forms.CheckBox
+    $chkBulkProcessing.Location = New-Object System.Drawing.Point(20, 84)
+    $chkBulkProcessing.Size = New-Object System.Drawing.Size(420, 20)
+    $chkBulkProcessing.Text = "Skip follow-up dialogs (bulk processing)"
+    $chkBulkProcessing.Checked = $false
+    $chkBulkProcessing.ForeColor = [System.Drawing.Color]::Gray
+    $chkBulkProcessing.Font = New-Object System.Drawing.Font($chkBulkProcessing.Font.FontFamily, 8.5)
+    $toolTipBulk = New-Object System.Windows.Forms.ToolTip
+    $toolTipBulk.SetToolTip($chkBulkProcessing, "When checked and 2+ companies are selected: skips General Recommendations, Hostname Review, Time Estimate dialogs, and completion/error popups. Uses defaults as if OK was clicked.")
+    $form.Controls.Add($chkBulkProcessing)
+
     # --- 1. Download from ConnectSecure (inline) ---
     $groupBoxDownload = New-Object System.Windows.Forms.GroupBox
-    $groupBoxDownload.Location = New-Object System.Drawing.Point(20, 90)
+    $groupBoxDownload.Location = New-Object System.Drawing.Point(20, 118)
     $groupBoxDownload.Size = New-Object System.Drawing.Size(680, 315)
     $groupBoxDownload.Text = "1. Download from ConnectSecure"
     $form.Controls.Add($groupBoxDownload)
@@ -102,16 +116,16 @@ function Show-VScanMagicGUI {
     $btnApiSettings.FlatAppearance.BorderSize = 0
     $btnApiSettings.Add_Click({ Show-ConnectSecureSettingsDialog })
     $groupBoxDownload.Controls.Add($btnApiSettings)
-    $btnHelp = New-Object System.Windows.Forms.Button
-    $btnHelp.Location = New-Object System.Drawing.Point(128, $dlgY)
-    $btnHelp.Size = New-Object System.Drawing.Size(80, 24)
-    $btnHelp.Text = "Help"
-    $btnHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
-    $btnHelp.ForeColor = [System.Drawing.Color]::White
-    $btnHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnHelp.FlatAppearance.BorderSize = 0
-    $btnHelp.Add_Click({ Show-VScanMagicHelpDialog })
-    $groupBoxDownload.Controls.Add($btnHelp)
+    $btnApiHelp = New-Object System.Windows.Forms.Button
+    $btnApiHelp.Location = New-Object System.Drawing.Point(128, $dlgY)
+    $btnApiHelp.Size = New-Object System.Drawing.Size(80, 24)
+    $btnApiHelp.Text = "API Help"
+    $btnApiHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnApiHelp.ForeColor = [System.Drawing.Color]::White
+    $btnApiHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnApiHelp.FlatAppearance.BorderSize = 0
+    $btnApiHelp.Add_Click({ Show-ConnectSecureApiHelpDialog })
+    $groupBoxDownload.Controls.Add($btnApiHelp)
     $lblApiSettingsHint = New-Object System.Windows.Forms.Label
     $lblApiSettingsHint.Location = New-Object System.Drawing.Point(215, ($dlgY + 4))
     $lblApiSettingsHint.Size = New-Object System.Drawing.Size(380, 18)
@@ -248,7 +262,7 @@ function Show-VScanMagicGUI {
 
     $btnDownloadStandardOnly = New-Object System.Windows.Forms.Button
     $btnDownloadStandardOnly.Location = New-Object System.Drawing.Point(20, $dlgY)
-    $btnDownloadStandardOnly.Size = New-Object System.Drawing.Size(180, 28)
+    $btnDownloadStandardOnly.Size = New-Object System.Drawing.Size(240, 28)
     $btnDownloadStandardOnly.Text = "Download Standard Reports Only"
     $btnDownloadStandardOnly.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnDownloadStandardOnly.Add_Click({
@@ -262,10 +276,12 @@ function Show-VScanMagicGUI {
             [System.Windows.Forms.MessageBox]::Show("Please select at least one company.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
-        $downloadFolder = $textBoxOutputDir.Text
-        if (-not (Test-Path $downloadFolder)) {
-            [System.Windows.Forms.MessageBox]::Show("Output directory does not exist. Please select a valid directory.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
+        if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)) {
+            $downloadFolder = $textBoxOutputDir.Text
+            if (-not (Test-Path $downloadFolder)) {
+                [System.Windows.Forms.MessageBox]::Show("Output directory does not exist. Please select a valid directory.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
         }
         $btnDownloadStandardOnly.Enabled = $false
         $lblDownloadProgress.Text = "Connecting..."
@@ -293,6 +309,15 @@ function Show-VScanMagicGUI {
             $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
             if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
 
+            $downloadFolder = Resolve-ClientOutputPath -CompanyId $company.Id -CompanyName $clientName -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -FallbackPath $textBoxOutputDir.Text -ForceManual:$chkReselectFolder.Checked
+            if (-not $downloadFolder) {
+                Write-Log "Skipped $clientName - folder selection cancelled" -Level Warning
+                continue
+            }
+            $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+            $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
+            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+
             $batchResult = $null
             $lastErr = $null
             for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
@@ -302,7 +327,6 @@ function Show-VScanMagicGUI {
                     $form.Refresh()
                     [System.Windows.Forms.Application]::DoEvents()
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-                    $outputPathScript = { param($r) Join-Path $downloadFolder "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $standardReports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -SkipPostDownloadTopX -OnProgress $onProgress
                     break
                 } catch {
@@ -332,6 +356,155 @@ function Show-VScanMagicGUI {
         $btnDownloadStandardOnly.Enabled = $true
     })
     $groupBoxDownload.Controls.Add($btnDownloadStandardOnly)
+
+    $btnDownloadCustom = New-Object System.Windows.Forms.Button
+    $btnDownloadCustom.Location = New-Object System.Drawing.Point(270, $dlgY)
+    $btnDownloadCustom.Size = New-Object System.Drawing.Size(150, 28)
+    $btnDownloadCustom.Text = "Download Custom..."
+    $btnDownloadCustom.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadCustom.Add_Click({
+        $creds = Load-ConnectSecureCredentials
+        if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
+            [System.Windows.Forms.MessageBox]::Show("Please configure API credentials first. Click 'Settings' then 'API Settings'.", "Credentials Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        $checkedCompanies = @($checkedListCompany.CheckedItems)
+        if ($checkedCompanies.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Please select at least one company.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)) {
+            $downloadFolder = $textBoxOutputDir.Text
+            if (-not (Test-Path $downloadFolder)) {
+                [System.Windows.Forms.MessageBox]::Show("Output directory does not exist. Please select a valid directory.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+        }
+        $firstCompanyId = if ($checkedCompanies.Count -gt 0 -and $checkedCompanies[0].Id) { $checkedCompanies[0].Id } else { 0 }
+        $reports = Show-DownloadCustomReportDialog -CompanyId $firstCompanyId
+        if (-not $reports -or $reports.Count -eq 0) { return }
+        $btnDownloadCustom.Enabled = $false
+        $lblDownloadProgress.Text = "Connecting..."
+        $form.Refresh()
+        [System.Windows.Forms.Application]::DoEvents()
+        $onProgress = { param($m) $lblDownloadProgress.Text = $m; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
+        $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+        if (-not $connected) {
+            [System.Windows.Forms.MessageBox]::Show("Authentication failed. Check API Settings.", "Authentication Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            $btnDownloadCustom.Enabled = $true
+            return
+        }
+        $successCount = 0
+        $failCount = 0
+        $maxRetries = 3
+        $scanDate = $datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")
+        foreach ($company in $checkedCompanies) {
+            $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
+            if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
+
+            $downloadFolder = Resolve-ClientOutputPath -CompanyId $company.Id -CompanyName $clientName -ScanDate $scanDate -FallbackPath $textBoxOutputDir.Text -ForceManual:$chkReselectFolder.Checked
+            if (-not $downloadFolder) {
+                Write-Log "Skipped $clientName - folder selection cancelled" -Level Warning
+                continue
+            }
+            $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+            $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
+            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+
+            $batchResult = $null
+            for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+                try {
+                    $retryPart = if ($attempt -gt 1) { " (retry $attempt/$maxRetries)" } else { "" }
+                    $lblDownloadProgress.Text = "Downloading for $clientName...$retryPart"
+                    $form.Refresh()
+                    [System.Windows.Forms.Application]::DoEvents()
+                    $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+                    $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
+                    break
+                } catch {
+                    $isRetryable = $_.Exception.Message -match 'timeout|timed out|connection|404|Unable to connect|reset'
+                    if (-not $isRetryable -or $attempt -eq $maxRetries) { break }
+                    Start-Sleep -Seconds ([Math]::Min(3 + $attempt * 2, 10))
+                }
+            }
+            if ($batchResult) {
+                $successCount += if ($batchResult.Succeeded) { $batchResult.Succeeded.Count } else { 0 }
+                $failCount += if ($batchResult.Failed) { $batchResult.Failed.Count } else { 0 }
+                Write-Log "Downloaded $($batchResult.Succeeded.Count) custom reports for $clientName" -Level Success
+            } else {
+                $failCount += $reports.Count
+            }
+        }
+        $lblDownloadProgress.Text = "Download complete."
+        Write-Log "Custom reports download complete. Succeeded: $successCount, Failed: $failCount" -Level Info
+        if ($textBoxOutputDir.Text -and (Test-Path $textBoxOutputDir.Text)) {
+            $script:UserSettings.LastOutputDirectory = $textBoxOutputDir.Text
+            Save-UserSettings | Out-Null
+        }
+        [System.Windows.Forms.MessageBox]::Show("Download complete.`nSucceeded: $successCount | Failed: $failCount", "Download Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $btnDownloadCustom.Enabled = $true
+    })
+    $groupBoxDownload.Controls.Add($btnDownloadCustom)
+
+    $btnDownloadGlobal = New-Object System.Windows.Forms.Button
+    $btnDownloadGlobal.Location = New-Object System.Drawing.Point(430, $dlgY)
+    $btnDownloadGlobal.Size = New-Object System.Drawing.Size(140, 28)
+    $btnDownloadGlobal.Text = "Download Global..."
+    $btnDownloadGlobal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadGlobal.Add_Click({
+        $creds = Load-ConnectSecureCredentials
+        if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
+            [System.Windows.Forms.MessageBox]::Show("Please configure API credentials first. Click 'Settings' then 'API Settings'.", "Credentials Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)) {
+            $downloadFolder = $textBoxOutputDir.Text
+            if (-not (Test-Path $downloadFolder)) {
+                [System.Windows.Forms.MessageBox]::Show("Output directory does not exist. Please select a valid directory.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+        }
+        $reports = Show-DownloadCustomReportDialog -GlobalReports
+        if (-not $reports -or $reports.Count -eq 0) { return }
+        $downloadFolder = Resolve-ClientOutputPath -CompanyId 0 -CompanyName "Global" -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -FallbackPath $textBoxOutputDir.Text -ForceManual:$chkReselectFolder.Checked
+        if (-not $downloadFolder) {
+            [System.Windows.Forms.MessageBox]::Show("Folder selection was cancelled.", "Cancelled", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+        $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
+        $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "Global - $($r.Name) - $timestamp.$($r.Ext)" }
+        $btnDownloadGlobal.Enabled = $false
+        $lblDownloadProgress.Text = "Connecting..."
+        $form.Refresh()
+        [System.Windows.Forms.Application]::DoEvents()
+        $onProgress = { param($m) $lblDownloadProgress.Text = $m; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
+        $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+        if (-not $connected) {
+            [System.Windows.Forms.MessageBox]::Show("Authentication failed. Check API Settings.", "Authentication Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            $btnDownloadGlobal.Enabled = $true
+            return
+        }
+        $scanDate = $datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")
+        $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        try {
+            $lblDownloadProgress.Text = "Downloading global reports..."
+            $form.Refresh()
+            $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId 0 -ClientName "Global" -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
+            $successCount = if ($batchResult.Succeeded) { $batchResult.Succeeded.Count } else { 0 }
+            $failCount = if ($batchResult.Failed) { $batchResult.Failed.Count } else { 0 }
+            [System.Windows.Forms.MessageBox]::Show("Download complete.`nSucceeded: $successCount | Failed: $failCount", "Download Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Download failed: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+        $lblDownloadProgress.Text = "Download complete."
+        if ($textBoxOutputDir.Text -and (Test-Path $textBoxOutputDir.Text)) {
+            $script:UserSettings.LastOutputDirectory = $textBoxOutputDir.Text
+            Save-UserSettings | Out-Null
+        }
+        $btnDownloadGlobal.Enabled = $true
+    })
+    $groupBoxDownload.Controls.Add($btnDownloadGlobal)
 
     # Initialize checkedListCompany with All Companies (from saved credentials + cache)
     $script:PopulateCheckedListCompany = {
@@ -398,7 +571,7 @@ function Show-VScanMagicGUI {
 
     # --- 2. Process from file ---
     $groupBoxManual = New-Object System.Windows.Forms.GroupBox
-    $groupBoxManual.Location = New-Object System.Drawing.Point(20, 415)
+    $groupBoxManual.Location = New-Object System.Drawing.Point(20, 443)
     $groupBoxManual.Size = New-Object System.Drawing.Size(680, 95)
     $groupBoxManual.Text = "2. Or process a previously downloaded file"
     $form.Controls.Add($groupBoxManual)
@@ -406,7 +579,7 @@ function Show-VScanMagicGUI {
     $labelInputFile = New-Object System.Windows.Forms.Label
     $labelInputFile.Location = New-Object System.Drawing.Point(20, 18)
     $labelInputFile.Size = New-Object System.Drawing.Size(180, 18)
-    $labelInputFile.Text = "Pending EPSS Report (XLSX):"
+    $labelInputFile.Text = "All Vulnerabilities Report (XLSX):"
     $groupBoxManual.Controls.Add($labelInputFile)
 
     $textBoxInputFile = New-Object System.Windows.Forms.TextBox
@@ -422,7 +595,7 @@ function Show-VScanMagicGUI {
     $buttonBrowseInput.Add_Click({
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
         $openFileDialog.Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
-        $openFileDialog.Title = "Select Pending EPSS Report"
+        $openFileDialog.Title = "Select All Vulnerabilities Report"
 
         if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $textBoxInputFile.Text = $openFileDialog.FileName
@@ -501,19 +674,19 @@ function Show-VScanMagicGUI {
 
     $datePickerScanDate = New-Object System.Windows.Forms.DateTimePicker
     $datePickerScanDate.Location = New-Object System.Drawing.Point(283, 65)
-    $datePickerScanDate.Size = New-Object System.Drawing.Size(80, 20)
+    $datePickerScanDate.Size = New-Object System.Drawing.Size(130, 20)
     $datePickerScanDate.Format = [System.Windows.Forms.DateTimePickerFormat]::Short
     $groupBoxManual.Controls.Add($datePickerScanDate)
 
     # --- Output Directory ---
     $labelOutputDir = New-Object System.Windows.Forms.Label
-    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 525)
+    $labelOutputDir.Location = New-Object System.Drawing.Point(20, 553)
     $labelOutputDir.Size = New-Object System.Drawing.Size(150, 20)
     $labelOutputDir.Text = "Output Directory:"
     $form.Controls.Add($labelOutputDir)
 
     $textBoxOutputDir = New-Object System.Windows.Forms.TextBox
-    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 550)
+    $textBoxOutputDir.Location = New-Object System.Drawing.Point(20, 578)
     $textBoxOutputDir.Size = New-Object System.Drawing.Size(570, 20)
     $textBoxOutputDir.Text = if ($script:UserSettings.LastOutputDirectory -and (Test-Path $script:UserSettings.LastOutputDirectory)) { $script:UserSettings.LastOutputDirectory } else { [Environment]::GetFolderPath("Desktop") }
     $form.Controls.Add($textBoxOutputDir)
@@ -535,16 +708,84 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($buttonBrowseOutput)
 
+    $toolTipOutput = New-Object System.Windows.Forms.ToolTip
+    $lblStructuredPathHint = New-Object System.Windows.Forms.Label
+    $lblStructuredPathHint.Location = New-Object System.Drawing.Point(20, 576)
+    $lblStructuredPathHint.Size = New-Object System.Drawing.Size(560, 18)
+    $lblStructuredPathHint.AutoEllipsis = $true
+    $lblStructuredPathHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblStructuredPathHint.Font = New-Object System.Drawing.Font($lblStructuredPathHint.Font.FontFamily, 8.5)
+    $form.Controls.Add($lblStructuredPathHint)
+
+    $chkReselectFolder = New-Object System.Windows.Forms.CheckBox
+    $chkReselectFolder.Location = New-Object System.Drawing.Point(20, 596)
+    $chkReselectFolder.Size = New-Object System.Drawing.Size(220, 20)
+    $chkReselectFolder.Text = "Re-select folder(s) for this run"
+    $chkReselectFolder.ForeColor = [System.Drawing.Color]::Gray
+    $form.Controls.Add($chkReselectFolder)
+
+    $btnEditMappings = New-Object System.Windows.Forms.Button
+    $btnEditMappings.Location = New-Object System.Drawing.Point(250, 594)
+    $btnEditMappings.Size = New-Object System.Drawing.Size(210, 24)
+    $btnEditMappings.Text = "Edit Output Folder Mappings"
+    $btnEditMappings.Add_Click({ Show-CompanyFolderMappingDialog })
+    $form.Controls.Add($btnEditMappings)
+
+    $btnReportHistory = New-Object System.Windows.Forms.Button
+    $btnReportHistory.Location = New-Object System.Drawing.Point(470, 594)
+    $btnReportHistory.Size = New-Object System.Drawing.Size(130, 24)
+    $btnReportHistory.Text = "Report Folder History"
+    $btnReportHistory.Add_Click({ Show-ReportFolderHistoryDialog })
+    $form.Controls.Add($btnReportHistory)
+
+    $script:UpdateOutputDirUI = {
+        $structuredOffset = 0
+        if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -and (Test-Path $script:UserSettings.ReportsBasePath)) {
+            $labelOutputDir.Text = "Output:"
+            $labelOutputDir.Visible = $true
+            $textBoxOutputDir.Visible = $false
+            $buttonBrowseOutput.Visible = $false
+            $lblStructuredPathHint.Text = "Using structured paths. Base: $($script:UserSettings.ReportsBasePath)"
+            $lblStructuredPathHint.Visible = $true
+            $toolTipOutput.SetToolTip($lblStructuredPathHint, $script:UserSettings.ReportsBasePath)
+            $chkReselectFolder.Visible = $true
+            $btnEditMappings.Visible = $true
+            $btnReportHistory.Visible = $true
+            $structuredOffset = 22
+        } else {
+            $labelOutputDir.Text = "Output Directory:"
+            $labelOutputDir.Visible = $true
+            $textBoxOutputDir.Visible = $true
+            $buttonBrowseOutput.Visible = $true
+            $lblStructuredPathHint.Visible = $false
+            $chkReselectFolder.Visible = $false
+            $btnEditMappings.Visible = $false
+            $btnReportHistory.Visible = $true
+            $toolTipOutput.SetToolTip($lblStructuredPathHint, $null)
+        }
+        if ($script:StatusLabel) {
+            $baseY = 620 + $structuredOffset   # 8px padding below Output (checkbox/button row)
+            $script:StatusLabel.Location = New-Object System.Drawing.Point(20, $baseY)
+            $script:ProgressBar.Location = New-Object System.Drawing.Point(20, ($baseY + 25))
+            $labelLog.Location = New-Object System.Drawing.Point(20, ($baseY + 50))
+            $script:LogTextBox.Location = New-Object System.Drawing.Point(20, ($baseY + 75))
+            $labelTicketNotes.Location = New-Object System.Drawing.Point(20, ($baseY + 160))
+            $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, ($baseY + 185))
+            $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, ($baseY + 185))
+            $panelBottomButtons.Location = New-Object System.Drawing.Point(20, ($baseY + 220))
+        }
+    }
+
     # --- Progress Section ---
     $script:StatusLabel = New-Object System.Windows.Forms.Label
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 577)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(20, 620)
     $script:StatusLabel.Size = New-Object System.Drawing.Size(660, 20)
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Visible = $false
     $form.Controls.Add($script:StatusLabel)
 
     $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
-    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 602)
+    $script:ProgressBar.Location = New-Object System.Drawing.Point(20, 625)
     $script:ProgressBar.Size = New-Object System.Drawing.Size(660, 20)
     $script:ProgressBar.Style = 'Marquee'
     $script:ProgressBar.MarqueeAnimationSpeed = 30
@@ -553,13 +794,13 @@ function Show-VScanMagicGUI {
 
     # --- Log Section ---
     $labelLog = New-Object System.Windows.Forms.Label
-    $labelLog.Location = New-Object System.Drawing.Point(20, 627)
+    $labelLog.Location = New-Object System.Drawing.Point(20, 630)
     $labelLog.Size = New-Object System.Drawing.Size(150, 20)
     $labelLog.Text = "Processing Log:"
     $form.Controls.Add($labelLog)
 
     $script:LogTextBox = New-Object System.Windows.Forms.TextBox
-    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 652)
+    $script:LogTextBox.Location = New-Object System.Drawing.Point(20, 665)
     $script:LogTextBox.Size = New-Object System.Drawing.Size(660, 80)
     $script:LogTextBox.Multiline = $true
     $script:LogTextBox.ScrollBars = "Vertical"
@@ -567,90 +808,16 @@ function Show-VScanMagicGUI {
     $script:LogTextBox.Font = New-Object System.Drawing.Font("Consolas", 9)
     $form.Controls.Add($script:LogTextBox)
 
-    # --- View Reports Section Label ---
-    $labelViewReports = New-Object System.Windows.Forms.Label
-    $labelViewReports.Location = New-Object System.Drawing.Point(20, 732)
-    $labelViewReports.Size = New-Object System.Drawing.Size(200, 20)
-    $labelViewReports.Text = "View Generated Reports:"
-    $form.Controls.Add($labelViewReports)
-
-    # --- Open Report Buttons ---
-    # Uniform button width and spacing for better UX
-    $buttonWidth = 120
-    $buttonSpacing = 15
-    $startX = 20
-    $buttonY = 757
-    
-    $script:buttonOpenWord = New-Object System.Windows.Forms.Button
-    $script:buttonOpenWord.Location = New-Object System.Drawing.Point($startX, $buttonY)
-    $script:buttonOpenWord.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenWord.Text = "View Report"
-    $script:buttonOpenWord.Enabled = $false
-    $script:buttonOpenWord.Add_Click({
-        if ($script:WordReportPath -and (Test-Path $script:WordReportPath)) {
-            Start-Process $script:WordReportPath
-        }
-    })
-    $form.Controls.Add($script:buttonOpenWord)
-
-    $script:buttonOpenExcel = New-Object System.Windows.Forms.Button
-    $script:buttonOpenExcel.Location = New-Object System.Drawing.Point(($startX + $buttonWidth + $buttonSpacing), $buttonY)
-    $script:buttonOpenExcel.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenExcel.Text = "EPSS Report"
-    $script:buttonOpenExcel.Enabled = $false
-    $script:buttonOpenExcel.Add_Click({
-        if ($script:ExcelReportPath -and (Test-Path $script:ExcelReportPath)) {
-            Start-Process $script:ExcelReportPath
-        }
-    })
-    $form.Controls.Add($script:buttonOpenExcel)
-
-    $script:buttonOpenEmail = New-Object System.Windows.Forms.Button
-    $script:buttonOpenEmail.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 2), $buttonY)
-    $script:buttonOpenEmail.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenEmail.Text = "Email Template"
-    $script:buttonOpenEmail.Enabled = $false
-    $script:buttonOpenEmail.Add_Click({
-        if ($script:EmailTemplatePath -and (Test-Path $script:EmailTemplatePath)) {
-            Start-Process $script:EmailTemplatePath
-        }
-    })
-    $form.Controls.Add($script:buttonOpenEmail)
-
-    $script:buttonOpenTicket = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicket.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 3), $buttonY)
-    $script:buttonOpenTicket.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenTicket.Text = "Ticket Instr."
-    $script:buttonOpenTicket.Enabled = $false
-    $script:buttonOpenTicket.Add_Click({
-        if ($script:TicketInstructionsPath -and (Test-Path $script:TicketInstructionsPath)) {
-            Start-Process $script:TicketInstructionsPath
-        }
-    })
-    $form.Controls.Add($script:buttonOpenTicket)
-
-    $script:buttonOpenTimeEstimate = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTimeEstimate.Location = New-Object System.Drawing.Point(($startX + ($buttonWidth + $buttonSpacing) * 4), $buttonY)
-    $script:buttonOpenTimeEstimate.Size = New-Object System.Drawing.Size($buttonWidth, 25)
-    $script:buttonOpenTimeEstimate.Text = "Time Estimate"
-    $script:buttonOpenTimeEstimate.Enabled = $false
-    $script:buttonOpenTimeEstimate.Add_Click({
-        if ($script:TimeEstimatePath -and (Test-Path $script:TimeEstimatePath)) {
-            Start-Process $script:TimeEstimatePath
-        }
-    })
-    $form.Controls.Add($script:buttonOpenTimeEstimate)
-
     # --- Ticket Notes Section Label ---
     $labelTicketNotes = New-Object System.Windows.Forms.Label
-    $labelTicketNotes.Location = New-Object System.Drawing.Point(20, 792)
+    $labelTicketNotes.Location = New-Object System.Drawing.Point(20, 780)
     $labelTicketNotes.Size = New-Object System.Drawing.Size(200, 20)
     $labelTicketNotes.Text = "Ticket Notes:"
     $form.Controls.Add($labelTicketNotes)
 
     # --- Ticket Notes Buttons ---
     $buttonCopyTicketNotes = New-Object System.Windows.Forms.Button
-    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 817)
+    $buttonCopyTicketNotes.Location = New-Object System.Drawing.Point(20, 805)
     $buttonCopyTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $buttonCopyTicketNotes.Text = "Copy to Clipboard"
     $buttonCopyTicketNotes.Add_Click({
@@ -659,7 +826,7 @@ function Show-VScanMagicGUI {
     $form.Controls.Add($buttonCopyTicketNotes)
 
     $script:buttonOpenTicketNotes = New-Object System.Windows.Forms.Button
-    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 817)
+    $script:buttonOpenTicketNotes.Location = New-Object System.Drawing.Point(160, 805)
     $script:buttonOpenTicketNotes.Size = New-Object System.Drawing.Size(130, 25)
     $script:buttonOpenTicketNotes.Text = "View Ticket Notes"
     $script:buttonOpenTicketNotes.Enabled = $false
@@ -670,19 +837,21 @@ function Show-VScanMagicGUI {
     })
     $form.Controls.Add($script:buttonOpenTicketNotes)
 
-    # --- Action Buttons (Bottom row: Generate | Remediation Rules | Settings | Close) ---
+    # --- Action Buttons (Bottom row: Generate = main; Remediation Rules | Settings | Help | Close) ---
     $panelBottomButtons = New-Object System.Windows.Forms.Panel
-    $panelBottomButtons.Location = New-Object System.Drawing.Point(20, 852)
+    $panelBottomButtons.Location = New-Object System.Drawing.Point(20, 840)
     $panelBottomButtons.Size = New-Object System.Drawing.Size(680, 35)
     $form.Controls.Add($panelBottomButtons)
 
+    & $script:UpdateOutputDirUI
+
     $buttonGenerate = New-Object System.Windows.Forms.Button
     $buttonGenerate.Location = New-Object System.Drawing.Point(0, 0)
-    $buttonGenerate.Size = New-Object System.Drawing.Size(130, 30)
+    $buttonGenerate.Size = New-Object System.Drawing.Size(220, 30)
     $panelBottomButtons.Controls.Add($buttonGenerate)
 
     $buttonRemediationRules = New-Object System.Windows.Forms.Button
-    $buttonRemediationRules.Location = New-Object System.Drawing.Point(140, 0)
+    $buttonRemediationRules.Location = New-Object System.Drawing.Point(230, 0)
     $buttonRemediationRules.Size = New-Object System.Drawing.Size(140, 30)
     $buttonRemediationRules.Text = "Remediation Rules"
     $buttonRemediationRules.Add_Click({
@@ -691,41 +860,43 @@ function Show-VScanMagicGUI {
     $panelBottomButtons.Controls.Add($buttonRemediationRules)
 
     $buttonSettings = New-Object System.Windows.Forms.Button
-    $buttonSettings.Location = New-Object System.Drawing.Point(290, 0)
+    $buttonSettings.Location = New-Object System.Drawing.Point(380, 0)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
     $buttonSettings.Add_Click({
         Show-SettingsDialog
+        if ($script:UpdateOutputDirUI) { & $script:UpdateOutputDirUI }
     })
     $panelBottomButtons.Controls.Add($buttonSettings)
 
     $buttonHelp = New-Object System.Windows.Forms.Button
-    $buttonHelp.Location = New-Object System.Drawing.Point(400, 0)
+    $buttonHelp.Location = New-Object System.Drawing.Point(490, 0)
     $buttonHelp.Size = New-Object System.Drawing.Size(80, 30)
     $buttonHelp.Text = "Help"
     $buttonHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
     $buttonHelp.ForeColor = [System.Drawing.Color]::White
     $buttonHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $buttonHelp.FlatAppearance.BorderSize = 0
-    $buttonHelp.Add_Click({ Show-VScanMagicHelpDialog })
+    $buttonHelp.Add_Click({ Show-VScanMagicOverviewHelpDialog })
     $panelBottomButtons.Controls.Add($buttonHelp)
 
-    $buttonGenerate.Text = "Generate"
-    $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)  # Blue - Primary action
+    $buttonGenerate.Text = "Download and Generate Reports"
+    $buttonGenerate.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)  # Green - Primary action (download + generate)
     $buttonGenerate.ForeColor = [System.Drawing.Color]::White
     $buttonGenerate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $buttonGenerate.FlatAppearance.BorderSize = 0
+    $toolTipOutput.SetToolTip($buttonGenerate, "Main action: Downloads reports from ConnectSecure (if configured) and/or processes files to generate Word, Excel, and other outputs.")
     $buttonGenerate.Add_Click({
         # Validate: need either (a) input file selected, or (b) API creds + at least one company checked + Pending EPSS for download
         $hasFile = -not [string]::IsNullOrWhiteSpace($textBoxInputFile.Text)
         $creds = Load-ConnectSecureCredentials
-        $canDownload = $creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl) -and -not [string]::IsNullOrWhiteSpace($creds.ClientId) -and -not [string]::IsNullOrWhiteSpace($creds.ClientSecret) -and $chkPendingEPSS.Checked
+        $canDownload = $creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl) -and -not [string]::IsNullOrWhiteSpace($creds.ClientId) -and -not [string]::IsNullOrWhiteSpace($creds.ClientSecret) -and $chkAllVulnerabilities.Checked
         $checkedCompanies = @($checkedListCompany.CheckedItems)
         $hasCompanies = $checkedCompanies.Count -gt 0
 
         if (-not $hasFile) {
             if (-not $canDownload -or -not $hasCompanies) {
-                [System.Windows.Forms.MessageBox]::Show("Please select an input file (Browse) OR configure API credentials, select one or more companies, and ensure Pending EPSS Report is checked to download first.", "Validation Error",
+                [System.Windows.Forms.MessageBox]::Show("Please select an input file (Browse) OR configure API credentials, select one or more companies, and ensure All Vulnerabilities Report is checked to download first.", "Validation Error",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
                 return
             }
@@ -749,17 +920,18 @@ function Show-VScanMagicGUI {
         $script:LogTextBox.Clear()
 
         # Disable open buttons at start
-        $script:buttonOpenWord.Enabled = $false
-        $script:buttonOpenExcel.Enabled = $false
-        $script:buttonOpenEmail.Enabled = $false
-        $script:buttonOpenTicket.Enabled = $false
-        $script:buttonOpenTimeEstimate.Enabled = $false
         $script:buttonOpenTicketNotes.Enabled = $false
 
         $isAsyncPath = $false
         try {
             $companiesToProcess = if ($hasFile) {
-                @([PSCustomObject]@{ Id = 0; DisplayName = $textBoxClientName.Text; InputPath = $textBoxInputFile.Text })
+                $resolvedPath = Resolve-ClientOutputPath -CompanyId 0 -CompanyName $textBoxClientName.Text -ScanDate ($datePickerScanDate.Value.ToShortDateString()) -FallbackPath $textBoxOutputDir.Text -ForceManual:$chkReselectFolder.Checked
+                if (-not $resolvedPath) {
+                    [System.Windows.Forms.MessageBox]::Show("Folder selection was cancelled.", "Cancelled", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                    $buttonGenerate.Enabled = $true
+                    return
+                }
+                @([PSCustomObject]@{ Id = 0; DisplayName = $textBoxClientName.Text; InputPath = $textBoxInputFile.Text; OutputDir = $resolvedPath })
             } else {
                 @($checkedCompanies)
             }
@@ -774,7 +946,7 @@ function Show-VScanMagicGUI {
             $topCount = if ($script:FilterTopN -eq "All") { 500 } else { [int]$script:FilterTopN }
 
             if (-not $hasFile) {
-                if (-not (Test-Path $downloadFolder)) {
+                if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -and -not (Test-Path $downloadFolder)) {
                     [System.Windows.Forms.MessageBox]::Show("Output directory does not exist. Please select a valid directory.", "Validation Error",
                         [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
                     $buttonGenerate.Enabled = $true
@@ -783,91 +955,78 @@ function Show-VScanMagicGUI {
                 $isAsyncPath = $true
                 $lblDownloadProgress.Text = "Connecting..."
                 $form.Refresh()
+                [System.Windows.Forms.Application]::DoEvents()
 
-                $worker = New-Object System.ComponentModel.BackgroundWorker
-                $worker.WorkerReportsProgress = $true
-                $worker.Add_DoWork({
-                    param($s, $e)
-                    $arg = $e.Argument
-                    $reportProgress = { param($msg) $s.ReportProgress(0, $msg) }
+                $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+                if (-not $connected) {
+                    [System.Windows.Forms.MessageBox]::Show("Authentication failed. Check API Settings.", "Authentication Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                    $buttonGenerate.Enabled = $true
+                    return
+                }
 
-                    $connected = Connect-ConnectSecureAPI -BaseUrl $arg.Creds.BaseUrl -TenantName $arg.Creds.TenantName -ClientId $arg.Creds.ClientId -ClientSecret $arg.Creds.ClientSecret
-                    if (-not $connected) { $e.Result = @{ Error = "Authentication failed" }; return }
+                $companiesData = [System.Collections.ArrayList]::new()
+                $scanDate = $datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")
+                $maxRetries = 3
+                $onProgress = { param($m) $lblDownloadProgress.Text = $m; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
+                foreach ($company in $checkedCompanies) {
+                    $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
 
-                    $companiesData = [System.Collections.ArrayList]::new()
-                    $scanDate = $arg.ScanDate
-                    $maxRetries = 3
-                    foreach ($company in $arg.Companies) {
-                        $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
-                        if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
+                    $downloadFolder = Resolve-ClientOutputPath -CompanyId $company.Id -CompanyName $clientName -ScanDate $scanDate -FallbackPath $textBoxOutputDir.Text -ForceManual:$chkReselectFolder.Checked
+                    if (-not $downloadFolder) {
+                        Write-Log "Skipped $clientName - folder selection cancelled" -Level Warning
+                        continue
+                    }
+                    $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+                    $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
+                    $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
 
-                        $batchResult = $null
-                        $lastErr = $null
-                        for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
-                            try {
-                                $retryPart = if ($attempt -gt 1) { " (retry $attempt/$maxRetries)" } else { "" }
-                                $reportProgress.Invoke("Downloading for $clientName...$retryPart")
-                                $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
-                                $outputPathScript = { param($r) Join-Path $arg.DownloadFolder "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
-                                $onProg = { param($m) $reportProgress.Invoke($m) }
-                                $batchResult = Invoke-ConnectSecureReportsBatch -Reports $arg.Reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -TopCount $arg.TopCount -MinEPSS $arg.MinEPSS -IncludeCritical $arg.IncludeCritical -IncludeHigh $arg.IncludeHigh -IncludeMedium $arg.IncludeMedium -IncludeLow $arg.IncludeLow -SkipPostDownloadTopX -OnProgress $onProg
-                                break
-                            } catch {
-                                $lastErr = $_
-                                $isRetryable = $_.Exception.Message -match 'timeout|timed out|connection|404|Unable to connect|reset'
-                                if (-not $isRetryable -or $attempt -eq $maxRetries) { break }
-                                Start-Sleep -Seconds ([Math]::Min(3 + $attempt * 2, 10))
-                            }
-                        }
-                        if (-not $batchResult) { continue }
-                        $pendingEpssReport = $batchResult.Succeeded | Where-Object { $_.Type -eq "pending-epss" } | Select-Object -First 1
-                        $inputPath = if ($pendingEpssReport) { Join-Path $arg.DownloadFolder "$clientName - $($pendingEpssReport.Name) - $timestamp.$($pendingEpssReport.Ext)" } else { $null }
-                        if ($inputPath -and (Test-Path $inputPath)) {
-                            $null = $companiesData.Add(@{ Company = $company; InputPath = $inputPath; ClientName = $clientName; ScanDate = $scanDate })
+                    $batchResult = $null
+                    $lastErr = $null
+                    for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+                        try {
+                            $retryPart = if ($attempt -gt 1) { " (retry $attempt/$maxRetries)" } else { "" }
+                            $lblDownloadProgress.Text = "Downloading for $clientName...$retryPart"
+                            $form.Refresh()
+                            [System.Windows.Forms.Application]::DoEvents()
+                            $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+                            $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -TopCount $topCount -MinEPSS $script:FilterMinEPSS -IncludeCritical $script:FilterIncludeCritical -IncludeHigh $script:FilterIncludeHigh -IncludeMedium $script:FilterIncludeMedium -IncludeLow $script:FilterIncludeLow -SkipPostDownloadTopX -OnProgress $onProgress
+                            break
+                        } catch {
+                            $lastErr = $_
+                            $isRetryable = $_.Exception.Message -match 'timeout|timed out|connection|404|Unable to connect|reset'
+                            if (-not $isRetryable -or $attempt -eq $maxRetries) { break }
+                            Start-Sleep -Seconds ([Math]::Min(3 + $attempt * 2, 10))
                         }
                     }
-                    $e.Result = @{ Success = $true; Companies = @($companiesData); DownloadFolder = $arg.DownloadFolder }
-                })
-                $worker.Add_ProgressChanged({
-                    param($s2, $e)
-                    $msg = $e.UserState
-                    $form.BeginInvoke([Action]{ if ($msg) { $lblDownloadProgress.Text = $msg }; $form.Refresh() }) | Out-Null
-                })
-                $worker.Add_RunWorkerCompleted({
-                    param($s, $e)
-                    $err = $e.Error
-                    $result = $e.Result
-                    $form.BeginInvoke([Action]{
-                    try {
-                        if ($err) {
-                            Write-Log "Download failed: $($err.Message)" -Level Error
-                            [System.Windows.Forms.MessageBox]::Show("An error occurred: $($err.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-                            $buttonGenerate.Enabled = $true
-                            return
-                        }
-                        if ($result.Error) {
-                            [System.Windows.Forms.MessageBox]::Show($result.Error, "Authentication Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-                            $buttonGenerate.Enabled = $true
-                            return
-                        }
-                        $companiesData = $result.Companies
-                        if ($companiesData.Count -eq 0) {
-                            [System.Windows.Forms.MessageBox]::Show("No companies were downloaded successfully.", "Download Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                            $buttonGenerate.Enabled = $true
-                            return
-                        }
-                        $lblDownloadProgress.Text = "Download complete. Processing..."
-                        $form.Refresh()
-                        $companiesToProcess = $companiesData
-                    } catch {
-                        $buttonGenerate.Enabled = $true
-                        return
+                    if (-not $batchResult) { continue }
+                    $inputReport = $batchResult.Succeeded | Where-Object { $_.Type -eq "all-vulnerabilities" } | Select-Object -First 1
+                    $inputPath = if ($inputReport) { Join-Path $downloadFolder "$clientName - $($inputReport.Name) - $timestamp.$($inputReport.Ext)" } else { $null }
+                    if ($inputPath -and (Test-Path $inputPath)) {
+                        $null = $companiesData.Add(@{ Company = $company; InputPath = $inputPath; ClientName = $clientName; ScanDate = $scanDate; OutputDir = $downloadFolder })
                     }
-                    try {
+                }
+
+                if ($companiesData.Count -eq 0) {
+                    [System.Windows.Forms.MessageBox]::Show("No companies were downloaded successfully. Check that All Vulnerabilities report is selected and that the reports download correctly (try Download Standard Reports first).", "Download Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                    $buttonGenerate.Enabled = $true
+                    return
+                }
+
+                $lblDownloadProgress.Text = "Download complete. Processing..."
+                $form.Refresh()
+                [System.Windows.Forms.Application]::DoEvents()
+                $companiesToProcess = @($companiesData)
+                # Only skip dialogs when 2+ companies (true bulk); single-company always shows dialogs
+                $skipDialogsForBulk = $chkBulkProcessing.Checked -and $companiesData.Count -gt 1
+                $processedOutputs = [System.Collections.ArrayList]::new()
+                try {
                         foreach ($companyData in $companiesToProcess) {
+                            [System.Windows.Forms.Application]::DoEvents()
                             $inputPath = $companyData.InputPath
                             $clientName = $companyData.ClientName
                             $scanDate = $companyData.ScanDate
+                            $outputDir = if ($companyData.OutputDir) { $companyData.OutputDir } else { $textBoxOutputDir.Text }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
@@ -877,8 +1036,11 @@ function Show-VScanMagicGUI {
 
             # Reusable values for this client (avoids repeated logic)
             $companyName = if ([string]::IsNullOrWhiteSpace($clientName)) { "Client" } else { $clientName }
-            $outputDir = $textBoxOutputDir.Text
             $reportTimestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+            $useMiscForText = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+            $miscDir = if ($useMiscForText) { Join-Path $outputDir "Misc" } else { $outputDir }
+            if ($useMiscForText -and -not (Test-Path $miscDir)) { New-Item -ItemType Directory -Path $miscDir -Force | Out-Null }
+            $textOutputDir = $miscDir
 
             # Read vulnerability data from all remediation sheets
             Update-Progress -Status "Reading vulnerability data from Excel file..." -Show $true
@@ -905,73 +1067,93 @@ function Show-VScanMagicGUI {
 
             # Generate Excel report
             if ($script:OutputExcel) {
-                Update-Progress -Status "Generating Pending EPSS Report (Excel)..." -Show $true
-                $excelOutputPath = Join-Path $outputDir "$companyName Pending EPSS Report_$reportTimestamp.xlsx"
+                Update-Progress -Status "Generating Excel Report..." -Show $true
+                $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
                 }
 
-                # Store path and enable open button
                 $script:ExcelReportPath = $excelOutputPath
-                $script:buttonOpenExcel.Enabled = $true
-
-                Write-Log "Pending EPSS Report saved to: $excelOutputPath" -Level Success
+                Write-Log "Excel Report saved to: $excelOutputPath" -Level Success
             }
 
             # Generate Email Template
             if ($script:OutputEmailTemplate) {
                 Update-Progress -Status "Generating Email Template..." -Show $true
-                $emailOutputPath = Join-Path $outputDir "$companyName Email Template_$reportTimestamp.txt"
+                $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
                 New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $script:IsRMITPlus
 
-                # Store path and enable open button
                 $script:EmailTemplatePath = $emailOutputPath
-                $script:buttonOpenEmail.Enabled = $true
-
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
             }
 
-            # Show General Recommendations dialog
-            Update-Progress -Status "Entering General Recommendations..." -Show $true
-            $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
-            
-            if ($null -eq $generalRecommendations) {
-                Write-Log "General Recommendations dialog cancelled by user." -Level Warning
+            # General Recommendations, Hostname Review, Time Estimate (or skip dialogs in bulk mode)
+            $skipDialogs = $skipDialogsForBulk
+            if (-not $skipDialogs) {
+                Update-Progress -Status "Entering General Recommendations..." -Show $true
+                $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
+                if ($null -eq $generalRecommendations) {
+                    Write-Log "General Recommendations dialog cancelled by user." -Level Warning
+                    $generalRecommendations = @()
+                }
+            } else {
+                Load-GeneralRecommendations | Out-Null
+                if ($null -eq $script:GeneralRecommendations) { $script:GeneralRecommendations = @() }
                 $generalRecommendations = @()
+                foreach ($item in $top10) {
+                    $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
+                    $matchingRec = $null
+                    foreach ($rec in @($script:GeneralRecommendations)) {
+                        if ($rec -and $rec.Product -and $prod -like $rec.Product) { $matchingRec = $rec; break }
+                    }
+                    if ($matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                        $generalRecommendations += [PSCustomObject]@{ Product = $prod; Recommendations = $matchingRec.Recommendations }
+                    }
+                }
+                [System.Windows.Forms.Application]::DoEvents()
             }
 
-            # Show Hostname Review dialog
-            Update-Progress -Status "Reviewing Hostnames..." -Show $true
-            $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
-            
-            if ($null -eq $filteredTop10) {
-                Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
-                $filteredTop10 = $top10
+            if (-not $skipDialogs) {
+                Update-Progress -Status "Reviewing Hostnames..." -Show $true
+                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
+                if ($null -eq $filteredTop10) {
+                    Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
+                    $filteredTop10 = $top10
+                } else {
+                    $top10 = $filteredTop10
+                }
             } else {
-                $top10 = $filteredTop10
+                $filteredTop10 = $top10
             }
             
-            # Store Top10Data in script variable for ticket notes
             $script:CurrentTop10Data = $top10
 
-            # Generate Time Estimate (must be done before Word report and Ticket Instructions)
             if ($script:OutputTimeEstimate) {
-                Update-Progress -Status "Generating Time Estimate..." -Show $true
-                
-                # Show time estimate entry dialog
-                $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                if (-not $skipDialogs) {
+                    Update-Progress -Status "Generating Time Estimate..." -Show $true
+                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                } else {
+                    $timeEstimates = foreach ($item in $top10) {
+                        $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
+                        [PSCustomObject]@{
+                            Product = $prod
+                            TimeEstimate = 0.0
+                            AfterHours = $false
+                            ThirdParty = if ($script:IsRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            TicketGenerated = $false
+                        }
+                    }
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
                 
                 if ($null -ne $timeEstimates) {
-                    $timeEstimateOutputPath = Join-Path $outputDir "$companyName Time Estimate_$reportTimestamp.txt"
+                    $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
-                    # Store path and enable open button
                     $script:TimeEstimatePath = $timeEstimateOutputPath
-                    $script:buttonOpenTimeEstimate.Enabled = $true
-                    
                     # Store TimeEstimates in script variable for ticket notes
                     $script:CurrentTimeEstimates = $timeEstimates
 
@@ -1004,10 +1186,7 @@ function Show-VScanMagicGUI {
                                       -ReportTitle $reportTitle
                     }
 
-                    # Store path and enable open button
                     $script:WordReportPath = $wordOutputPath
-                    $script:buttonOpenWord.Enabled = $true
-
                     Write-Log "$reportTitle saved to: $wordOutputPath" -Level Success
                 } else {
                     Write-Log "Word report generation skipped because time estimate was cancelled." -Level Warning
@@ -1017,20 +1196,17 @@ function Show-VScanMagicGUI {
             # Generate Ticket Instructions
             if ($script:OutputTicketInstructions) {
                 Update-Progress -Status "Generating Ticket Instructions..." -Show $true
-                $ticketOutputPath = Join-Path $outputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
+                $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
 
                 New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
-                # Store path and enable open button
                 $script:TicketInstructionsPath = $ticketOutputPath
-                $script:buttonOpenTicket.Enabled = $true
-
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
             }
 
             # Auto-generate ticket notes file if we have data
             if ($null -ne $script:CurrentTop10Data) {
-                $ticketNotesOutputPath = Join-Path $outputDir "$companyName Ticket Notes_$reportTimestamp.txt"
+                $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
                 New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $script:IsRMITPlus
                 
@@ -1044,6 +1220,9 @@ function Show-VScanMagicGUI {
 
             Write-Log "=== Processing Complete for $clientName ===" -Level Success
 
+            $null = $processedOutputs.Add([PSCustomObject]@{ CompanyName = $clientName; OutputPath = $outputDir })
+            Add-ToReportFolderHistory -CompanyName $clientName -OutputPath $outputDir
+
             }  # end foreach ($companyData in $companiesToProcess)
 
             Write-Log "=== All Processing Complete ===" -Level Success
@@ -1053,41 +1232,34 @@ function Show-VScanMagicGUI {
                 Save-UserSettings | Out-Null
             }
 
-            [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
-                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputs)
 
-                    } catch {
+            if (-not $skipDialogsForBulk) {
+                [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
+
+                } catch {
                         Update-Progress -Status "Error" -Show $false
                         Write-Log "Processing failed: $($_.Exception.Message)" -Level Error
-                        [System.Windows.Forms.MessageBox]::Show("An error occurred during processing. Check the log for details.", "Error",
-                            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-                    } finally {
+                        if (-not $skipDialogsForBulk) {
+                            [System.Windows.Forms.MessageBox]::Show("An error occurred during processing. Check the log for details.", "Error",
+                                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+                        }
+                } finally {
                         $buttonGenerate.Enabled = $true
-                    }
-                    }) | Out-Null
-                })
-                $worker.RunWorkerAsync(@{
-                    Creds = $creds
-                    Companies = @($checkedCompanies)
-                    DownloadFolder = $downloadFolder
-                    ScanDate = $datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")
-                    Reports = $reports
-                    TopCount = $topCount
-                    MinEPSS = $script:FilterMinEPSS
-                    IncludeCritical = $script:FilterIncludeCritical
-                    IncludeHigh = $script:FilterIncludeHigh
-                    IncludeMedium = $script:FilterIncludeMedium
-                    IncludeLow = $script:FilterIncludeLow
-                })
+                }
                 return
             }
 
             # Sync path: $hasFile - process from input file
+            $processedOutputsSync = [System.Collections.ArrayList]::new()
             foreach ($company in $companiesToProcess) {
                 $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
                 if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
                 $scanDate = $datePickerScanDate.Value.ToShortDateString()
                 $inputPath = $company.InputPath
+                $outputDir = if ($company.OutputDir) { $company.OutputDir } else { $textBoxOutputDir.Text }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
@@ -1096,8 +1268,11 @@ function Show-VScanMagicGUI {
             Write-Log "Scan Date: $scanDate"
 
             $companyName = if ([string]::IsNullOrWhiteSpace($clientName)) { "Client" } else { $clientName }
-            $outputDir = $textBoxOutputDir.Text
             $reportTimestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+            $useMiscForText = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
+            $miscDir = if ($useMiscForText) { Join-Path $outputDir "Misc" } else { $outputDir }
+            if ($useMiscForText -and -not (Test-Path $miscDir)) { New-Item -ItemType Directory -Path $miscDir -Force | Out-Null }
+            $textOutputDir = $miscDir
 
             Update-Progress -Status "Reading vulnerability data from Excel file..." -Show $true
             $vulnData = Get-VulnerabilityData -ExcelPath $inputPath
@@ -1120,63 +1295,91 @@ function Show-VScanMagicGUI {
             $generalRecommendations = @()
 
             if ($script:OutputExcel) {
-                Update-Progress -Status "Generating Pending EPSS Report (Excel)..." -Show $true
-                $excelOutputPath = Join-Path $outputDir "$companyName Pending EPSS Report_$reportTimestamp.xlsx"
+                Update-Progress -Status "Generating Excel Report..." -Show $true
+                $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
                 }
 
                 $script:ExcelReportPath = $excelOutputPath
-                $script:buttonOpenExcel.Enabled = $true
-
-                Write-Log "Pending EPSS Report saved to: $excelOutputPath" -Level Success
+                Write-Log "Excel Report saved to: $excelOutputPath" -Level Success
             }
 
             if ($script:OutputEmailTemplate) {
                 Update-Progress -Status "Generating Email Template..." -Show $true
-                $emailOutputPath = Join-Path $outputDir "$companyName Email Template_$reportTimestamp.txt"
+                $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
                 New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $script:IsRMITPlus
 
                 $script:EmailTemplatePath = $emailOutputPath
-                $script:buttonOpenEmail.Enabled = $true
-
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
             }
 
-            Update-Progress -Status "Entering General Recommendations..." -Show $true
-            $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
-            
-            if ($null -eq $generalRecommendations) {
-                Write-Log "General Recommendations dialog cancelled by user." -Level Warning
+            $skipDialogs = $chkBulkProcessing.Checked
+            if (-not $skipDialogs) {
+                Update-Progress -Status "Entering General Recommendations..." -Show $true
+                $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
+                if ($null -eq $generalRecommendations) {
+                    Write-Log "General Recommendations dialog cancelled by user." -Level Warning
+                    $generalRecommendations = @()
+                }
+            } else {
+                Load-GeneralRecommendations | Out-Null
+                if ($null -eq $script:GeneralRecommendations) { $script:GeneralRecommendations = @() }
                 $generalRecommendations = @()
+                foreach ($item in $top10) {
+                    $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
+                    $matchingRec = $null
+                    foreach ($rec in @($script:GeneralRecommendations)) {
+                        if ($rec -and $rec.Product -and $prod -like $rec.Product) { $matchingRec = $rec; break }
+                    }
+                    if ($matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                        $generalRecommendations += [PSCustomObject]@{ Product = $prod; Recommendations = $matchingRec.Recommendations }
+                    }
+                }
+                [System.Windows.Forms.Application]::DoEvents()
             }
 
-            Update-Progress -Status "Reviewing Hostnames..." -Show $true
-            $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
-            
-            if ($null -eq $filteredTop10) {
-                Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
-                $filteredTop10 = $top10
+            if (-not $skipDialogs) {
+                Update-Progress -Status "Reviewing Hostnames..." -Show $true
+                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
+                if ($null -eq $filteredTop10) {
+                    Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
+                    $filteredTop10 = $top10
+                } else {
+                    $top10 = $filteredTop10
+                }
             } else {
-                $top10 = $filteredTop10
+                $filteredTop10 = $top10
             }
             
             $script:CurrentTop10Data = $top10
 
             if ($script:OutputTimeEstimate) {
-                Update-Progress -Status "Generating Time Estimate..." -Show $true
-                
-                $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                if (-not $skipDialogs) {
+                    Update-Progress -Status "Generating Time Estimate..." -Show $true
+                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                } else {
+                    $timeEstimates = foreach ($item in $top10) {
+                        $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
+                        [PSCustomObject]@{
+                            Product = $prod
+                            TimeEstimate = 0.0
+                            AfterHours = $false
+                            ThirdParty = if ($script:IsRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            TicketGenerated = $false
+                        }
+                    }
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
                 
                 if ($null -ne $timeEstimates) {
-                    $timeEstimateOutputPath = Join-Path $outputDir "$companyName Time Estimate_$reportTimestamp.txt"
+                    $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
                     $script:TimeEstimatePath = $timeEstimateOutputPath
-                    $script:buttonOpenTimeEstimate.Enabled = $true
                     
                     $script:CurrentTimeEstimates = $timeEstimates
 
@@ -1206,8 +1409,6 @@ function Show-VScanMagicGUI {
                     }
 
                     $script:WordReportPath = $wordOutputPath
-                    $script:buttonOpenWord.Enabled = $true
-
                     Write-Log "$reportTitle saved to: $wordOutputPath" -Level Success
                 } else {
                     Write-Log "Word report generation skipped because time estimate was cancelled." -Level Warning
@@ -1216,18 +1417,16 @@ function Show-VScanMagicGUI {
 
             if ($script:OutputTicketInstructions) {
                 Update-Progress -Status "Generating Ticket Instructions..." -Show $true
-                $ticketOutputPath = Join-Path $outputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
+                $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
 
                 New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
 
                 $script:TicketInstructionsPath = $ticketOutputPath
-                $script:buttonOpenTicket.Enabled = $true
-
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
             }
 
             if ($null -ne $script:CurrentTop10Data) {
-                $ticketNotesOutputPath = Join-Path $outputDir "$companyName Ticket Notes_$reportTimestamp.txt"
+                $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
                 New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $script:IsRMITPlus
                 
@@ -1240,6 +1439,9 @@ function Show-VScanMagicGUI {
 
             Write-Log "=== Processing Complete for $clientName ===" -Level Success
 
+            $null = $processedOutputsSync.Add([PSCustomObject]@{ CompanyName = $clientName; OutputPath = $outputDir })
+            Add-ToReportFolderHistory -CompanyName $clientName -OutputPath $outputDir
+
             }  # end foreach ($company in $companiesToProcess) - sync path
 
             Write-Log "=== All Processing Complete ===" -Level Success
@@ -1248,6 +1450,8 @@ function Show-VScanMagicGUI {
                 $script:UserSettings.LastOutputDirectory = $textBoxOutputDir.Text
                 Save-UserSettings | Out-Null
             }
+
+            Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputsSync)
 
             [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -1265,7 +1469,7 @@ function Show-VScanMagicGUI {
     })
 
     $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Location = New-Object System.Drawing.Point(490, 0)
+    $buttonClose.Location = New-Object System.Drawing.Point(580, 0)
     $buttonClose.Size = New-Object System.Drawing.Size(100, 30)
     $buttonClose.Text = "Close"
     $buttonClose.BackColor = [System.Drawing.Color]::FromArgb(128, 128, 128)  # Gray - Secondary action

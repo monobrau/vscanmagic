@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.1"
+    Version = "4.0.2"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
@@ -82,6 +82,8 @@ $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanM
 $script:GeneralRecommendations = $null
 $script:ConnectSecureCredentialsPath = Join-Path $script:SettingsDirectory "ConnectSecure-Credentials.json"
 $script:ConnectSecureCompaniesCachePath = Join-Path $script:SettingsDirectory "ConnectSecure-Companies-Cache.json"
+$script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
+$script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
 
 # Report Filters and Output Options (modified via dialogs)
 $script:FilterMinEPSS = 0
@@ -122,6 +124,11 @@ $script:UserSettings = @{
     CompanyPhoneNumber = ""
     SettingsDirectory = ""  # Empty = use default (LOCALAPPDATA\VScanMagic)
     LastOutputDirectory = ""  # Last-used output directory for reports
+    ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
+    # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
+    AIApiKeyCopilot = ""
+    AIApiKeyChatGPT = ""
+    AIApiKeyClaude = ""
 }
 
 function Ensure-SettingsDirectory {
@@ -170,6 +177,8 @@ function Update-SettingsPaths {
     $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
     $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
     $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
+    $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
+    $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
     
     if (Ensure-SettingsDirectory -Path $script:SettingsDirectory) { Write-Host "Created settings directory: $script:SettingsDirectory" }
 }
@@ -190,6 +199,10 @@ function Load-UserSettings {
         $script:UserSettings.CompanyPhoneNumber = if ($json.CompanyPhoneNumber) { $json.CompanyPhoneNumber } else { "" }
         if ($json.SettingsDirectory) { $script:UserSettings.SettingsDirectory = $json.SettingsDirectory }
         if ($json.LastOutputDirectory -and (Test-Path $json.LastOutputDirectory)) { $script:UserSettings.LastOutputDirectory = $json.LastOutputDirectory }
+        if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
+        if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
+        if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
+        if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }
         Write-Host "User settings loaded from $script:SettingsPath"
     }
 }
@@ -251,6 +264,198 @@ function Load-ConnectSecureCompaniesCache {
     $baseMatch = ($cache.BaseUrl -replace '/$','') -eq ($BaseUrl -replace '/$','')
     if ($baseMatch -and $cache.TenantName -eq $TenantName) { return $cache.Companies }
     return $null
+}
+
+# --- Company Folder Mapping (for structured output paths) ---
+
+$script:CompanyFolderMap = @{}
+
+function Load-CompanyFolderMap {
+    if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { $script:CompanyFolderMap = @{}; return }
+    $json = Get-JsonFile -Path $script:CompanyFolderMapPath
+    $script:CompanyFolderMap = @{}
+    if ($json -and $json.PSObject.Properties) {
+        foreach ($p in $json.PSObject.Properties) {
+            $script:CompanyFolderMap[$p.Name] = $p.Value
+        }
+    }
+}
+
+function Save-CompanyFolderMap {
+    if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { return $false }
+    return Set-JsonFile -Path $script:CompanyFolderMapPath -Object $script:CompanyFolderMap -Depth 2
+}
+
+# --- Report Folder History (persistent list of processed output folders) ---
+
+$script:ReportFolderHistoryMaxEntries = 100
+
+function Get-ReportFolderHistory {
+    if ([string]::IsNullOrEmpty($script:ReportFolderHistoryPath)) { return @() }
+    $json = Get-JsonFile -Path $script:ReportFolderHistoryPath
+    if (-not $json -or -not $json.Entries) { return @() }
+    return @($json.Entries | ForEach-Object { [PSCustomObject]$_ })
+}
+
+function Add-ToReportFolderHistory {
+    param(
+        [string]$CompanyName,
+        [string]$OutputPath
+    )
+    if ([string]::IsNullOrWhiteSpace($OutputPath) -or -not (Test-Path $OutputPath)) { return }
+    $pathNorm = [System.IO.Path]::GetFullPath($OutputPath)
+    $existing = @(Get-ReportFolderHistory | Where-Object { $_.OutputPath -ne $pathNorm })
+    $now = Get-Date -Format "yyyy-MM-dd HH:mm"
+    $newEntry = [PSCustomObject]@{ CompanyName = $CompanyName; OutputPath = $pathNorm; ProcessedAt = $now }
+    $maxRest = [Math]::Max(0, $script:ReportFolderHistoryMaxEntries - 1)
+    $takeCount = [Math]::Min($existing.Count, $maxRest)
+    $rest = if ($takeCount -le 0) { @() } else { $existing[0..($takeCount - 1)] }
+    $entries = @($newEntry) + @($rest)
+    $obj = @{ Entries = @($entries) }
+    Set-JsonFile -Path $script:ReportFolderHistoryPath -Object $obj -Depth 3 | Out-Null
+}
+
+function Get-QuarterFromDate {
+    param([string]$ScanDate)
+    if ([string]::IsNullOrWhiteSpace($ScanDate)) { return (Get-Date).Year.ToString() + " - Q" + [Math]::Ceiling((Get-Date).Month / 3) }
+    try {
+        $d = [DateTime]::Parse($ScanDate)
+        $q = [Math]::Ceiling($d.Month / 3)
+        return "$($d.Year) - Q$q"
+    } catch {
+        return (Get-Date).Year.ToString() + " - Q" + [Math]::Ceiling((Get-Date).Month / 3)
+    }
+}
+
+function Resolve-VulnerabilityScansSubpath {
+    param([string]$FolderName)
+    if ([string]::IsNullOrWhiteSpace($FolderName)) { return $FolderName }
+    if ($FolderName -like "*Vulnerability Scans*") { return $FolderName }
+    return Join-Path $FolderName "Network Documentation\Vulnerability Scans"
+}
+
+function Resolve-QuarterFolderName {
+    param(
+        [string]$ClientPath,
+        [string]$ScanDate
+    )
+    $yearQuarter = Get-QuarterFromDate -ScanDate $ScanDate
+    $outPath = Join-Path $ClientPath $yearQuarter
+    if (-not (Test-Path $outPath)) { return $yearQuarter }
+    try {
+        $d = [DateTime]::Parse($ScanDate)
+        $q = [Math]::Ceiling($d.Month / 3)
+        $dateStr = $d.ToString("yyyy-MM-dd")
+        return "$($d.Year) - Q$q $dateStr"
+    } catch {
+        $d = Get-Date
+        $q = [Math]::Ceiling($d.Month / 3)
+        return "$($d.Year) - Q$q $($d.ToString('yyyy-MM-dd'))"
+    }
+}
+
+function Resolve-ClientOutputPath {
+    param(
+        [int]$CompanyId,
+        [string]$CompanyName,
+        [string]$ScanDate,
+        [switch]$ForceManual,
+        [string]$FallbackPath = ""  # When set, use instead of LastOutputDirectory (e.g. current Output Directory from form)
+    )
+    $base = $script:UserSettings.ReportsBasePath
+    if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path $base)) {
+        $fallback = if ($FallbackPath -and (Test-Path $FallbackPath)) { $FallbackPath } else { $script:UserSettings.LastOutputDirectory }
+        if ([string]::IsNullOrWhiteSpace($fallback) -or -not (Test-Path $fallback)) {
+            $fallback = [Environment]::GetFolderPath("Desktop")
+        }
+        Write-Log "Using flat output path (Reports Base Path not set or invalid): $fallback" -Level Info
+        return $fallback
+    }
+    $base = [System.IO.Path]::GetFullPath($base.Trim())
+    $key = "$CompanyId"
+    if ($script:CompanyFolderMap.Count -eq 0) { Load-CompanyFolderMap }
+    $folderName = $null
+    if (-not $ForceManual -and $script:CompanyFolderMap.ContainsKey($key)) {
+        $folderName = $script:CompanyFolderMap[$key]
+        $folderName = Resolve-VulnerabilityScansSubpath -FolderName $folderName
+        if ($script:CompanyFolderMap[$key] -ne $folderName) {
+            $script:CompanyFolderMap[$key] = $folderName
+            Save-CompanyFolderMap | Out-Null
+        }
+        $clientPath = Join-Path $base $folderName
+        if (Test-Path $clientPath) {
+            $quarterFolder = Resolve-QuarterFolderName -ClientPath $clientPath -ScanDate $ScanDate
+            $outPath = Join-Path $clientPath $quarterFolder
+            if (-not (Test-Path $outPath)) { New-Item -ItemType Directory -Path $outPath -Force | Out-Null }
+            $miscPath = Join-Path $outPath "Misc"
+            if (-not (Test-Path $miscPath)) { New-Item -ItemType Directory -Path $miscPath -Force | Out-Null }
+            Write-Log "Output path (mapped): $outPath" -Level Info
+            return $outPath
+        }
+    }
+    if (-not $ForceManual) {
+        $subfolders = @()
+        try {
+            $subfolders = @(Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+        } catch { }
+        $norm = $CompanyName.Trim() -replace '\s*(Inc|LLC|Corp|ltd)\.?\s*$', '' -replace '\s+', ' '
+        $normLower = $norm.ToLowerInvariant()
+        $bestMatch = $null
+        $bestScore = -1
+        foreach ($f in $subfolders) {
+            $fLower = $f.ToLowerInvariant()
+            $score = 0
+            if ($normLower -eq $fLower) { $score = 100 }
+            elseif ($normLower.Length -gt 0 -and ($fLower -like "*$normLower*" -or $normLower -like "*$fLower*")) { $score = 50 }
+            elseif ($normLower.Length -ge 3 -and $fLower.Length -ge 3) {
+                $nPre = $normLower.Substring(0, [Math]::Min(5, $normLower.Length))
+                $fPre = $fLower.Substring(0, [Math]::Min(5, $fLower.Length))
+                if ($fLower.StartsWith($nPre) -or $normLower.StartsWith($fPre)) { $score = 25 }
+            }
+            if ($score -gt $bestScore) { $bestScore = $score; $bestMatch = $f }
+            elseif ($score -eq $bestScore -and $bestMatch) { $bestMatch = $null }
+        }
+        if ($bestMatch) {
+            $folderName = Resolve-VulnerabilityScansSubpath -FolderName $bestMatch
+            $script:CompanyFolderMap[$key] = $folderName
+            Save-CompanyFolderMap | Out-Null
+            $clientPath = Join-Path $base $folderName
+            $quarterFolder = Resolve-QuarterFolderName -ClientPath $clientPath -ScanDate $ScanDate
+            $outPath = Join-Path $clientPath $quarterFolder
+            if (-not (Test-Path $outPath)) { New-Item -ItemType Directory -Path $outPath -Force | Out-Null }
+            $miscPath = Join-Path $outPath "Misc"
+            if (-not (Test-Path $miscPath)) { New-Item -ItemType Directory -Path $miscPath -Force | Out-Null }
+            Write-Log "Output path (auto-matched): $outPath" -Level Info
+            return $outPath
+        }
+    }
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = "Select the folder where the quarter (e.g. 2026 - Q1) should be created. Example: ...\General\Accurate Metal\Network Documentation\Vulnerability Scans"
+    $dialog.SelectedPath = $base
+    $dialog.ShowNewFolderButton = $true
+    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    $selected = $dialog.SelectedPath
+    $selectedFull = [System.IO.Path]::GetFullPath($selected)
+    if ($selectedFull.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+        $rel = $selectedFull.Substring($base.Length).TrimStart([char]'\', [char]'/')
+        # Store full relative path (e.g. "General\Accurate Metal\Network Documentation\Vulnerability Scans") so deep structures are supported
+        $folderName = if ([string]::IsNullOrWhiteSpace($rel)) { [System.IO.Path]::GetFileName($selectedFull) } else { $rel }
+    } else {
+        $folderName = [System.IO.Path]::GetFileName($selectedFull)
+    }
+    if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = "Client" }
+    $folderName = Resolve-VulnerabilityScansSubpath -FolderName $folderName
+    $script:CompanyFolderMap[$key] = $folderName
+    Save-CompanyFolderMap | Out-Null
+    $clientPath = Join-Path $base $folderName
+    $quarterFolder = Resolve-QuarterFolderName -ClientPath $clientPath -ScanDate $ScanDate
+    $outPath = Join-Path $clientPath $quarterFolder
+    if (-not (Test-Path $outPath)) { New-Item -ItemType Directory -Path $outPath -Force | Out-Null }
+    $miscPath = Join-Path $outPath "Misc"
+    if (-not (Test-Path $miscPath)) { New-Item -ItemType Directory -Path $miscPath -Force | Out-Null }
+    Write-Log "Output path (selected): $outPath" -Level Info
+    return $outPath
 }
 
 # --- Remediation Rules Persistence ---
@@ -472,10 +677,32 @@ function Get-ModifierText {
     return ""
 }
 
+# First-party vendors: always treated as first party (not 3rd party) in time estimate dialog
+$script:FirstPartyVendorPatterns = @(
+    '*Sonicwall*', '*SonicWall*',
+    '*Fortinet*', '*FortiGate*', '*Forti*',
+    '*Microsoft*',
+    '*HP *', '* HP *', '*HP Pro*', '*HP LaserJet*', '*HP OfficeJet*', '*Hewlett-Packard*',
+    '*Duo Security*', '*Duo *'
+)
+
+function Test-IsFirstPartyVendor {
+    param(
+        [string]$ProductName
+    )
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
+    $p = $ProductName.Trim()
+    foreach ($pattern in $script:FirstPartyVendorPatterns) {
+        if ($p -like $pattern) { return $true }
+    }
+    return $false
+}
+
 function Test-IsCoveredSoftware {
     param(
         [string]$ProductName
     )
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
 
     if ($null -eq $script:CoveredSoftware -or $script:CoveredSoftware.Count -eq 0) {
         Load-CoveredSoftware
