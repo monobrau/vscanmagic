@@ -424,6 +424,21 @@ function Get-VulnerabilityData {
         $excel.Visible = $false
         $excel.DisplayAlerts = $false
 
+        # Check for file lock before opening (proactive temp copy if locked)
+        if (Test-FileLocked $pathToOpen) {
+            if (-not $tempPath) {
+                $tempDir = [System.IO.Path]::GetTempPath()
+                $baseName = [System.IO.Path]::GetFileName($ExcelPath)
+                if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
+                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
+                $pathToOpen = $tempPath
+                Write-Log "File is in use - copied to temp: $tempPath" -Level Info
+            } else {
+                throw "The file is in use by another process. Please close it and try again."
+            }
+        }
+
         # UpdateLinks:=0, ReadOnly:=true - helps avoid lock issues
         try {
             $workbook = $excel.Workbooks.Open($pathToOpen, 0, $true)

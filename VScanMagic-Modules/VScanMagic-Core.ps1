@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "3.1.3"
+    Version = "4.0.0"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology

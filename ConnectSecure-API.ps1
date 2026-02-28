@@ -1508,18 +1508,6 @@ function Export-ConnectSecureDataToExcel {
     }
 }
 
-function Clear-ComObject {
-    param([object]$ComObject)
-
-    if ($null -ne $ComObject -and [System.Runtime.InteropServices.Marshal]::IsComObject($ComObject)) {
-        try {
-            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($ComObject) | Out-Null
-        } catch {
-            # Ignore errors
-        }
-    }
-}
-
 # --- Report Generation from ConnectSecure Data (no API server needed) ---
 
 function Get-ConnectSecureVulnField {

@@ -1800,40 +1800,40 @@ function Show-VScanMagicHelpDialog {
     $txtApi.BackColor = [System.Drawing.Color]::White
     $txtApi.Text = @"
 GETTING YOUR CONNECTSECURE API CREDENTIALS
-──────────────────────────────────────────
+------------------------------------------
 
 You need four values: Base URL, Tenant Name, Client ID, and Client Secret.
 
 STEP 1: Log into ConnectSecure
-   • Open your ConnectSecure portal in a web browser.
-   • The URL is often https://pod{number}.myconnectsecure.com
+   - Open your ConnectSecure portal in a web browser.
+   - The URL is often https://pod{number}.myconnectsecure.com
 
 STEP 2: Open the API Key page
-   • Go to: Global > Settings > Users
-   • For an existing user: Click the three-dot menu (⋮) next to your user → "API Key"
-   • For a new API user: Click "Add", create a user, then use Action > API Key
+   - Go to: Global > Settings > Users
+   - For an existing user: Click the three-dot menu (...) next to your user -> "API Key"
+   - For a new API user: Click "Add", create a user, then use Action > API Key
 
 STEP 3: Copy each value
-   • Base URL
+   - Base URL
      Format: https://pod{number}.myconnectsecure.com
      Example: https://pod104.myconnectsecure.com
      Tip: Copy from your browser address bar (without /tenant/... path)
      Or: Check Global Settings > Users > API Documentation for the URL.
 
-   • Tenant Name
+   - Tenant Name
      The name you use to log in. Example: river-run
      Often appears in the ConnectSecure portal or API Key page.
 
-   • Client ID
+   - Client ID
      A long alphanumeric string (e.g., UUID format).
-     Copy it exactly—no leading/trailing spaces.
+     Copy it exactly - no leading/trailing spaces.
 
-   • Client Secret
+   - Client Secret
      Keep this confidential. Copy it exactly.
      Do not add line breaks or extra spaces when pasting.
 
 CONFIGURING VScanMagic
-──────────────────────
+----------------------
 
 1. Click "API Settings" (or Settings > API in the main form).
 
@@ -1846,9 +1846,9 @@ CONFIGURING VScanMagic
 5. Click "Refresh List" in section 1 to load your company list.
 
 TROUBLESHOOTING
-   • Auth fails: Re-copy each value; avoid extra spaces or line breaks.
-   • "Failed to authorize": Double-check Tenant Name, Client ID, and Client Secret.
-   • Base URL: Ensure it starts with https:// and has no trailing slash.
+   - Auth fails: Re-copy each value; avoid extra spaces or line breaks.
+   - "Failed to authorize": Double-check Tenant Name, Client ID, and Client Secret.
+   - Base URL: Ensure it starts with https:// and has no trailing slash.
 "@
     $tabApi.Controls.Add($txtApi)
     $tabControl.TabPages.Add($tabApi)
@@ -1864,10 +1864,10 @@ TROUBLESHOOTING
     $txtWorkflow.BackColor = [System.Drawing.Color]::White
     $txtWorkflow.Text = @"
 VScanMagic WORKFLOW WALKTHROUGH
-──────────────────────────────
+------------------------------
 
 OPTION A: DOWNLOAD & PROCESS (Recommended)
-─────────────────────────────────────────
+--------------------------------------------
 
 1. Configure API: Click API Settings, enter credentials, Test, Save.
    (See "API Setup" tab if you need help getting credentials.)
@@ -1878,8 +1878,8 @@ OPTION A: DOWNLOAD & PROCESS (Recommended)
 3. Set Scan Date: Choose the date for the vulnerability reports.
 
 4. Choose reports: Check the reports to download:
-   • Pending EPSS – required for full VScanMagic processing
-   • All Vulnerabilities, Suppressed, External, Executive Summary – optional
+   - Pending EPSS - required for full VScanMagic processing
+   - All Vulnerabilities, Suppressed, External, Executive Summary - optional
 
 5. Output Directory: Choose where files will be saved.
 
@@ -1888,12 +1888,12 @@ OPTION A: DOWNLOAD & PROCESS (Recommended)
 7. Output Options: (Button) Choose outputs: Excel, Word, Email Template, Ticket Instructions, Time Estimate.
 
 8. Click "Generate":
-   • Downloads reports from ConnectSecure for each selected company
-   • Runs through General Recommendations and Hostname Review dialogs
-   • Generates your selected outputs (Word report, Excel, etc.)
+   - Downloads reports from ConnectSecure for each selected company
+   - Runs through General Recommendations and Hostname Review dialogs
+   - Generates your selected outputs (Word report, Excel, etc.)
 
 OPTION B: PROCESS FROM FILE
-───────────────────────────
+---------------------------
 
 1. In section 2, click "Browse..." and select a previously downloaded Pending EPSS report (XLSX).
 
@@ -1904,17 +1904,17 @@ OPTION B: PROCESS FROM FILE
 4. Click "Generate" to process the file and create outputs.
 
 QUICK ACTIONS
-─────────────
+-------------
 
-• Download Standard Reports Only: Downloads All Vulnerabilities, Suppressed, External Scan, and Executive Summary—no VScanMagic processing. Use for archival or quick export.
+- Download Standard Reports Only: Downloads All Vulnerabilities, Suppressed, External Scan, and Executive Summary - no VScanMagic processing. Use for archival or quick export.
 
-• Report Filters: Adjust severity filters, Top N, EPSS threshold.
+- Report Filters: Adjust severity filters, Top N, EPSS threshold.
 
-• Output Options: Choose which reports to generate (default: all checked).
+- Output Options: Choose which reports to generate (default: all checked).
 
-• Remediation Rules: Manage custom remediation wording.
+- Remediation Rules: Manage custom remediation wording.
 
-• Settings: Access API Settings, Output Options, and Report Filters.
+- Settings: Access API Settings, Output Options, and Report Filters.
 "@
     $tabWorkflow.Controls.Add($txtWorkflow)
     $tabControl.TabPages.Add($tabWorkflow)

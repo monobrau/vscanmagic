@@ -180,6 +180,9 @@ function New-AllVulnerabilitiesReport {
         $excel.ScreenUpdating = $false
 
         # Open input workbook
+        if (Test-FileLocked $InputPath) {
+            throw "The file is in use by another process. Please close it and try again."
+        }
         $workbook = $excel.Workbooks.Open($InputPath)
         if ($null -eq $workbook) {
             throw "Failed to open workbook. File may be corrupted or in use."
@@ -289,6 +292,9 @@ function New-ExternalVulnerabilitiesReport {
         $excel.ScreenUpdating = $false
 
         # Open input workbook
+        if (Test-FileLocked $InputPath) {
+            throw "The file is in use by another process. Please close it and try again."
+        }
         $workbook = $excel.Workbooks.Open($InputPath)
         if ($null -eq $workbook) {
             throw "Failed to open workbook. File may be corrupted or in use."
@@ -388,6 +394,9 @@ function New-SuppressedVulnerabilitiesReport {
         $excel.ScreenUpdating = $false
 
         # Open input workbook
+        if (Test-FileLocked $InputPath) {
+            throw "The file is in use by another process. Please close it and try again."
+        }
         $workbook = $excel.Workbooks.Open($InputPath)
         if ($null -eq $workbook) {
             throw "Failed to open workbook. File may be corrupted or in use."
@@ -502,214 +511,7 @@ function New-ExecutiveSummaryReport {
     }
 }
 
-# --- ConnectSecure API Report Generation Functions ---
-
-function Convert-ConnectSecureToVulnData {
-    param(
-        [array]$ConnectSecureData
-    )
-
-    Write-ApiLog "Converting ConnectSecure data to vulnerability format..." -Level Info
-
-    $vulnData = @()
-    
-    foreach ($item in $ConnectSecureData) {
-        # Map ConnectSecure fields to VScanMagic format
-        $hostName = if ($item.host_name) { $item.host_name } else { '' }
-        $ip = if ($item.ip) { $item.ip } else { '' }
-        $product = if ($item.product -or $item.software_name) { 
-            ($item.product, $item.software_name) | Where-Object { $_ } | Select-Object -First 1 
-        } else { '' }
-        
-        # Determine severity count
-        $severity = if ($item.severity) { $item.severity } else { 'Medium' }
-        $critical = if ($severity -eq 'Critical') { 1 } else { 0 }
-        $high = if ($severity -eq 'High') { 1 } else { 0 }
-        $medium = if ($severity -eq 'Medium') { 1 } else { 0 }
-        $low = if ($severity -eq 'Low') { 1 } else { 0 }
-        
-        $epssScore = if ($item.epss_score) { [double]$item.epss_score } else { 0.0 }
-        
-        $vulnData += [PSCustomObject]@{
-            'Host Name' = $hostName
-            'IP' = $ip
-            'Username' = ''
-            'Product' = $product
-            'Critical' = $critical
-            'High' = $high
-            'Medium' = $medium
-            'Low' = $low
-            'Vulnerability Count' = 1
-            'EPSS Score' = $epssScore
-        }
-    }
-
-    Write-ApiLog "Converted $($vulnData.Count) records" -Level Success
-    return $vulnData
-}
-
-function New-PendingEPSSReportFromConnectSecure {
-    param(
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ClientName = "Client"
-    )
-
-    Write-ApiLog "Generating Pending EPSS Report from ConnectSecure API..." -Level Info
-
-    try {
-        # Fetch remediation plan data (includes EPSS scores)
-        $remediationData = Get-ConnectSecureRemediationPlan -CompanyId $CompanyId -Limit 5000
-        
-        if ($null -eq $remediationData -or $remediationData.Count -eq 0) {
-            throw "No remediation plan data found"
-        }
-
-        # Filter for items with EPSS scores > 0 (pending EPSS)
-        $pendingEPSS = $remediationData | Where-Object { 
-            $_.epss_score -and [double]$_.epss_score -gt 0 
-        }
-
-        if ($pendingEPSS.Count -eq 0) {
-            throw "No pending EPSS vulnerabilities found"
-        }
-
-        # Export API data directly (API output as source of truth)
-        Export-ConnectSecureDataToExcel -Data $pendingEPSS -OutputPath $OutputPath -SheetName "Pending EPSS"
-
-        Write-ApiLog "Pending EPSS Report saved to: $OutputPath" -Level Success
-
-    } catch {
-        Write-ApiLog "Error generating Pending EPSS Report: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
-
-function New-AllVulnerabilitiesReportFromConnectSecure {
-    param(
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ClientName = "Client"
-    )
-
-    Write-ApiLog "Generating All Vulnerabilities Report from ConnectSecure API..." -Level Info
-
-    try {
-        # Fetch all vulnerabilities (with pagination, raw API output)
-        $allVulns = Get-ConnectSecureVulnerabilities -CompanyId $CompanyId -Limit 5000 -FetchAll -Raw
-        
-        if ($null -eq $allVulns -or $allVulns.Count -eq 0) {
-            throw "No vulnerability data found"
-        }
-
-        # Export API data directly (API output as source of truth)
-        Export-ConnectSecureDataToExcel -Data $allVulns -OutputPath $OutputPath -SheetName "All Vulnerabilities"
-
-        Write-ApiLog "All Vulnerabilities Report saved to: $OutputPath" -Level Success
-
-    } catch {
-        Write-ApiLog "Error generating All Vulnerabilities Report: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
-
-function New-ExternalVulnerabilitiesReportFromConnectSecure {
-    param(
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ClientName = "Client"
-    )
-
-    Write-ApiLog "Generating External Vulnerabilities Report from ConnectSecure API..." -Level Info
-
-    try {
-        # Fetch external vulnerabilities (with pagination)
-        $externalVulns = Get-ConnectSecureExternalVulnerabilities -CompanyId $CompanyId -Limit 5000 -FetchAll
-        
-        if ($null -eq $externalVulns -or $externalVulns.Count -eq 0) {
-            throw "No external vulnerability data found"
-        }
-
-        # Export API data directly (API output as source of truth)
-        Export-ConnectSecureDataToExcel -Data $externalVulns -OutputPath $OutputPath -SheetName "External Vulnerabilities"
-
-        Write-ApiLog "External Vulnerabilities Report saved to: $OutputPath" -Level Success
-
-    } catch {
-        Write-ApiLog "Error generating External Vulnerabilities Report: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
-
-function New-SuppressedVulnerabilitiesReportFromConnectSecure {
-    param(
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ClientName = "Client"
-    )
-
-    Write-ApiLog "Generating Suppressed Vulnerabilities Report from ConnectSecure API..." -Level Info
-
-    try {
-        # Fetch suppressed vulnerabilities (with pagination, raw API output)
-        $suppressedVulns = Get-ConnectSecureSuppressedVulnerabilities -CompanyId $CompanyId -Limit 5000 -FetchAll -Raw
-        
-        if ($null -eq $suppressedVulns -or $suppressedVulns.Count -eq 0) {
-            throw "No suppressed vulnerability data found"
-        }
-
-        # Export API data directly (API output as source of truth)
-        Export-ConnectSecureDataToExcel -Data $suppressedVulns -OutputPath $OutputPath -SheetName "Suppressed Vulnerabilities"
-
-        Write-ApiLog "Suppressed Vulnerabilities Report saved to: $OutputPath" -Level Success
-
-    } catch {
-        Write-ApiLog "Error generating Suppressed Vulnerabilities Report: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
-
-function New-ExecutiveSummaryReportFromConnectSecure {
-    param(
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ClientName = "Client",
-        [string]$ScanDate
-    )
-
-    Write-ApiLog "Generating Executive Summary Report from ConnectSecure API..." -Level Info
-
-    try {
-        # Fetch all vulnerabilities (with pagination)
-        $allVulns = Get-ConnectSecureVulnerabilities -CompanyId $CompanyId -Limit 5000 -FetchAll
-        
-        if ($null -eq $allVulns -or $allVulns.Count -eq 0) {
-            throw "No vulnerability data found"
-        }
-
-        # Convert to VScanMagic format
-        $vulnData = Convert-ConnectSecureToVulnData -ConnectSecureData $allVulns
-
-        # Calculate top vulnerabilities (use top 10 for executive summary)
-        $top10 = Get-Top10Vulnerabilities -VulnData $vulnData
-
-        # Generate Word report with executive summary
-        New-WordReport -OutputPath $OutputPath `
-                      -ClientName $ClientName `
-                      -ScanDate $ScanDate `
-                      -Top10Data $top10 `
-                      -TimeEstimates $null `
-                      -IsRMITPlus $false `
-                      -GeneralRecommendations @() `
-                      -ReportTitle "Executive Summary"
-
-        Write-ApiLog "Executive Summary Report saved to: $OutputPath" -Level Success
-
-    } catch {
-        Write-ApiLog "Error generating Executive Summary Report: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
+# --- ConnectSecure report functions are in ConnectSecure-API.ps1 (loaded above) ---
 
 # --- API Request Handlers ---
 
