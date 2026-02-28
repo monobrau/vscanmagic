@@ -1,10 +1,10 @@
 # VScanMagic
 
-A suite of PowerShell tools for vulnerability management and security alert processing.
+A PowerShell tool for vulnerability management and report generation from ConnectSecure.
 
 ## Tools Included
 
-### 1. VScanMagic v4 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`) ⭐
+### VScanMagic v4 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`)
 
 A GUI application that processes vulnerability scan reports from **ConnectSecure** and generates professional Word and Excel reports with dynamic severity thresholds, email templates, ticket notes, and time estimates.
 
@@ -16,10 +16,6 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 - **Ticket Notes** – ConnectWise-compatible ticket notes with randomized content
 - **Time Estimates** – RMIT/RMIT+ time estimation with covered software support
 - **Dynamic Severity Thresholds** – Adapts risk score thresholds based on your data
-
-### 2. VScanMagic Alert Processor v3 - Security Alert Analysis Tool (`VScanAlertProcessor.ps1`)
-
-A separate GUI application that processes Barracuda XDR security alerts and generates professional, client-facing DOCX reports with automated threat classification. See [ALERT_PROCESSOR_README.md](ALERT_PROCESSOR_README.md) for details.
 
 ---
 
