@@ -42,11 +42,11 @@ if (Test-Path $modulePath) {
         $params = @{
             inputFile = $inputScript
             outputFile = $outputExe
-            title = "VScanMagic v4"
+            title = "VScanMagic v4.0.1"
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "4.0.0"
+            version = "4.0.1"
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         
