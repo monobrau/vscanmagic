@@ -62,6 +62,10 @@ VScanMagic_Settings.json
 VScanMagic_CompanyFolderMap.json
 VScanMagic_ReportFolderHistory.json
 
+# Old version zips (current VScanMagic.zip from build is used for releases)
+VScanMagic-4.0.1.zip
+VScanMagic-4.0.2.zip
+
 # API Configuration files (may contain credentials)
 ConnectSecure-Config.ps1
 *Config.ps1
