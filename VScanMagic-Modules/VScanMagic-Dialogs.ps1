@@ -1804,9 +1804,11 @@ GETTING YOUR CONNECTSECURE API CREDENTIALS
 
 You need four values: Base URL, Tenant Name, Client ID, and Client Secret.
 
-STEP 1: Log into ConnectSecure
-   - Open your ConnectSecure portal in a web browser.
-   - The URL is often https://pod{number}.myconnectsecure.com
+STEP 1: Find the Base URL
+   - Log into your ConnectSecure portal in a web browser.
+   - Click the user profile icon, then click "API Documentation".
+   - The page URL will look like: https://pod104.myconnectsecure.com/apidocs/
+   - The Base URL is the part before /apidocs/ (e.g., https://pod104.myconnectsecure.com)
 
 STEP 2: Open the API Key page
    - Go to: Global > Settings > Users
@@ -1815,10 +1817,8 @@ STEP 2: Open the API Key page
 
 STEP 3: Copy each value
    - Base URL
-     Format: https://pod{number}.myconnectsecure.com
+     Use the URL from Step 1 (from Profile > API Documentation, before /apidocs/).
      Example: https://pod104.myconnectsecure.com
-     Tip: Copy from your browser address bar (without /tenant/... path)
-     Or: Check Global Settings > Users > API Documentation for the URL.
 
    - Tenant Name
      The name you use to log in. Example: river-run
