@@ -42,11 +42,11 @@ if (Test-Path $modulePath) {
         $params = @{
             inputFile = $inputScript
             outputFile = $outputExe
-            title = "VScanMagic v3"
+            title = "VScanMagic v4"
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "3.1.3"
+            version = "4.0.0"
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         
@@ -100,14 +100,14 @@ if (Test-Path $modulePath) {
             $fileInfo = Get-Item $outputExe
             Write-Host "File size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
             
-            # Create ZIP
-            Write-Host "Creating ZIP file..."
+            # Create ZIP with EXE + required modules (EXE loads modules at runtime)
+            Write-Host "Creating deployment ZIP..."
             $zipPath = Join-Path $PSScriptRoot "VScanMagic.zip"
-            if (Test-Path $zipPath) {
-                Remove-Item $zipPath -Force
-            }
-            Compress-Archive -Path $outputExe -DestinationPath $zipPath -Force
-            Write-Host "Created ZIP: $zipPath" -ForegroundColor Green
+            if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+            $zipItems = @($outputExe, (Join-Path $PSScriptRoot "VScanMagic-Modules"), (Join-Path $PSScriptRoot "ConnectSecure-API.ps1"))
+            $zipItems = $zipItems | Where-Object { Test-Path $_ }
+            Compress-Archive -Path $zipItems -DestinationPath $zipPath -Force
+            Write-Host "Created ZIP: $zipPath (includes EXE + VScanMagic-Modules + ConnectSecure-API.ps1)" -ForegroundColor Green
         } else {
             throw "EXE file was not created"
         }

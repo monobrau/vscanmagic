@@ -1,0 +1,4 @@
+﻿"affected_assets","affected_companies","asset_ids","base_score","company_ids","description","epss_score","exploitability_score","host_name","impact_score","problem_name","severity","total_count"
+"2","2","224202226;230948946","2","15373;16189","Vulnerability in TPM could allow Security Feature Bypass","0","2","ACIETA-ERP.corp.acieta.com; WESHARE","2","ADV170012","Medium","20186"
+"4","3","5509165;9860433;224202226;230948946","2","9134;15373;16189","Guidance to mitigate speculative execution side-channel vulnerabilities","0","2","ACIETA-ERP.corp.acieta.com; MillerLPI.Miller.local; MillerRDS.Miller.local; WESHARE","2","ADV180002","Medium","20186"
+"2","2","224202226;230948946","2","15373;16189","Document signing deprecation in XPS Viewer","0","2","ACIETA-ERP.corp.acieta.com; WESHARE","2","ADV180005","Medium","20186"
