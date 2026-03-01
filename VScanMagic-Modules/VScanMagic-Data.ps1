@@ -217,6 +217,17 @@ function Read-SheetData {
     return $data.ToArray()
 }
 
+function Test-IsAllVulnerabilitiesFormat {
+    param([object]$Workbook)
+    foreach ($sheet in $Workbook.Worksheets) {
+        if ($sheet.Name -like "*All Vulnerabilities*") {
+            Write-Log "Detected All Vulnerabilities single-sheet format" -Level Info
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-IsFullListFormat {
     param(
         [object]$Workbook
@@ -466,7 +477,56 @@ function Get-VulnerabilityData {
         }
         Write-Log "Total sheets: $($allSheetNames.Count)"
         
-        # Check if this is a full list format file
+        # Check if this is an All Vulnerabilities single-sheet format (ConnectSecure 13-column)
+        $isAllVulnsFormat = Test-IsAllVulnerabilitiesFormat -Workbook $workbook
+        if ($isAllVulnsFormat) {
+            $avSheet = $null
+            foreach ($sheet in $workbook.Worksheets) {
+                if ($sheet.Name -like "*All Vulnerabilities*") {
+                    $avSheet = $sheet
+                    break
+                }
+            }
+            if ($null -eq $avSheet) {
+                throw "All Vulnerabilities sheet not found."
+            }
+            $usedRange = $avSheet.UsedRange
+            $colCount = $usedRange.Columns.Count
+            $headers = @{}
+            for ($col = 1; $col -le $colCount; $col++) {
+                $headerName = $avSheet.Cells.Item(1, $col).Text
+                if ($headerName) {
+                    $headers[$headerName] = $col
+                }
+            }
+            Write-Log "All Vulnerabilities headers: $($headers.Keys -join ', ')"
+            $columnMappings = @{
+                'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Device')
+                'IP' = @('IP Address', 'IP', 'Address')
+                'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name')
+                'Severity' = @('Severity')
+                'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
+            }
+            $columnIndices = @{}
+            foreach ($key in $columnMappings.Keys) {
+                $colIndex = Find-ColumnIndex -Headers $headers -PossibleNames $columnMappings[$key]
+                if ($colIndex) {
+                    $columnIndices[$key] = $colIndex
+                }
+            }
+            if (-not $columnIndices.ContainsKey('Product') -or -not $columnIndices.ContainsKey('Severity')) {
+                throw "All Vulnerabilities format requires Product Name (or Application Name) and Severity columns."
+            }
+            $sheetVulns = Read-FullListSheetData -Worksheet $avSheet -ColumnIndices $columnIndices -IsEOLSheet:$false
+            Write-Log "Read $($sheetVulns.Count) vulnerabilities from All Vulnerabilities sheet"
+            $allData = Aggregate-FullListData -Vulnerabilities $sheetVulns
+            Write-Log "Aggregated to $($allData.Count) records" -Level Success
+            Clear-ComObject $avSheet
+            Clear-ComObject $usedRange
+            return $allData
+        }
+
+        # Check if this is a full list format file (multi-sheet Critical/High/Medium/Low)
         $isFullListFormat = Test-IsFullListFormat -Workbook $workbook
         
         if ($isFullListFormat) {

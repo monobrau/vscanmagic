@@ -1,4 +1,4 @@
-﻿# VScanMagic-Reports.ps1 - Word, Excel, Email, Time Estimate, Ticket Instructions/Notes
+# VScanMagic-Reports.ps1 - Word, Excel, Email, Time Estimate, Ticket Instructions/Notes
 # Dot-sourced by VScanMagic-GUI.ps1
 
 function Get-RiskScoreColor {
@@ -691,6 +691,18 @@ function New-WordReport {
     }
 }
 
+# Helper: convert any value to string for Excel text cells (avoids Double-to-String COM cast errors)
+function ConvertTo-SafeExcelString {
+    param([object]$Value)
+    if ($null -eq $Value -or $Value -is [DBNull]) { return '' }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [double] -or $Value -is [float] -or $Value -is [decimal]) { return $Value.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
+    if ($Value -is [int] -or $Value -is [long]) { return $Value.ToString() }
+    try { return [System.Convert]::ToString($Value) } catch {}
+    try { return $Value.ToString() } catch {}
+    return ''
+}
+
 # Function to generate Excel report with pivot table
 function New-ExcelReport {
     param(
@@ -904,27 +916,42 @@ function New-ExcelReport {
             Write-Log "Aggregated to $($aggregatedData.Count) Host/Product combinations" -Level Info
             
             # Write headers to Source Data sheet
-            $headers = @('Remediation Type', 'Product', 'Host Name', 'Fix', 'IP', 'Evidence Path', 'Evidence Version', 'Critical', 'High', 'Medium', 'Low', 'Vulnerability Count', 'EPSS Score')
-            for ($col = 1; $col -le $headers.Count; $col++) {
-                $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
-            }
+            try {
+                $headers = @('Remediation Type', 'Product', 'Host Name', 'Fix', 'IP', 'Evidence Path', 'Evidence Version', 'Critical', 'High', 'Medium', 'Low', 'Vulnerability Count', 'EPSS Score')
+                for ($col = 1; $col -le $headers.Count; $col++) {
+                    $sourceDataSheet.Cells.Item(1, $col).Value2 = $headers[$col - 1]
+                }
+                Write-Log "Headers written" -Level Info
+            } catch { throw "[FullListFormat-WriteHeaders] $($_.Exception.Message)" }
             
-            # Write aggregated data (ensure text columns are strings to avoid Int32-to-String cast in Pivot Table)
+            # Write aggregated data - each column in try/catch to identify failing column
             $row = 2
+            $rowNum = 0
+            $colNames = @('Remediation Type','Product','Host Name','Fix','IP','Evidence Path','Evidence Version','Critical','High','Medium','Low','Vulnerability Count','EPSS Score')
             foreach ($item in $aggregatedData) {
-                $sourceDataSheet.Cells.Item($row, 1).Value2 = [string]($item.'Remediation Type')
-                $sourceDataSheet.Cells.Item($row, 2).Value2 = [string]($item.Product)
-                $sourceDataSheet.Cells.Item($row, 3).Value2 = [string]($item.'Host Name')
-                $sourceDataSheet.Cells.Item($row, 4).Value2 = [string]($item.Fix)
-                $sourceDataSheet.Cells.Item($row, 5).Value2 = [string]($item.IP)
-                $sourceDataSheet.Cells.Item($row, 6).Value2 = [string]($item.'Evidence Path')
-                $sourceDataSheet.Cells.Item($row, 7).Value2 = [string]($item.'Evidence Version')
-                $sourceDataSheet.Cells.Item($row, 8).Value2 = [int]($item.Critical)
-                $sourceDataSheet.Cells.Item($row, 9).Value2 = [int]($item.High)
-                $sourceDataSheet.Cells.Item($row, 10).Value2 = [int]($item.Medium)
-                $sourceDataSheet.Cells.Item($row, 11).Value2 = [int]($item.Low)
-                $sourceDataSheet.Cells.Item($row, 12).Value2 = [int]($item.'Vulnerability Count')
-                $epssVal = $item.'EPSS Score'; $sourceDataSheet.Cells.Item($row, 13).Value2 = if ($null -ne $epssVal) { [double]$epssVal } else { 0.0 }
+                $rowNum++
+                for ($col = 1; $col -le 13; $col++) {
+                    try {
+                        if ($col -le 7) {
+                            $val = $item.($colNames[$col-1]); $s = ConvertTo-SafeExcelString $val; $esc = $s -replace '"','""'
+                            $cell = $sourceDataSheet.Cells.Item($row, $col); $cell.Formula = '="' + $esc + '"'; Clear-ComObject $cell
+                        } else {
+                            if ($col -eq 8) { $sourceDataSheet.Cells.Item($row, $col).Value2 = [int]($item.Critical) }
+                            elseif ($col -eq 9) { $sourceDataSheet.Cells.Item($row, $col).Value2 = [int]($item.High) }
+                            elseif ($col -eq 10) { $sourceDataSheet.Cells.Item($row, $col).Value2 = [int]($item.Medium) }
+                            elseif ($col -eq 11) { $sourceDataSheet.Cells.Item($row, $col).Value2 = [int]($item.Low) }
+                            elseif ($col -eq 12) { $sourceDataSheet.Cells.Item($row, $col).Value2 = [int]($item.'Vulnerability Count') }
+                            elseif ($col -eq 13) {
+                                $ev = $item.'EPSS Score'
+                                $numVal = if ($null -ne $ev) { [double]$ev } else { 0.0 }
+                                $cell = $sourceDataSheet.Cells.Item($row, $col)
+                                $cell.NumberFormat = '0.00'
+                                $cell.Formula = '=' + $numVal.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+                                Clear-ComObject $cell
+                            }
+                        }
+                    } catch { throw "[FullListFormat-WriteData row $rowNum col $($colNames[$col-1])] $($_.Exception.Message)" }
+                }
                 $row++
             }
             
@@ -984,9 +1011,10 @@ function New-ExcelReport {
                     $sourceRow = $firstValidSheet.Rows(1)
                     $targetRow = $sourceDataSheet.Rows(1)
 
-                    # Copy column by column to avoid type casting issues
+                    # Copy column by column to avoid type casting issues (ensure headers are strings)
                     for ($col = 1; $col -le $sourceCols; $col++) {
-                        $sourceDataSheet.Cells.Item(1, $col).Value2 = $firstValidSheet.Cells.Item(1, $col).Value2
+                        $val = $firstValidSheet.Cells.Item(1, $col).Value2
+                        $sourceDataSheet.Cells.Item(1, $col).Value2 = ConvertTo-SafeExcelString $val
                     }
 
                     Write-Log "Headers copied successfully ($sourceCols columns)" -Level Info
@@ -1079,7 +1107,7 @@ function New-ExcelReport {
 
         Clear-ComObject $companySheet
 
-        # Create pivot table
+        # Create pivot table (use string address for SourceData to avoid type mismatch/cast errors)
         $pivotSourceRange = $sourceDataSheet.UsedRange
         $sourceRowCount = $pivotSourceRange.Rows.Count
         Write-Log "Source Data has $sourceRowCount rows" -Level Info
@@ -1141,7 +1169,8 @@ function New-ExcelReport {
                 try {
                     $cfRange = $dataField1.DataRange
                     $cfRange.FormatConditions.Delete()
-                    $cfCondition = $cfRange.FormatConditions.Add(1, 5, "$($script:Config.ConditionalFormatThreshold)")
+                    $thresholdStr = ConvertTo-SafeExcelString $script:Config.ConditionalFormatThreshold
+                    $cfCondition = $cfRange.FormatConditions.Add(1, 5, $thresholdStr)
                     $cfCondition.Interior.ColorIndex = 3  # Red
                     Write-Log "Applied conditional formatting (EPSS > $($script:Config.ConditionalFormatThreshold))" -Level Info
                     Clear-ComObject $cfCondition
@@ -1200,8 +1229,8 @@ function New-ExcelReport {
                 Write-Log "Could not resize Column A" -Level Warning
             }
 
-            Clear-ComObject $dataField1
-            Clear-ComObject $dataField2
+            if ($null -ne $dataField1) { Clear-ComObject $dataField1 }
+            if ($null -ne $dataField2) { Clear-ComObject $dataField2 }
             Clear-ComObject $pivotTable
             Clear-ComObject $pivotCache
         }
@@ -1322,7 +1351,6 @@ $($script:UserSettings.PreparedBy)
 "@
 
         $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
-        Write-Log "Email template saved to: $OutputPath" -Level Success
 
     } catch {
         Write-Log "Error generating email template: $($_.Exception.Message)" -Level Error

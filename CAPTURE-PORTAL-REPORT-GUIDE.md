@@ -42,8 +42,22 @@ Capture the exact API calls the ConnectSecure web UI makes when creating a stand
 ## Portal Findings (2026-02-27 capture)
 
 - **create_report_job**: `reportType: "Standard"`, `isFilter: true`, `reportName` without spaces (e.g. AllVulnerabilitiesReport)
-- **get_report_link**: `job_id=["uuid"]` (JSON array), **no company_id** - scripts updated to try this first
+- **create_report_job (Global)**: `company_id: "global"` (string), `company_name: "Global"` - VScanMagic updated to use this format when CompanyId=0
+- **get_report_link**: `job_id=["uuid"]` (JSON array), `isGlobal=true` for global reports, **no company_id** - scripts updated to try this first
+- **global_jobs_view** (polling): `GET /r/company/global_jobs_view?condition=type='StandardReports'&skip=0&limit=100&order_by=updated desc` - lists global report jobs; each has `job_id`, `status` (completed/pushedtoqueue), `job_details[].r2_path`
 - **Large reports**: Returns ZIP with CSV when data is large
+
+## Capturing Global Reports (2026-02-28)
+
+To capture how the portal creates **Global** report types (e.g. "Installed Programs - Global"):
+
+1. **Switch to Global view** - Use the company selector to switch to Global
+2. **Open Reports** - Go to Reports / Report Builder
+3. **Select a Global report** - e.g. "Installed Programs - Global"
+4. **Generate the report** - Click Generate/Download
+5. **Export** - Run `copy(JSON.stringify(window.__capturedReportCalls, null, 2))` and save to `portal-global-report-capture.json`
+
+Compare: endpoint path, request body (company_id? isGlobal?), and headers.
 
 ## Use the Capture
 

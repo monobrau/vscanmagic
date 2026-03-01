@@ -73,6 +73,20 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 
 VScanMagic uses the **All Vulnerabilities report** from ConnectSecure as the primary input. The Excel file must include columns such as Software Name, Host Name, IP, EPSS Score, Severity, and vulnerability details. The full vulnerability list format (Critical/High/Medium/Low/END OF LIFE sheets) is supported.
 
+### Export Vulnerabilities to CSV
+
+For building an application remediation database (baseline of applications with technician remediation steps):
+
+```powershell
+# From an existing All Vulnerabilities XLSX
+.\Export-VulnerabilitiesToCsv.ps1 -ExcelPath "C:\...\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
+
+# From ConnectSecure (using saved API credentials; CompanyId from VScanMagic GUI company list)
+.\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+```
+
+Output includes Product, severity counts, affected hosts, and a blank **Remediation Steps** column for technicians to populate.
+
 ### Documentation
 
 - [ConnectSecure API Usage](ConnectSecure-API-Usage.md) – API configuration and usage

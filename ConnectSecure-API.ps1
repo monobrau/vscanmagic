@@ -130,10 +130,14 @@ function Invoke-ConnectSecureRequest {
 
     $url = "$($script:ConnectSecureConfig.BaseUrl)$Endpoint"
     
-    # Add query parameters
+    # Add query parameters (ensure values are strings for UrlEncode to avoid invocation issues)
     if ($QueryParameters.Count -gt 0) {
-        $queryString = ($QueryParameters.GetEnumerator() | ForEach-Object { "$($_.Key)=$([System.Web.HttpUtility]::UrlEncode($_.Value))" }) -join "&"
-        $url += "?$queryString"
+        $pairs = @()
+        foreach ($kv in $QueryParameters.GetEnumerator()) {
+            $valStr = if ($null -eq $kv.Value) { '' } else { $kv.Value.ToString() }
+            $pairs += $kv.Key + "=" + [System.Web.HttpUtility]::UrlEncode($valStr)
+        }
+        $url += "?" + ($pairs -join "&")
     }
 
     $attempt = 0
@@ -415,9 +419,6 @@ function Connect-ConnectSecureAPI {
             }
             
             Write-CSApiLog "Authentication failed: $errorMsg" -Level Error
-            
-            # Debugging info (no secrets)
-            Write-CSApiLog "Debugging: Verify Tenant Name and Client ID on API Key page; ensure API key is Active" -Level Error
             Write-CSApiLog "Troubleshooting: Verify Base URL, Tenant Name, and Client ID on ConnectSecure API Key page (Global > Settings > Users > API Key). Ensure API key is Active." -Level Error
             return $false
         }
@@ -617,17 +618,6 @@ function Get-ConnectSecureCompanies {
                         }
                     }
                     break
-                }
-                
-                # Log first company structure for debugging
-                if ($allCompanies.Count -eq 0 -and $first) {
-                    $sample = $first | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-                    $joinDelim = ', '
-                    Write-CSApiLog ('First company properties: ' + ($sample -join $joinDelim)) -Level Info
-                    try {
-                        $sampleJson = $first | ConvertTo-Json -Depth 5 -Compress
-                        Write-CSApiLog ('First company (raw): ' + $sampleJson.Substring(0, [Math]::Min(500, $sampleJson.Length)) + '...') -Level Info
-                    } catch { }
                 }
                 
                 $allCompanies += $companies
@@ -1038,6 +1028,44 @@ function Get-ConnectSecureAssets {
     return $allData
 }
 
+function Get-ConnectSecureCompanyAssetIds {
+    <#
+    .SYNOPSIS
+    Returns the set of asset IDs that belong to the given company. Used for filtering asset_wise data when rows lack company_ids.
+    #>
+    param([int]$CompanyId, [array]$Assets = $null)
+    if ($CompanyId -le 0) { return @{} }
+    $assets = if ($null -ne $Assets) { $Assets } else {
+        try { Get-ConnectSecureAssets -Limit 5000 -FetchAll:$true } catch { return @{} }
+    }
+    if (-not $assets -or $assets.Count -eq 0) { return @{} }
+    $cidStr = [string]$CompanyId
+    $companyAssets = $assets | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+    $idSet = @{}
+    foreach ($a in $companyAssets) {
+        $id = $null
+        if ($null -ne $a.id) { $id = [string]$a.id }
+        elseif ($null -ne $a.asset_id) { $id = [string]$a.asset_id }
+        elseif ($null -ne $a._id) { $id = [string]$a._id }
+        if ($id) { $idSet[$id] = $true }
+    }
+    return $idSet
+}
+
+function Test-AssetWiseRowMatchesCompany {
+    param([object]$Row, [hashtable]$CompanyAssetIds)
+    if (-not $CompanyAssetIds -or $CompanyAssetIds.Count -eq 0) { return $false }
+    $obj = if ($null -ne $Row._source) { $Row._source } else { $Row }
+    if ($null -eq $obj) { return $false }
+    $aidVal = $obj.asset_ids
+    if ($null -eq $aidVal) { return $false }
+    $ids = if ($aidVal -is [array]) { $aidVal | ForEach-Object { [string]$_ } } elseif ($aidVal -is [string]) { ($aidVal -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ } } else { @([string]$aidVal) }
+    foreach ($id in $ids) {
+        if ($CompanyAssetIds.ContainsKey($id)) { return $true }
+    }
+    return $false
+}
+
 function Get-ConnectSecureAssetWiseVulnerabilities {
     <#
     .SYNOPSIS
@@ -1088,13 +1116,29 @@ function Get-ConnectSecureAssetWiseVulnerabilities {
             throw
         }
     } while ($doFetchAll)
-    # Client-side filter by company_ids: API returns tenant-wide data (asset_wise ignores company_id per swagger)
+    # Client-side filter: API returns tenant-wide data (asset_wise ignores company_id per swagger)
+    # Try company_ids on row first; if that fails (0 rows or no change), filter by asset IDs belonging to company
     if ($CompanyId -gt 0 -and $allData.Count -gt 0) {
         $before = $allData.Count
         $cidStr = [string]$CompanyId
-        $allData = $allData | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
-        if ($allData.Count -lt $before) {
-            Write-CSApiLog ('Filtered asset-wise to company ' + $CompanyId + ': ' + $before + ' -> ' + $allData.Count + ' rows') -Level Info
+        $byCompanyIds = $allData | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($byCompanyIds.Count -gt 0 -and $byCompanyIds.Count -lt $before) {
+            $allData = $byCompanyIds
+            Write-CSApiLog ('Filtered asset-wise by company_ids to company ' + $CompanyId + ': ' + $before + ' -> ' + $allData.Count + ' rows') -Level Info
+        } else {
+            # Rows often lack company_ids; filter by asset_ids belonging to company
+            $companyAssetIds = Get-ConnectSecureCompanyAssetIds -CompanyId $CompanyId
+            if ($companyAssetIds.Count -gt 0) {
+                $filtered = $allData | Where-Object { Test-AssetWiseRowMatchesCompany -Row $_ -CompanyAssetIds $companyAssetIds }
+                if ($filtered.Count -gt 0) {
+                    $allData = $filtered
+                    Write-CSApiLog ('Filtered asset-wise by asset IDs for company ' + $CompanyId + ': ' + $before + ' -> ' + $allData.Count + ' rows') -Level Info
+                } else {
+                    Write-CSApiLog ('Asset filter would remove all rows (asset ID format may differ); keeping unfiltered data') -Level Warning
+                }
+            } else {
+                Write-CSApiLog ('No assets found for company ' + $CompanyId + '; keeping unfiltered data') -Level Warning
+            }
         }
     }
     Write-CSApiLog ('Total asset-wise vulnerabilities retrieved: ' + $allData.Count) -Level Success
@@ -1284,7 +1328,6 @@ function Convert-ConnectSecureDataToExcelFormat {
     $excelData = @()
     $total = if ($ConnectSecureData) { $ConnectSecureData.Count } else { 0 }
     $progressInterval = if ($total -gt 0) { [Math]::Max(100, [Math]::Floor($total / 20)) } else { 99999 }
-    $schemaSaved = $false  # Save first record to debug file when fields are missing
 
     # ConnectSecure native report uses: Host Name, FQDN Name, IP, Software Name, CVE, Problem Name, Solution, Severity
     $hostPaths = @('Host Name','host_name','hostName','hostname','fqdn_name','fqdn','host.hostname','host.host_name','host.name','asset_name','computer_name','device_name','asset.hostname','asset.host_name','machine.hostname','device.hostname','_source.Host Name','_source.host_name','_source.hostname','_source.fqdn_name','_source.host.hostname','_source.asset.hostname')
@@ -1358,31 +1401,6 @@ function Convert-ConnectSecureDataToExcelFormat {
         }
         
         $excelData += $excelRow
-
-        # Auto-capture API schema when Product found but other fields missing (helps diagnose field mapping)
-        if (-not $schemaSaved -and $total -gt 0 -and $prodVal -and (-not $hostVal -or -not $ipVal -or -not $sevVal)) {
-            $schemaSaved = $true
-            try {
-                $debugDir = Join-Path $env:LOCALAPPDATA 'VScanMagic'
-                if (-not (Test-Path $debugDir)) { New-Item -ItemType Directory -Path $debugDir -Force | Out-Null }
-                $debugPath = Join-Path $debugDir 'api-schema-debug.json'
-                $first = $ConnectSecureData[0]
-                $first | ConvertTo-Json -Depth 10 | Set-Content -Path $debugPath -Encoding UTF8
-                $script:__schemaPaths = @()
-                function Walk-Object { param($o,$prefix)
-                    if (-not $o) { return }
-                    $o.PSObject.Properties | ForEach-Object {
-                        $k = $_.Name; $v = $_.Value
-                        $path = if ($prefix) { $prefix + '.' + $k } else { $k }
-                        if ($v -is [string] -or $v -is [int] -or $v -is [double] -or $v -is [bool]) { $script:__schemaPaths += $path }
-                        elseif ($v -is [PSCustomObject] -and ($null -eq $prefix -or $prefix.Length -lt 25)) { Walk-Object $v $path }
-                    }
-                }
-                Walk-Object $first $null
-                $keyList = $script:__schemaPaths -join ', '
-                Write-CSApiLog ('Schema debug: Saved to ' + $debugPath + ' | Paths: ' + $keyList) -Level Warning
-            } catch { Write-CSApiLog ('Could not save schema debug: ' + $_.Message) -Level Warning }
-        }
     }
 
     Write-CSApiLog ('Converted ' + $excelData.Count + ' records to Excel format') -Level Success
@@ -1600,7 +1618,6 @@ function Convert-ConnectSecureToVulnData {
     $epssPaths = @('epss_score','epssScore','vulnerability.epss_score','_source.epss_score')
 
     $vulnData = @()
-    $debugLogged = $false
     foreach ($item in $ConnectSecureData) {
         $src = if ($item._source) { $item._source } else { $item }
         if ($src._aggregated) {
@@ -1636,14 +1653,6 @@ function Convert-ConnectSecureToVulnData {
         $epssRaw = (Get-ConnectSecureVulnField -Item $src -Paths $epssPaths)
         if ($null -eq $epssRaw) { $epssRaw = (Get-ConnectSecureVulnField -Item $item -Paths $epssPaths) }
         $epssScore = if ($null -ne $epssRaw) { [double]$epssRaw } else { 0.0 }
-        if (-not $debugLogged -and $ConnectSecureData.Count -gt 0 -and ($hostName -eq '' -or $ip -eq '') -and $product -ne '') {
-            $first = $ConnectSecureData[0]
-            $keys = @()
-            if ($first._source) { $first._source.PSObject.Properties | ForEach-Object { $keys += '_source.' + $_.Name } }
-            $first.PSObject.Properties | Where-Object { $_.Name -ne '_source' } | ForEach-Object { $keys += $_.Name }
-            Write-CSApiLog ('ConnectSecure vuln record sample keys (host/ip empty): ' + ($keys -join ', ')) -Level Warning
-            $debugLogged = $true
-        }
         $critical = if ($severity -eq 'Critical') { 1 } else { 0 }
         $high = if ($severity -eq 'High') { 1 } else { 0 }
         $medium = if ($severity -eq 'Medium') { 1 } else { 0 }
@@ -1684,7 +1693,11 @@ function New-AllVulnerabilitiesReportFromConnectSecure {
     $assetWise = Get-ConnectSecureAssetWiseVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
     if ($null -eq $assetWise) { $assetWise = @() }
     if ($assetWise.Count -eq 0) {
-        Export-ConnectSecureDataToExcel -Data @() -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
+        # Empty export needs All Vulnerabilities 13-column headers for Get-VulnerabilityData compatibility
+        $emptyRow = [PSCustomObject]@{
+            'CVE ID'=''; 'Severity'=''; 'CVSS Score'=''; 'EPSS Score'=''; 'Asset Name'=''; 'OS'=''; 'IP Address'=''; 'Description'=''; 'Application Name'=''; 'Product Name'=''; 'First Seen'=''; 'Last Seen'=''; 'Owner'=''
+        }
+        Export-ConnectSecureDataToExcel -Data @($emptyRow) -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
         return
     }
     $assets = @()
@@ -1738,39 +1751,85 @@ function Get-ConnectSecureStandardReports {
     .SYNOPSIS
     Gets list of available standard reports from ConnectSecure report builder.
     Swagger: GET /report_builder/standard_reports (requires isGlobal query param).
-    Response: message[].Reports[].reports[] with id, reportType, templateFile.
+    Tries both isGlobal=true and isGlobal=false, merges results.
+    Response: varies; uses recursive extraction for id+reportType objects.
     #>
-    param([bool]$IsGlobal = $false)
-    $queryParams = @{ isGlobal = $IsGlobal.ToString().ToLower() }
-    try {
-        $response = Invoke-ConnectSecureRequest -Endpoint '/report_builder/standard_reports' -Method GET -QueryParameters $queryParams
-        if (-not $response.status) { return @() }
-        $reports = @()
-        if ($response.message) {
+    param(
+        [bool]$IsGlobal = $false,
+        [int]$CompanyId = 0,
+        [int]$Skip = 0,
+        [int]$Limit = 2000,
+        [switch]$UseGlobalOnly = $false
+    )
+    if ($CompanyId -ne 0) { $IsGlobal = $false }
+
+    $toTry = @()
+    if ($UseGlobalOnly) { $toTry = @($true) }
+    else { $toTry = @($IsGlobal, (-not $IsGlobal)) }
+
+    $collected = [System.Collections.ArrayList]@()
+    $seenIds = @{}
+
+    foreach ($useGlobal in $toTry) {
+        $queryParams = @{ isGlobal = $useGlobal.ToString().ToLower(); skip = $Skip; limit = $Limit }
+        try {
+            $response = Invoke-ConnectSecureRequest -Endpoint '/report_builder/standard_reports' -Method GET -QueryParameters $queryParams
+            if (-not $response.status) { continue }
             $msg = $response.message
-            if ($msg -is [Array]) {
-                foreach ($m in $msg) {
-                    if ($m.Reports) {
-                        foreach ($r in $m.Reports) {
-                            if ($r.reports) {
-                                $desc = if ($r.description) { $r.description.ToString().ToLower() } else { '' }
-                                foreach ($rep in $r.reports) {
-                                    $rep | Add-Member -NotePropertyName '_category' -NotePropertyValue $desc -Force
-                                    $reports += $rep
-                                }
-                            }
+            if ($msg) {
+                $sections = @($msg)
+                foreach ($sec in $sections) {
+                    if (-not $sec) { continue }
+                    $reportCategories = $null
+                    if ($sec.Reports) { $reportCategories = $sec.Reports }
+                    if (-not $reportCategories) { continue }
+                    foreach ($cat in $reportCategories) {
+                        $desc = 'Unknown'
+                        if ($cat.description) { $desc = $cat.description.ToString() }
+                        $descLower = $desc.ToLower()
+                        $reportsList = $cat.reports
+                        if (-not $reportsList) { continue }
+                        foreach ($rep in $reportsList) {
+                            $rid = $rep.id
+                            if (-not $rid -and $rep.reportId) { $rid = $rep.reportId }
+                            $rt = $rep.reportType
+                            if (-not $rt -and $rep.report_type) { $rt = $rep.report_type }
+                            if (-not $rid -or -not $rt) { continue }
+                            $rtStr = $rt.ToString().ToLower()
+                            if ($rtStr -ne 'xlsx' -and $rtStr -ne 'docx' -and $rtStr -ne 'pdf') { continue }
+                            $key = "$rid-$rtStr"
+                            if ($seenIds[$key]) { continue }
+                            $seenIds[$key] = $true
+                            $rep | Add-Member -NotePropertyName '_category' -NotePropertyValue $descLower -Force
+                            $rep | Add-Member -NotePropertyName '_categoryDisplay' -NotePropertyValue $desc -Force
+                            [void]$collected.Add($rep)
                         }
                     }
                 }
             }
+            if ($collected.Count -eq 0 -and $response.data) {
+                foreach ($d in @($response.data)) {
+                    $dDesc = 'Unknown'
+                    if ($d.description) { $dDesc = $d.description }
+                    $rid = $d.id; $rt = $d.reportType
+                    if ($rid -and $rt) {
+                        $rtStr = $rt.ToString().ToLower()
+                        if ($rtStr -eq 'xlsx' -or $rtStr -eq 'docx' -or $rtStr -eq 'pdf') {
+                            $d | Add-Member -NotePropertyName '_categoryDisplay' -NotePropertyValue $dDesc -Force
+                            [void]$collected.Add($d)
+                        }
+                    }
+                }
+            }
+            if ($collected.Count -gt 0) { break }
+        } catch {
+            Write-CSApiLog ('standard_reports isGlobal=' + $useGlobal + ': ' + $_.Exception.Message) -Level Warning
         }
-        if ($response.data -and $reports.Count -eq 0) { $reports = @($response.data) }
-        if ($reports.Count -gt 0) { Write-CSApiLog ('Standard reports: ' + $reports.Count + ' items') -Level Info }
-        return $reports
-    } catch {
-        Write-CSApiLog ('standard_reports: ' + $_.Exception.Message) -Level Warning
-        return @()
     }
+    if ($collected.Count -gt 0) {
+        Write-CSApiLog ('Standard reports: ' + $collected.Count + ' items') -Level Info
+    }
+    return @($collected)
 }
 
 function Get-StandardReportIdForType {
@@ -1784,8 +1843,7 @@ function Get-StandardReportIdForType {
         [string]$ReportFormat = 'xlsx',
         [int]$CompanyId = 0
     )
-    $isGlobal = ($CompanyId -eq 0)
-    $reports = Get-ConnectSecureStandardReports -IsGlobal $isGlobal
+    $reports = Get-ConnectSecureStandardReports -CompanyId $CompanyId
     if (-not $reports -or $reports.Count -eq 0) {
         Write-CSApiLog 'No standard reports returned - cannot create report' -Level Warning
         return $null
@@ -1890,11 +1948,15 @@ function New-ConnectSecureReportJob {
         $reportIdStr = $ReportType.ToString()
     }
 
-    # Company name for report header (Prepared for X) - prefer ClientName from caller, then API fetch
+    # Company context: portal uses company_id="global" (string) for global reports, numeric ID for company reports
+    $companyIdParam = $CompanyId
     $companyName = "Company $CompanyId"
-    if (-not [string]::IsNullOrWhiteSpace($ClientName) -and $ClientName -ne "Company" -and $ClientName -ne "All Companies") {
+    if ($CompanyId -eq 0) {
+        $companyIdParam = 'global'
+        $companyName = 'Global'
+    } elseif (-not [string]::IsNullOrWhiteSpace($ClientName) -and $ClientName -ne "Company" -and $ClientName -ne "All Companies") {
         $companyName = $ClientName.Trim()
-    } elseif ($CompanyId -gt 0) {
+    } else {
         try {
             $compResp = Invoke-ConnectSecureRequest -Endpoint '/r/company/companies' -Method GET -QueryParameters @{ limit = 5000; skip = 0 }
             $companies = @()
@@ -1912,6 +1974,7 @@ function New-ConnectSecureReportJob {
     if ([string]::IsNullOrWhiteSpace($reportNameCompact)) { $reportNameCompact = 'Report' }
 
     # Build body variants - portal format FIRST (reportType=Standard, isFilter=true)
+    # Per portal capture: company_id is "global" (string) for global reports, numeric for company reports
     $bodyPortal = @{
         reportId     = $reportIdStr
         reportName   = $reportNameCompact
@@ -1919,12 +1982,12 @@ function New-ConnectSecureReportJob {
         isFilter     = $true
         fileType     = $ReportFormat
         reportFilter = @{}
-        company_id   = $CompanyId
+        company_id   = $companyIdParam
         company_name = $companyName
     }
     foreach ($k in $AdditionalParams.Keys) { $bodyPortal[$k] = $AdditionalParams[$k] }
 
-    $bodySnake = @{ company_id = $CompanyId; report_format = $ReportFormat }
+    $bodySnake = @{ company_id = $companyIdParam; report_format = $ReportFormat }
     if ($reportIdStr -match '^[a-fA-F0-9]{32}$') {
         $bodySnake.report_id = $reportIdStr
     } else {
@@ -1933,7 +1996,7 @@ function New-ConnectSecureReportJob {
     $bodySnake += $AdditionalParams
 
     $bodyCamel = @{
-        company_id = $CompanyId
+        company_id = $companyIdParam
         reportId = $reportIdStr
         reportType = $ReportFormat
         fileType = $ReportFormat
@@ -2144,11 +2207,10 @@ function Invoke-ConnectSecureReportsBatch {
 
     # Report Builder only - no vulnerability fetch or local fallback
     $standardTypes = @('all-vulnerabilities', 'suppressed-vulnerabilities', 'external-vulnerabilities', 'executive-summary', 'pending-epss')
-    $reportTypes = $Reports | ForEach-Object { $_.Type } | Select-Object -Unique
-
-    foreach ($rt in $reportTypes) {
-        if ($rt -notin $standardTypes) {
-            throw ('Unknown report type: ' + $rt + '. Standard reports: all-vulnerabilities, suppressed-vulnerabilities, external-vulnerabilities, executive-summary, pending-epss')
+    $reportsWithType = $Reports | Where-Object { $_.Type -and -not $_.ReportId }
+    foreach ($r in $reportsWithType) {
+        if ($r.Type -notin $standardTypes) {
+            throw ('Unknown report type: ' + $r.Type + '. Standard reports: all-vulnerabilities, suppressed-vulnerabilities, external-vulnerabilities, executive-summary, pending-epss')
         }
     }
 
@@ -2169,13 +2231,19 @@ function Invoke-ConnectSecureReportsBatch {
         if ($script:CSReportBuilderUnavailable) { break }
         $path = & $OutputPathTemplate $report
         try {
-            $reportFormat = if ($report.Ext -eq 'docx') { 'docx' } else { 'xlsx' }
+            $reportFormat = if ($report.Ext -eq 'docx') { 'docx' } elseif ($report.Ext -eq 'pdf') { 'pdf' } else { 'xlsx' }
             $ext = $reportFormat
-            $reportId = Get-StandardReportIdForType -InternalReportType $report.Type -ReportFormat $ext -CompanyId $CompanyId
-            if (-not $reportId) {
-                throw ('No standard report match for ' + $report.Type)
+            $reportId = $null
+            $reportName = $report.Name
+            if ($report.ReportId) {
+                $reportId = $report.ReportId
+            } else {
+                $reportId = Get-StandardReportIdForType -InternalReportType $report.Type -ReportFormat $ext -CompanyId $CompanyId
+                if (-not $reportId) {
+                    throw ('No standard report match for ' + $report.Type)
+                }
+                $reportName = $script:CSReportNameMap[$report.Type]
             }
-            $reportName = $script:CSReportNameMap[$report.Type]
             $jobId = New-ConnectSecureReportJob -ReportType $reportId -CompanyId $CompanyId -ReportFormat $ext -ReportName $reportName -ClientName $ClientName
             $script:LastReportJobId = $jobId
             $null = $pending.Add([PSCustomObject]@{ Report = $report; JobId = $jobId; Path = $path })
