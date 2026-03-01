@@ -854,3 +854,89 @@ function Test-FileLocked {
         return $false
     }
 }
+
+function Invoke-AIImproveRemediationText {
+    <#
+    .SYNOPSIS
+    Rephrases vulnerability remediation text using AI (ChatGPT, Claude, or Copilot).
+    Uses first available API key. Returns original text on error.
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $prompt = "Rephrase this vulnerability remediation guidance for an IT technician. Keep it professional and actionable. Output only the improved text, no preamble or explanation."
+
+    # Try ChatGPT first, then Claude, then Copilot
+    $key = $script:UserSettings.AIApiKeyChatGPT
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+        try {
+            $reqBody = @{
+                model = "gpt-4o-mini"
+                messages = @(
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                )
+                max_tokens = 1024
+            } | ConvertTo-Json -Depth 5
+            $headers = @{
+                "Authorization" = "Bearer $key"
+                "Content-Type" = "application/json"
+            }
+            $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+            $improved = $resp.choices[0].message.content.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+        } catch {
+            Write-Log "ChatGPT AI improvement failed: $($_.Exception.Message)" -Level Warning
+        }
+    }
+
+    $key = $script:UserSettings.AIApiKeyClaude
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+        try {
+            $reqBody = @{
+                model = "claude-3-haiku-20240307"
+                max_tokens = 1024
+                messages = @(
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                )
+            } | ConvertTo-Json -Depth 5
+            $headers = @{
+                "x-api-key" = $key
+                "anthropic-version" = "2023-06-01"
+                "Content-Type" = "application/json"
+            }
+            $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+            $improved = $resp.content[0].text.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+        } catch {
+            Write-Log "Claude AI improvement failed: $($_.Exception.Message)" -Level Warning
+        }
+    }
+
+    $key = $script:UserSettings.AIApiKeyCopilot
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+        try {
+            $reqBody = @{
+                model = "gpt-4o-mini"
+                messages = @(
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                )
+                max_tokens = 1024
+            } | ConvertTo-Json -Depth 5
+            $headers = @{
+                "Authorization" = "Bearer $key"
+                "Content-Type" = "application/json"
+            }
+            $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+            $improved = $resp.choices[0].message.content.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+        } catch {
+            Write-Log "Copilot AI improvement failed: $($_.Exception.Message)" -Level Warning
+        }
+    }
+
+    Write-Log "No AI API key configured or all attempts failed. Configure AI keys in Settings." -Level Warning
+    return $Text
+}

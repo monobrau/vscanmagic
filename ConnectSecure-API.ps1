@@ -1198,6 +1198,9 @@ function ConvertTo-ConnectSecure13ColumnFormat {
         }
         $app = $v.software_name
         $appStr = if ($null -eq $app) { '' } elseif ($app -is [array]) { ($app | ForEach-Object { [string]$_ }) -join '; ' } else { [string]$app }
+        $fixVal = Get-ConnectSecureVulnField -Item $v -Paths @('solution', 'fix', 'remediation', '_source.solution', '_source.fix', '_source.remediation')
+        if ($null -eq $fixVal) { $fixVal = Get-ConnectSecureVulnFieldDeep -Item $v -FieldNames @('Solution', 'solution', 'fix', 'remediation') }
+        $fixStr = if ($null -ne $fixVal -and -not [string]::IsNullOrWhiteSpace([string]$fixVal)) { [string]$fixVal } else { '' }
         $result += [PSCustomObject]@{
             'CVE ID'           = if ($v.problem_name) { [string]$v.problem_name } else { '' }
             'Severity'         = if ($v.severity) { [string]$v.severity } else { '' }
@@ -1212,6 +1215,7 @@ function ConvertTo-ConnectSecure13ColumnFormat {
             'First Seen'       = if ($v.discovered) { [string]$v.discovered } else { '' }
             'Last Seen'        = if ($v.last_discovered_time) { [string]$v.last_discovered_time } else { '' }
             'Owner'            = $ownerVal
+            'Fix'              = $fixStr
         }
     }
     return $result

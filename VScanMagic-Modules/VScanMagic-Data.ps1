@@ -326,6 +326,12 @@ function Read-FullListSheetData {
             $epssScore = Get-SafeDoubleValue -Value ([string]$rangeValues[$row, $columnIndices['EPSS']])
         }
         
+        $fix = ''
+        if ($columnIndices.ContainsKey('Fix')) {
+            $fix = [string]$rangeValues[$row, $columnIndices['Fix']]
+            if ([string]::IsNullOrWhiteSpace($fix)) { $fix = '' }
+        }
+        
         # Skip rows without required data
         if ([string]::IsNullOrWhiteSpace($product) -or [string]::IsNullOrWhiteSpace($severity)) {
             continue
@@ -338,6 +344,7 @@ function Read-FullListSheetData {
             'Product' = $product
             'Severity' = $severity
             'EPSS Score' = $epssScore
+            'Fix' = $fix
         })
     }
     
@@ -379,6 +386,9 @@ function Aggregate-FullListData {
         $firstItem = $group.Group[0]
         $counts = Get-SeverityCounts -Items $group.Group -EPSSProp 'EPSS Score'
         $vulnCount = $counts.Critical + $counts.High + $counts.Medium + $counts.Low
+        # Collect Fix: first non-empty, or concatenate unique if multiple differ
+        $fixes = $group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        $fixVal = if ($fixes.Count -gt 0) { ($fixes -join '; ').Trim() } else { '' }
         
         if ($vulnCount -gt 0) {
             $null = $aggregated.Add([PSCustomObject]@{
@@ -392,6 +402,7 @@ function Aggregate-FullListData {
                 'Low' = $counts.Low
                 'Vulnerability Count' = $vulnCount
                 'EPSS Score' = $counts.MaxEPSS
+                'Fix' = $fixVal
             })
         }
     }
@@ -506,6 +517,7 @@ function Get-VulnerabilityData {
                 'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name')
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
+                'Fix' = @('Solution', 'Fix', 'Remediation')
             }
             $columnIndices = @{}
             foreach ($key in $columnMappings.Keys) {
@@ -581,6 +593,7 @@ function Get-VulnerabilityData {
                 'Product' = @('Software Name', 'Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name')
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
+                'Fix' = @('Solution', 'Fix', 'Remediation')
             }
             
             # Find column indices
@@ -1034,6 +1047,11 @@ function Get-Top10Vulnerabilities {
                 $existing.EPSSScore = $maxEPSS
             }
 
+            # Collect Fix: use first non-empty from group, or append unique if existing has none
+            $groupFix = ($group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join '; '
+            if ($groupFix -and [string]::IsNullOrWhiteSpace($existing.Fix)) { $existing.Fix = $groupFix.Trim() }
+            elseif ($groupFix -and $existing.Fix -notlike "*$groupFix*") { $existing.Fix = ($existing.Fix + '; ' + $groupFix).Trim() }
+
             # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
             # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
             $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
@@ -1055,6 +1073,10 @@ function Get-Top10Vulnerabilities {
             $low = ($group.Group | Measure-Object -Property Low -Sum).Sum
             $vulnCount = ($group.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
             $epssScore = ($group.Group.'EPSS Score' | Measure-Object -Maximum).Maximum
+
+            # Collect Fix: first non-empty or concatenate unique from group
+            $fixes = $group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            $fixVal = if ($fixes.Count -gt 0) { ($fixes -join '; ').Trim() } else { '' }
 
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
@@ -1085,6 +1107,7 @@ function Get-Top10Vulnerabilities {
                 AvgCVSS = $avgCVSS
                 RiskScore = $riskScore
                 AffectedSystems = $affectedSystems
+                Fix = $fixVal
             }
         }
     }

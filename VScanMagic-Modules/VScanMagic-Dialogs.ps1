@@ -62,7 +62,7 @@ function Show-GeneralRecommendationsDialog {
             }
         }
         
-        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } else { "" }
+        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { $item.Fix } else { "" }
         $dataGridView.Rows[$row].Cells["Recommendations"].Value = $recommendationsText
     }
 
@@ -91,6 +91,32 @@ function Show-GeneralRecommendationsDialog {
         }
     })
     $recDialog.Controls.Add($btnLoadDefaults)
+
+    $btnImproveAI = New-Object System.Windows.Forms.Button
+    $btnImproveAI.Location = New-Object System.Drawing.Point(150, $y)
+    $btnImproveAI.Size = New-Object System.Drawing.Size(130, 30)
+    $btnImproveAI.Text = "Improve with AI"
+    $btnImproveAI.Add_Click({
+        $sel = $dataGridView.SelectedRows
+        if (-not $sel -or $sel.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Select a row first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $row = $sel[0]
+        $currentText = [string]$row.Cells["Recommendations"].Value
+        if ([string]::IsNullOrWhiteSpace($currentText)) {
+            [System.Windows.Forms.MessageBox]::Show("Enter text in the Recommendations cell first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            $improved = Invoke-AIImproveRemediationText -Text $currentText
+            $row.Cells["Recommendations"].Value = $improved
+        } finally {
+            $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+    $recDialog.Controls.Add($btnImproveAI)
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Location = New-Object System.Drawing.Point(800, $y)
@@ -767,6 +793,13 @@ function New-TicketInstructions {
             # Get remediation guidance from configurable rules
             $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Ticket'
             [void]$sb.AppendLine($remediationText)
+
+            # ConnectSecure Solution/Fix when available
+            if ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) {
+                [void]$sb.AppendLine()
+                [void]$sb.AppendLine("ConnectSecure Solution:")
+                [void]$sb.AppendLine($item.Fix)
+            }
             [void]$sb.AppendLine()
 
             # Add General Recommendations if available (use pre-built map for O(1) lookup)

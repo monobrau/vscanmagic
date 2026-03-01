@@ -633,6 +633,20 @@ function New-WordReport {
             $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Word'
             $selection.TypeText($remediationText)
 
+            # ConnectSecure Solution/Fix when available
+            if ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) {
+                $selection.ParagraphFormat.LeftIndent = 0
+                $selection.TypeParagraph()
+                $selection.Font.Bold = $true
+                $selection.TypeText("ConnectSecure Solution:")
+                $selection.TypeParagraph()
+                $selection.Font.Bold = $false
+                $selection.ParagraphFormat.LeftIndent = 36
+                $selection.TypeText($item.Fix)
+                $selection.ParagraphFormat.LeftIndent = 0
+                $selection.TypeParagraph()
+            }
+
             $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
             $selection.TypeParagraph()
 
