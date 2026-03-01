@@ -741,18 +741,26 @@ function Show-VScanMagicGUI {
     $script:UpdateOutputDirUI = {
         $structuredOffset = 0
         if (-not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -and (Test-Path $script:UserSettings.ReportsBasePath)) {
-            $labelOutputDir.Text = "Output:"
+            $labelOutputDir.Text = "Output Directory:"
             $labelOutputDir.Visible = $true
-            $textBoxOutputDir.Visible = $false
-            $buttonBrowseOutput.Visible = $false
-            $lblStructuredPathHint.Text = "Using structured paths. Base: $($script:UserSettings.ReportsBasePath)"
+            $textBoxOutputDir.Visible = $true
+            $buttonBrowseOutput.Visible = $true
+            $lblStructuredPathHint.Text = "Leave empty for structured paths under base, or enter/browse a path to use a one-off location"
+            $lblStructuredPathHint.Location = New-Object System.Drawing.Point(20, 600)
             $lblStructuredPathHint.Visible = $true
             $toolTipOutput.SetToolTip($lblStructuredPathHint, $script:UserSettings.ReportsBasePath)
+            $chkReselectFolder.Location = New-Object System.Drawing.Point(20, 620)
             $chkReselectFolder.Visible = $true
+            $btnEditMappings.Location = New-Object System.Drawing.Point(250, 618)
             $btnEditMappings.Visible = $true
+            $btnReportHistory.Location = New-Object System.Drawing.Point(470, 618)
             $btnReportHistory.Visible = $true
-            $structuredOffset = 22
+            $structuredOffset = 24
         } else {
+            $lblStructuredPathHint.Location = New-Object System.Drawing.Point(20, 576)
+            $chkReselectFolder.Location = New-Object System.Drawing.Point(20, 596)
+            $btnEditMappings.Location = New-Object System.Drawing.Point(250, 594)
+            $btnReportHistory.Location = New-Object System.Drawing.Point(470, 594)
             $labelOutputDir.Text = "Output Directory:"
             $labelOutputDir.Visible = $true
             $textBoxOutputDir.Visible = $true
@@ -1017,6 +1025,23 @@ function Show-VScanMagicGUI {
                 $form.Refresh()
                 [System.Windows.Forms.Application]::DoEvents()
                 $companiesToProcess = @($companiesData)
+                # Set RMIT+ per client when processing multiple companies
+                if ($companiesToProcess.Count -gt 1) {
+                    $clientTypes = Show-SetClientTypesDialog -CompaniesToProcess $companiesToProcess -DefaultIsRMITPlus $checkBoxRMITPlus.Checked
+                    if ($null -eq $clientTypes) {
+                        Write-Log "Client type selection cancelled." -Level Warning
+                        $buttonGenerate.Enabled = $true
+                        return
+                    }
+                    foreach ($companyData in $companiesToProcess) {
+                        $companyId = if ($companyData.Company -and $companyData.Company.Id -ne $null) { $companyData.Company.Id } else { 0 }
+                        $companyData["IsRMITPlus"] = if ($clientTypes.ContainsKey($companyId)) { $clientTypes[$companyId] } else { $checkBoxRMITPlus.Checked }
+                    }
+                } else {
+                    foreach ($companyData in $companiesToProcess) {
+                        $companyData["IsRMITPlus"] = $checkBoxRMITPlus.Checked
+                    }
+                }
                 # Only skip dialogs when 2+ companies (true bulk); single-company always shows dialogs
                 $skipDialogsForBulk = $chkBulkProcessing.Checked -and $companiesData.Count -gt 1
                 $processedOutputs = [System.Collections.ArrayList]::new()
@@ -1027,11 +1052,12 @@ function Show-VScanMagicGUI {
                             $clientName = $companyData.ClientName
                             $scanDate = $companyData.ScanDate
                             $outputDir = if ($companyData.OutputDir) { $companyData.OutputDir } else { $textBoxOutputDir.Text }
+                            $isRMITPlus = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $script:IsRMITPlus }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
             Write-Log "Client: $clientName"
-            Write-Log "Client Type: $(if ($script:IsRMITPlus) { 'RMIT+' } else { 'RMIT/CMIT' })"
+            Write-Log "Client Type: $(if ($isRMITPlus) { 'RMIT+' } else { 'RMIT/CMIT' })"
             Write-Log "Scan Date: $scanDate"
 
             # Reusable values for this client (avoids repeated logic)
@@ -1083,7 +1109,7 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Email Template..." -Show $true
                 $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
-                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $script:IsRMITPlus
+                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus
 
                 $script:EmailTemplatePath = $emailOutputPath
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
@@ -1133,7 +1159,7 @@ function Show-VScanMagicGUI {
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
-                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } else {
                     $timeEstimates = foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
@@ -1141,7 +1167,7 @@ function Show-VScanMagicGUI {
                             Product = $prod
                             TimeEstimate = 0.0
                             AfterHours = $false
-                            ThirdParty = if ($script:IsRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            ThirdParty = if ($isRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
                             TicketGenerated = $false
                         }
                     }
@@ -1151,7 +1177,7 @@ function Show-VScanMagicGUI {
                 if ($null -ne $timeEstimates) {
                     $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
-                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
+                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
                     $script:TimeEstimatePath = $timeEstimateOutputPath
                     # Store TimeEstimates in script variable for ticket notes
@@ -1181,7 +1207,7 @@ function Show-VScanMagicGUI {
                                       -ScanDate $scanDate `
                                       -Top10Data $top10 `
                                       -TimeEstimates $timeEstimates `
-                                      -IsRMITPlus $script:IsRMITPlus `
+                                      -IsRMITPlus $isRMITPlus `
                                       -GeneralRecommendations $generalRecommendations `
                                       -ReportTitle $reportTitle
                     }
@@ -1198,7 +1224,7 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Ticket Instructions..." -Show $true
                 $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
 
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
+                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
                 $script:TicketInstructionsPath = $ticketOutputPath
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
@@ -1208,7 +1234,7 @@ function Show-VScanMagicGUI {
             if ($null -ne $script:CurrentTop10Data) {
                 $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
-                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $script:IsRMITPlus
+                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus
                 
                 if ($script:TicketNotesPath) {
                     $script:buttonOpenTicketNotes.Enabled = $true
@@ -1260,11 +1286,12 @@ function Show-VScanMagicGUI {
                 $scanDate = $datePickerScanDate.Value.ToShortDateString()
                 $inputPath = $company.InputPath
                 $outputDir = if ($company.OutputDir) { $company.OutputDir } else { $textBoxOutputDir.Text }
+                $isRMITPlus = $script:IsRMITPlus
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
             Write-Log "Client: $clientName"
-            Write-Log "Client Type: $(if ($script:IsRMITPlus) { 'RMIT+' } else { 'RMIT/CMIT' })"
+            Write-Log "Client Type: $(if ($isRMITPlus) { 'RMIT+' } else { 'RMIT/CMIT' })"
             Write-Log "Scan Date: $scanDate"
 
             $companyName = if ([string]::IsNullOrWhiteSpace($clientName)) { "Client" } else { $clientName }
@@ -1310,7 +1337,7 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Email Template..." -Show $true
                 $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
-                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $script:IsRMITPlus
+                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus
 
                 $script:EmailTemplatePath = $emailOutputPath
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
@@ -1359,7 +1386,7 @@ function Show-VScanMagicGUI {
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
-                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $script:IsRMITPlus
+                    $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } else {
                     $timeEstimates = foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
@@ -1367,7 +1394,7 @@ function Show-VScanMagicGUI {
                             Product = $prod
                             TimeEstimate = 0.0
                             AfterHours = $false
-                            ThirdParty = if ($script:IsRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            ThirdParty = if ($isRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
                             TicketGenerated = $false
                         }
                     }
@@ -1377,7 +1404,7 @@ function Show-VScanMagicGUI {
                 if ($null -ne $timeEstimates) {
                     $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
-                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
+                    New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
                     $script:TimeEstimatePath = $timeEstimateOutputPath
                     
@@ -1403,7 +1430,7 @@ function Show-VScanMagicGUI {
                                       -ScanDate $scanDate `
                                       -Top10Data $top10 `
                                       -TimeEstimates $timeEstimates `
-                                      -IsRMITPlus $script:IsRMITPlus `
+                                      -IsRMITPlus $isRMITPlus `
                                       -GeneralRecommendations $generalRecommendations `
                                       -ReportTitle $reportTitle
                     }
@@ -1419,7 +1446,7 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Ticket Instructions..." -Show $true
                 $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
 
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $script:IsRMITPlus -GeneralRecommendations $generalRecommendations
+                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
                 $script:TicketInstructionsPath = $ticketOutputPath
                 Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
@@ -1428,7 +1455,7 @@ function Show-VScanMagicGUI {
             if ($null -ne $script:CurrentTop10Data) {
                 $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
-                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $script:IsRMITPlus
+                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus
                 
                 if ($script:TicketNotesPath) {
                     $script:buttonOpenTicketNotes.Enabled = $true

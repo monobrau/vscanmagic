@@ -82,6 +82,7 @@ $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanM
 $script:GeneralRecommendations = $null
 $script:ConnectSecureCredentialsPath = Join-Path $script:SettingsDirectory "ConnectSecure-Credentials.json"
 $script:ConnectSecureCompaniesCachePath = Join-Path $script:SettingsDirectory "ConnectSecure-Companies-Cache.json"
+$script:ConnectWiseAutomateCredentialsPath = Join-Path $script:SettingsDirectory "ConnectWise-Automate-Credentials.json"
 $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
 $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
 
@@ -179,6 +180,7 @@ function Update-SettingsPaths {
     $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
     $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
     $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
+    $script:ConnectWiseAutomateCredentialsPath = Join-Path $script:SettingsDirectory "ConnectWise-Automate-Credentials.json"
     
     if (Ensure-SettingsDirectory -Path $script:SettingsDirectory) { Write-Host "Created settings directory: $script:SettingsDirectory" }
 }
@@ -266,6 +268,87 @@ function Load-ConnectSecureCompaniesCache {
     return $null
 }
 
+# --- ConnectWise Automate (username lookup for Hostname Review) ---
+
+function Load-ConnectWiseAutomateCredentials {
+    if ([string]::IsNullOrEmpty($script:ConnectWiseAutomateCredentialsPath)) { return $null }
+    $json = Get-JsonFile -Path $script:ConnectWiseAutomateCredentialsPath
+    if (-not $json) { return $null }
+    return @{
+        BaseUrl = if ($json.BaseUrl) { ($json.BaseUrl -replace '/$','') } else { "" }
+        Username = if ($json.Username) { $json.Username } else { "" }
+        Password = if ($json.Password) { $json.Password } else { "" }
+        UseAutomateModule = if ($null -ne $json.UseAutomateModule) { [bool]$json.UseAutomateModule } else { $true }
+    }
+}
+
+function Save-ConnectWiseAutomateCredentials {
+    param([string]$BaseUrl, [string]$Username, [string]$Password, [bool]$UseAutomateModule = $true)
+    if ([string]::IsNullOrEmpty($script:ConnectWiseAutomateCredentialsPath)) { return $false }
+    $creds = @{ BaseUrl = $BaseUrl; Username = $Username; Password = $Password; UseAutomateModule = $UseAutomateModule }
+    return Set-JsonFile -Path $script:ConnectWiseAutomateCredentialsPath -Object $creds
+}
+
+function Get-ConnectWiseUsernamesByHostname {
+    param([string[]]$Hostnames)
+    if (-not $Hostnames -or $Hostnames.Count -eq 0) { return @{} }
+    $hostnames = $Hostnames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    if ($hostnames.Count -eq 0) { return @{} }
+    $creds = Load-ConnectWiseAutomateCredentials
+    if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+        Write-Log "ConnectWise Automate not configured. Configure in Settings > ConnectWise Automate." -Level Warning
+        return @{}
+    }
+    $result = @{}
+    foreach ($h in $hostnames) { $result[$h] = "" }
+    if ($creds.UseAutomateModule) {
+        try {
+            $mod = Get-Module -ListAvailable -Name AutomateAPI
+            if ($mod) {
+                Import-Module AutomateAPI -ErrorAction Stop
+                $securePass = ConvertTo-SecureString $creds.Password -AsPlainText -Force
+                $cred = New-Object PSCredential ($creds.Username, $securePass)
+                Connect-AutomateApi -Server $creds.BaseUrl -Credential $cred -ErrorAction Stop | Out-Null
+                foreach ($hostname in $hostnames) {
+                    try {
+                        $escaped = ($hostname -replace "'","''")
+                        $computers = Get-AutomateComputer -Condition "(Name eq '$escaped')" -ErrorAction SilentlyContinue
+                        if ($computers -and $computers.Count -gt 0) {
+                            $comp = $computers[0]
+                            $user = $comp.LastLoggedInUser; if (-not $user) { $user = $comp.LastLoggedInUserName }; if (-not $user) { $user = $comp.LoggedInUser }
+                            if ($user -and -not [string]::IsNullOrWhiteSpace([string]$user)) { $result[$hostname] = [string]$user }
+                        }
+                    } catch { }
+                }
+                Disconnect-AutomateApi -ErrorAction SilentlyContinue | Out-Null
+                return $result
+            }
+        } catch {
+            Write-Log "AutomateAPI module lookup failed: $($_.Exception.Message)" -Level Warning
+        }
+    }
+    try {
+        $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($creds.Username):$($creds.Password)"))
+        $headers = @{ "Authorization" = "Basic $auth"; "Content-Type" = "application/json" }
+        $base = $creds.BaseUrl -replace '/$',''
+        foreach ($hostname in $hostnames) {
+            try {
+                $escaped = ($hostname -replace "'","''")
+                $uri = "$base/cwa/api/v1/Computers?`$filter=Name eq '$escaped'"
+                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 15 -ErrorAction Stop
+                if ($resp -and $resp.value -and $resp.value.Count -gt 0) {
+                    $comp = $resp.value[0]
+                    $user = $comp.LastLoggedInUser; if (-not $user) { $user = $comp.LastLoggedInUserName }; if (-not $user) { $user = $comp.LoggedInUser }
+                    if ($user -and -not [string]::IsNullOrWhiteSpace([string]$user)) { $result[$hostname] = [string]$user }
+                }
+            } catch { }
+        }
+    } catch {
+        Write-Log "ConnectWise Automate REST API failed: $($_.Exception.Message)" -Level Warning
+    }
+    return $result
+}
+
 # --- Company Folder Mapping (for structured output paths) ---
 
 $script:CompanyFolderMap = @{}
@@ -304,6 +387,14 @@ function Add-ToReportFolderHistory {
     )
     if ([string]::IsNullOrWhiteSpace($OutputPath) -or -not (Test-Path $OutputPath)) { return }
     $pathNorm = [System.IO.Path]::GetFullPath($OutputPath)
+    # Don't add one-off paths (outside Reports Base Path) to history
+    $base = $script:UserSettings.ReportsBasePath
+    if ($base -and (Test-Path $base)) {
+        $baseNorm = [System.IO.Path]::GetFullPath($base.Trim())
+        if (-not $pathNorm.StartsWith($baseNorm, [StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+    }
     $existing = @(Get-ReportFolderHistory | Where-Object { $_.OutputPath -ne $pathNorm })
     $now = Get-Date -Format "yyyy-MM-dd HH:mm"
     $newEntry = [PSCustomObject]@{ CompanyName = $CompanyName; OutputPath = $pathNorm; ProcessedAt = $now }
@@ -362,6 +453,7 @@ function Resolve-ClientOutputPath {
         [switch]$ForceManual,
         [string]$FallbackPath = ""  # When set, use instead of LastOutputDirectory (e.g. current Output Directory from form)
     )
+    # Manual path (folder picker) only when: (1) Re-select folder is checked, or (2) mapping/auto-match cannot determine path.
     $base = $script:UserSettings.ReportsBasePath
     if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path $base)) {
         $fallback = if ($FallbackPath -and (Test-Path $FallbackPath)) { $FallbackPath } else { $script:UserSettings.LastOutputDirectory }
@@ -431,19 +523,25 @@ function Resolve-ClientOutputPath {
     }
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = "Select the folder where the quarter (e.g. 2026 - Q1) should be created. Example: ...\General\Accurate Metal\Network Documentation\Vulnerability Scans"
-    $dialog.SelectedPath = $base
+    $dialog.Description = "Select the vulnerability scan directory where the year-quarter folder (e.g. 2026 - Q1) will be created. Choose under the base path or any other location (one-off)."
+    $dialog.SelectedPath = if ($FallbackPath -and (Test-Path $FallbackPath)) { $FallbackPath } else { $base }
     $dialog.ShowNewFolderButton = $true
     if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     $selected = $dialog.SelectedPath
     $selectedFull = [System.IO.Path]::GetFullPath($selected)
-    if ($selectedFull.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
-        $rel = $selectedFull.Substring($base.Length).TrimStart([char]'\', [char]'/')
-        # Store full relative path (e.g. "General\Accurate Metal\Network Documentation\Vulnerability Scans") so deep structures are supported
-        $folderName = if ([string]::IsNullOrWhiteSpace($rel)) { [System.IO.Path]::GetFileName($selectedFull) } else { $rel }
-    } else {
-        $folderName = [System.IO.Path]::GetFileName($selectedFull)
+    $baseTrimmed = $base.TrimEnd([char]'\', [char]'/')
+    $isInsideBase = $selectedFull.StartsWith($baseTrimmed, [StringComparison]::OrdinalIgnoreCase) -and
+        ($selectedFull.Length -eq $baseTrimmed.Length -or $selectedFull[$baseTrimmed.Length] -in '\', '/')
+    if (-not $isInsideBase) {
+        # User selected a path outside base (one-off) - use it directly, don't map to base
+        if (-not (Test-Path $selectedFull)) { New-Item -ItemType Directory -Path $selectedFull -Force | Out-Null }
+        $miscPath = Join-Path $selectedFull "Misc"
+        if (-not (Test-Path $miscPath)) { New-Item -ItemType Directory -Path $miscPath -Force | Out-Null }
+        Write-Log "Output path (selected, one-off): $selectedFull" -Level Info
+        return $selectedFull
     }
+    $rel = $selectedFull.Substring($baseTrimmed.Length).TrimStart([char]'\', [char]'/')
+    $folderName = if ([string]::IsNullOrWhiteSpace($rel)) { [System.IO.Path]::GetFileName($selectedFull) } else { $rel }
     if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = "Client" }
     $folderName = Resolve-VulnerabilityScansSubpath -FolderName $folderName
     $script:CompanyFolderMap[$key] = $folderName
@@ -499,9 +597,15 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*rippl20*"
+            WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
+            TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*Ripple20*"
-            WordText = "Network printers and IoT devices require manual firmware updates via manufacturer-provided tools and interfaces. Consult the manufacturer's documentation for firmware update procedures."
-            TicketText = "- Requires manual firmware updates via manufacturer tools`r`n  - Consult manufacturer documentation for update procedures"
+            WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
+            TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
             IsDefault = $false
         },
         @{
@@ -855,19 +959,86 @@ function Test-FileLocked {
     }
 }
 
+function ConvertTo-ReadableFixText {
+    <#
+    .SYNOPSIS
+    Cleans up raw Fix/Solution text (versions, KBs, patches) from ConnectSecure into readable format.
+    Converts ['5077181']; ['148.0.0'] style into "Apply KB5077181. Update to version 148.0.0 or later."
+    #>
+    param([string]$RawFix)
+    if ([string]::IsNullOrWhiteSpace($RawFix)) { return $RawFix }
+    $parts = [System.Collections.ArrayList]::new()
+    $matches = [regex]::Matches($RawFix, "'([^']*)'")
+    foreach ($m in $matches) {
+        $item = $m.Groups[1].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($item) -or $item -eq "None") { continue }
+        if ($item -match '^\d{6,8}$') {
+            $null = $parts.Add("Apply Windows Update KB$item")
+        } elseif ($item -match '^[\d\.]+$') {
+            $null = $parts.Add("Update to version $item or later")
+        } elseif ($item -eq "Latest Patch") {
+            $null = $parts.Add("Apply the latest patch")
+        } else {
+            $null = $parts.Add($item)
+        }
+    }
+    if ($parts.Count -eq 0) { return $RawFix }
+    $unique = $parts | Select-Object -Unique
+    $result = ($unique -join ". ").Trim()
+    return $result
+}
+
+function Test-AIApiKeyConfigured {
+    <#
+    .SYNOPSIS
+    Returns $true if any AI API key (ChatGPT, Claude, Copilot) is configured.
+    #>
+    $chat = $script:UserSettings.AIApiKeyChatGPT
+    $claude = $script:UserSettings.AIApiKeyClaude
+    $copilot = $script:UserSettings.AIApiKeyCopilot
+    return (-not [string]::IsNullOrWhiteSpace($chat)) -or (-not [string]::IsNullOrWhiteSpace($claude)) -or (-not [string]::IsNullOrWhiteSpace($copilot))
+}
+
 function Invoke-AIImproveRemediationText {
     <#
     .SYNOPSIS
     Rephrases vulnerability remediation text using AI (ChatGPT, Claude, or Copilot).
     Uses first available API key. Returns original text on error.
     #>
-    param([string]$Text)
+    param(
+        [string]$Text,
+        [string]$ProductName = "",
+        [string]$CveIdList = ""
+    )
 
     if ([string]::IsNullOrWhiteSpace($Text)) {
         return $Text
     }
 
-    $prompt = "Rephrase this vulnerability remediation guidance for an IT technician. Keep it professional and actionable. Output only the improved text, no preamble or explanation."
+    $cleaned = ConvertTo-ReadableFixText -RawFix $Text
+    $vulnContext = ""
+    if (-not [string]::IsNullOrWhiteSpace($ProductName) -or -not [string]::IsNullOrWhiteSpace($CveIdList)) {
+        $parts = @()
+        if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
+        if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product: $ProductName" }
+        $vulnContext = ($parts -join "`n") + "`n`n"
+    }
+    $prompt = @"
+You are rephrasing SPECIFIC remediation steps for ONE vulnerability. The text below contains the exact fix (e.g. KB numbers, version updates) for a particular CVE or product.
+
+RULES:
+- Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
+- Do NOT output things like "Prioritize remediation", "Patch management", "Vulnerability scanning", "Documentation" - those are generic.
+- Output ONLY a clear, professional rewrite of the SPECIFIC fix below. One short paragraph or a few sentences max.
+- If the input is already specific (e.g. "Apply KB5077181"), just make it slightly more readable - do not expand into generic guidance.
+- Output ONLY the rephrased text. No preamble, no explanation, no bullet lists of general practices.
+- NEVER respond with "I don't have specific information" or similar. If CVE IDs are provided or the vulnerability is known (e.g. Ripple20/rippl20, CVE-2020-11898, CVE-2020-11910), provide the best available remediation guidance for that specific vulnerability.
+- When CVE IDs are given, use them to provide CVE-specific remediation (patches, KB numbers, version updates, workarounds from NVD/CERT advisories).
+- Common vulnerabilities: rippl20-icmp = Ripple20 Treck TCP/IP ICMP flaws; remediate via firmware updates from manufacturer, network segmentation where patching not possible.
+
+$vulnContext
+Input to rephrase:
+"@
 
     # Try ChatGPT first, then Claude, then Copilot
     $key = $script:UserSettings.AIApiKeyChatGPT
@@ -876,7 +1047,7 @@ function Invoke-AIImproveRemediationText {
             $reqBody = @{
                 model = "gpt-4o-mini"
                 messages = @(
-                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
                 )
                 max_tokens = 1024
             } | ConvertTo-Json -Depth 5
@@ -886,7 +1057,13 @@ function Invoke-AIImproveRemediationText {
             }
             $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
             $improved = $resp.choices[0].message.content.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+            if (-not [string]::IsNullOrWhiteSpace($improved)) {
+                if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
+                    $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
+                    if (-not [string]::IsNullOrWhiteSpace($fallback)) { return $fallback }
+                }
+                return $improved
+            }
         } catch {
             Write-Log "ChatGPT AI improvement failed: $($_.Exception.Message)" -Level Warning
         }
@@ -899,7 +1076,7 @@ function Invoke-AIImproveRemediationText {
                 model = "claude-3-haiku-20240307"
                 max_tokens = 1024
                 messages = @(
-                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
                 )
             } | ConvertTo-Json -Depth 5
             $headers = @{
@@ -909,7 +1086,13 @@ function Invoke-AIImproveRemediationText {
             }
             $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
             $improved = $resp.content[0].text.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+            if (-not [string]::IsNullOrWhiteSpace($improved)) {
+                if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
+                    $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
+                    if (-not [string]::IsNullOrWhiteSpace($fallback)) { return $fallback }
+                }
+                return $improved
+            }
         } catch {
             Write-Log "Claude AI improvement failed: $($_.Exception.Message)" -Level Warning
         }
@@ -921,7 +1104,7 @@ function Invoke-AIImproveRemediationText {
             $reqBody = @{
                 model = "gpt-4o-mini"
                 messages = @(
-                    @{ role = "user"; content = "$prompt`n`n---`n`n$Text" }
+                    @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
                 )
                 max_tokens = 1024
             } | ConvertTo-Json -Depth 5
@@ -931,7 +1114,13 @@ function Invoke-AIImproveRemediationText {
             }
             $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
             $improved = $resp.choices[0].message.content.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($improved)) { return $improved }
+            if (-not [string]::IsNullOrWhiteSpace($improved)) {
+                if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
+                    $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
+                    if (-not [string]::IsNullOrWhiteSpace($fallback)) { return $fallback }
+                }
+                return $improved
+            }
         } catch {
             Write-Log "Copilot AI improvement failed: $($_.Exception.Message)" -Level Warning
         }

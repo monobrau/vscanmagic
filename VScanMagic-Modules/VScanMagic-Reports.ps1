@@ -642,7 +642,7 @@ function New-WordReport {
                 $selection.TypeParagraph()
                 $selection.Font.Bold = $false
                 $selection.ParagraphFormat.LeftIndent = 36
-                $selection.TypeText($item.Fix)
+                $selection.TypeText((ConvertTo-ReadableFixText -RawFix $item.Fix))
                 $selection.ParagraphFormat.LeftIndent = 0
                 $selection.TypeParagraph()
             }
@@ -1310,6 +1310,50 @@ function Get-TimeOfDayGreeting {
     }
 }
 
+function Open-EmailDraftInOutlook {
+    <#
+    .SYNOPSIS
+    Opens the email template from the given output folder in Outlook as a draft (avoids signature-at-top when opening .eml).
+    #>
+    param([string]$OutputFolderPath)
+    if ([string]::IsNullOrWhiteSpace($OutputFolderPath) -or -not (Test-Path $OutputFolderPath)) { return $false }
+    $emlFiles = @(Get-ChildItem -Path $OutputFolderPath -Filter "*Email Template*.eml" -ErrorAction SilentlyContinue)
+    $miscPath = Join-Path $OutputFolderPath "Misc"
+    if ((Test-Path $miscPath) -and $emlFiles.Count -eq 0) {
+        $emlFiles = @(Get-ChildItem -Path $miscPath -Filter "*Email Template*.eml" -ErrorAction SilentlyContinue)
+    }
+    if ($emlFiles.Count -eq 0) { return $false }
+    $emlPath = $emlFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $content = Get-Content -Path $emlPath.FullName -Raw -Encoding UTF8
+    $headerEnd = $content.IndexOf("`r`n`r`n")
+    if ($headerEnd -lt 0) { $headerEnd = $content.IndexOf("`n`n") }
+    $headers = if ($headerEnd -ge 0) { $content.Substring(0, $headerEnd) } else { $content }
+    $bodyEncoded = if ($headerEnd -ge 0) { $content.Substring($headerEnd).Trim() } else { "" }
+    $subject = ""
+    foreach ($line in ($headers -split "`r?`n")) {
+        if ($line -match "^Subject:\s*(.+)$") { $subject = $matches[1].Trim(); break }
+    }
+    $body = ""
+    if ($bodyEncoded) {
+        try {
+            $bodyBytes = [Convert]::FromBase64String(($bodyEncoded -replace "`r`n", ""))
+            $body = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
+        } catch { $body = $bodyEncoded }
+    }
+    try {
+        $ol = New-Object -ComObject Outlook.Application
+        $mail = $ol.CreateItem(0)
+        $mail.Subject = $subject
+        $mail.Body = $body
+        $mail.Display()
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($mail) | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ol) | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function New-EmailTemplate {
     param(
         [string]$OutputPath,
@@ -1325,9 +1369,9 @@ function New-EmailTemplate {
 
         # Build client-type-specific note
         if ($IsRMITPlus) {
-            $noteText = "Note: Remediation tickets have been generated for items that are covered under your RMIT+ agreement. A TimeZest meeting request has been sent to discuss the 3rd party items that are not covered under the RMIT+ agreement. Those 3rd party items will not be remediated unless they are discussed and a quote has been generated.`n`nIf you would like to discuss the report further, please use the meeting request to schedule an appointment directly from my availability via a Teams Meeting."
+            $noteText = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
         } else {
-            $noteText = "Note: We will not generate any tickets without your approval. A TimeZest meeting request has been sent to discuss the remediation of these vulnerabilities. If you would like to discuss the report further, please use the meeting request to schedule an appointment directly from my availability via a Teams Meeting."
+            $noteText = "Note: We will not generate remediation tickets without your approval. To schedule a discussion of these findings, please use the scheduling link above."
         }
 
         $emailContent = @"
@@ -1335,28 +1379,34 @@ Subject: $year Q$quarter Vulnerability Scan Follow Up
 
 Good $greeting,
 
-We are pleased to inform you that your quarterly vulnerability scan report has been completed and added to your client folder.
+Your quarterly vulnerability scan report has been completed and is available in your client folder.
 
-The main list of items I recommend remediating can be found here:
+Recommended remediation priorities (Top Ten):
 <link to top ten report from onedrive>
-*Note that not all vulnerabilities may be feasible to remediate depending on business need.
 
-You can access and view the full reports using the link below:
+Complete report package:
 <onedrive link to folder containing reports>
 
-In this folder you will also find:
+Schedule a discussion:
+<timezest scheduling link>
 
-Pending Remediation EPSS Score Report: This report classifies vulnerabilities by the "EPSS Score." This is a measure of the likelihood that an attacker will exploit a particular vulnerability within 30 days. The scale ranges from 0 to 1.0, with 1.0 being the most critical.
+The folder contains the following reports:
 
-All Vulnerabilities Report: This spreadsheet contains a list of all vulnerabilities (including internal and external) that were detected, ranging from critical to low
+• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
 
-Executive Summary Report: A high-level overview of your security "grade" as well as some information about your network
+• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
 
-External Scan: Any detected vulnerabilities or services that are exposed to the outside Internet
+• Executive Summary Report – A high-level overview of your security posture and network information.
+
+• External Scan – Detected vulnerabilities and services exposed to the internet.
+
+• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
 
 $noteText
 
-We appreciate your commitment to security, as addressing these vulnerabilities is essential for maintaining the ongoing protection of your systems.
+We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
 
 
 Sincerely,
@@ -1365,6 +1415,47 @@ $($script:UserSettings.PreparedBy)
 "@
 
         $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
+
+        # Generate .eml file for one-click open in default email client
+        $emlPath = [System.IO.Path]::ChangeExtension($OutputPath, ".eml")
+        $subject = "$year Q$quarter Vulnerability Scan Follow Up"
+        $lines = $emailContent -split "`r?`n"
+        $body = if ($lines.Count -gt 1) { ($lines[1..($lines.Count - 1)] -join "`r`n").Trim() } else { $emailContent }
+        $body = $body -replace "`r`n", "`n" -replace "`n", "`r`n"  # Normalize to CRLF for email
+        $dateRfc = (Get-Date).ToString("r")
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+        $bodyBase64 = [Convert]::ToBase64String($bodyBytes)
+        $chunks = for ($i = 0; $i -lt $bodyBase64.Length; $i += 76) { $bodyBase64.Substring($i, [Math]::Min(76, $bodyBase64.Length - $i)) }
+        $bodyBase64Wrapped = $chunks -join "`r`n"
+        $emlLines = @(
+            "From: ",
+            "To: ",
+            "Subject: $subject",
+            "Date: $dateRfc",
+            "X-Unsent: 1",
+            "MIME-Version: 1.0",
+            "Content-Type: text/plain; charset=utf-8",
+            "Content-Transfer-Encoding: base64",
+            "",
+            $bodyBase64Wrapped
+        )
+        $emlLines -join "`r`n" | Out-File -FilePath $emlPath -Encoding ASCII
+        Write-Log "Email template (.eml) saved to: $emlPath" -Level Success
+
+        # Create shortcut (.lnk) to open .eml in default email client
+        $shortcutPath = Join-Path ([System.IO.Path]::GetDirectoryName($OutputPath)) ([System.IO.Path]::GetFileNameWithoutExtension($OutputPath) + " - Open in Email.lnk")
+        try {
+            $ws = New-Object -ComObject WScript.Shell
+            $sc = $ws.CreateShortcut($shortcutPath)
+            $sc.TargetPath = $emlPath
+            $sc.WorkingDirectory = [System.IO.Path]::GetDirectoryName($emlPath)
+            $sc.Description = "Open vulnerability scan follow-up email in default email client"
+            $sc.Save()
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ws) | Out-Null
+            Write-Log "Shortcut created: $shortcutPath" -Level Success
+        } catch {
+            Write-Log "Could not create shortcut: $($_.Exception.Message)" -Level Warning
+        }
 
     } catch {
         Write-Log "Error generating email template: $($_.Exception.Message)" -Level Error

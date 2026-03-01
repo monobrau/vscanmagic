@@ -58,6 +58,10 @@ TestResults/
 # Sample vulnerability reports
 All Vulnerabilities Report*.xlsx
 
+# Export outputs
+VulnerabilitiesExport_*.csv
+unique-software-*.csv
+
 VScanMagic_Settings.json
 VScanMagic_CompanyFolderMap.json
 VScanMagic_ReportFolderHistory.json
@@ -71,3 +75,4 @@ ConnectSecure-Config.ps1
 *Config.ps1
 *Credentials.ps1
 ConnectSecure-Credentials.json
+ConnectWise-Automate-Credentials.json

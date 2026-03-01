@@ -25,7 +25,7 @@ function Show-GeneralRecommendationsDialog {
     $dataGridView.Size = New-Object System.Drawing.Size(950, 450)
     $dataGridView.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
     $dataGridView.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
-    $dataGridView.MultiSelect = $false
+    $dataGridView.MultiSelect = $true
     $dataGridView.AllowUserToAddRows = $false
     $recDialog.Controls.Add($dataGridView)
 
@@ -52,6 +52,7 @@ function Show-GeneralRecommendationsDialog {
     foreach ($item in $Top10Data) {
         $row = $dataGridView.Rows.Add()
         $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
+        $dataGridView.Rows[$row].Tag = $item  # Store item for CVE/context when using AI improve
         
         # Try to find matching recommendation using pattern matching
         $matchingRec = $null
@@ -62,7 +63,7 @@ function Show-GeneralRecommendationsDialog {
             }
         }
         
-        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { $item.Fix } else { "" }
+        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $item.Product -OutputType 'Word' }
         $dataGridView.Rows[$row].Cells["Recommendations"].Value = $recommendationsText
     }
 
@@ -87,36 +88,80 @@ function Show-GeneralRecommendationsDialog {
                     break
                 }
             }
-            $row.Cells["Recommendations"].Value = if ($matchingRec) { $matchingRec.Recommendations } else { "" }
+            $row.Cells["Recommendations"].Value = if ($matchingRec) { $matchingRec.Recommendations } else { Get-RemediationGuidance -ProductName $product -OutputType 'Word' }
         }
     })
     $recDialog.Controls.Add($btnLoadDefaults)
 
-    $btnImproveAI = New-Object System.Windows.Forms.Button
-    $btnImproveAI.Location = New-Object System.Drawing.Point(150, $y)
-    $btnImproveAI.Size = New-Object System.Drawing.Size(130, 30)
-    $btnImproveAI.Text = "Improve with AI"
-    $btnImproveAI.Add_Click({
+    $btnImproveSelected = New-Object System.Windows.Forms.Button
+    $btnImproveSelected.Location = New-Object System.Drawing.Point(150, $y)
+    $btnImproveSelected.Size = New-Object System.Drawing.Size(140, 30)
+    $btnImproveSelected.Text = "Improve Selected"
+    $btnImproveSelected.Add_Click({
         $sel = $dataGridView.SelectedRows
         if (-not $sel -or $sel.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("Select a row first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("Select one or more rows first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
-        $row = $sel[0]
-        $currentText = [string]$row.Cells["Recommendations"].Value
-        if ([string]::IsNullOrWhiteSpace($currentText)) {
-            [System.Windows.Forms.MessageBox]::Show("Enter text in the Recommendations cell first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        $rowsToImprove = @($sel | Where-Object { -not $_.IsNewRow -and -not [string]::IsNullOrWhiteSpace([string]$_.Cells["Recommendations"].Value) })
+        if ($rowsToImprove.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Selected rows have no text. Enter text in the Recommendations cell first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $improved = Invoke-AIImproveRemediationText -Text $currentText
-            $row.Cells["Recommendations"].Value = $improved
+            foreach ($row in $rowsToImprove) {
+                $currentText = [string]$row.Cells["Recommendations"].Value
+                $productName = [string]$row.Cells["Product"].Value
+                $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
+                if (-not [string]::IsNullOrWhiteSpace($currentText)) {
+                    $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
+                    $row.Cells["Recommendations"].Value = $improved
+                }
+            }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
     })
-    $recDialog.Controls.Add($btnImproveAI)
+    $aiConfigured = Test-AIApiKeyConfigured
+    $btnImproveSelected.Enabled = $aiConfigured
+    $recDialog.Controls.Add($btnImproveSelected)
+
+    $btnImproveAll = New-Object System.Windows.Forms.Button
+    $btnImproveAll.Location = New-Object System.Drawing.Point(300, $y)
+    $btnImproveAll.Size = New-Object System.Drawing.Size(120, 30)
+    $btnImproveAll.Text = "Improve All"
+    $btnImproveAll.Add_Click({
+        $rowsToImprove = @()
+        foreach ($row in $dataGridView.Rows) {
+            if ($row.IsNewRow) { continue }
+            $currentText = [string]$row.Cells["Recommendations"].Value
+            if (-not [string]::IsNullOrWhiteSpace($currentText)) { $rowsToImprove += $row }
+        }
+        if ($rowsToImprove.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("No rows have text to improve. Enter text in the Recommendations cells first.", "Improve with AI", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            foreach ($row in $rowsToImprove) {
+                $currentText = [string]$row.Cells["Recommendations"].Value
+                $productName = [string]$row.Cells["Product"].Value
+                $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
+                $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
+                $row.Cells["Recommendations"].Value = $improved
+            }
+        } finally {
+            $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+    $btnImproveAll.Enabled = $aiConfigured
+    $recDialog.Controls.Add($btnImproveAll)
+    if (-not $aiConfigured) {
+        $ttAI = New-Object System.Windows.Forms.ToolTip
+        $ttAI.SetToolTip($btnImproveSelected, "Configure AI API Keys in Settings to enable.")
+        $ttAI.SetToolTip($btnImproveAll, "Configure AI API Keys in Settings to enable.")
+    }
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Location = New-Object System.Drawing.Point(800, $y)
@@ -154,6 +199,94 @@ function Show-GeneralRecommendationsDialog {
     }
 
     return $null
+}
+
+function Show-SetClientTypesDialog {
+    param(
+        [array]$CompaniesToProcess,
+        [bool]$DefaultIsRMITPlus = $false
+    )
+    if (-not $CompaniesToProcess -or $CompaniesToProcess.Count -eq 0) { return @{} }
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Set Client Type (RMIT+) for Each Company"
+    $form.Size = New-Object System.Drawing.Size(420, 380)
+    $form.StartPosition = "CenterParent"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.MinimumSize = $form.Size
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Location = New-Object System.Drawing.Point(20, 12)
+    $lbl.Size = New-Object System.Drawing.Size(360, 36)
+    $lbl.Text = "Set RMIT+ for each client before processing. RMIT+ clients have ticketing and remediation coverage under the agreement."
+    $lbl.AutoSize = $false
+    $lbl.MaximumSize = New-Object System.Drawing.Size(360, 0)
+    $form.Controls.Add($lbl)
+    $dgv = New-Object System.Windows.Forms.DataGridView
+    $dgv.Location = New-Object System.Drawing.Point(20, 55)
+    $dgv.Size = New-Object System.Drawing.Size(360, 220)
+    $dgv.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
+    $dgv.AllowUserToAddRows = $false
+    $dgv.AllowUserToDeleteRows = $false
+    $dgv.ReadOnly = $false
+    $dgv.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::FullRowSelect
+    $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colName.Name = "ClientName"
+    $colName.HeaderText = "Client"
+    $colName.ReadOnly = $true
+    $colName.FillWeight = 70
+    $dgv.Columns.Add($colName) | Out-Null
+    $colRMIT = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colRMIT.Name = "IsRMITPlus"
+    $colRMIT.HeaderText = "RMIT+"
+    $colRMIT.FillWeight = 30
+    $dgv.Columns.Add($colRMIT) | Out-Null
+    foreach ($c in $CompaniesToProcess) {
+        $clientName = if ($c.ClientName) { $c.ClientName } else { ($c.Company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
+        $clientName = if ([string]::IsNullOrWhiteSpace($clientName)) { $c.Company.DisplayName } else { $clientName }
+        $defaultVal = if ($c.IsRMITPlus -ne $null) { $c.IsRMITPlus } else { $DefaultIsRMITPlus }
+        $row = $dgv.Rows.Add($clientName, $defaultVal)
+        $dgv.Rows[$row].Tag = $c
+    }
+    $btnSetAll = New-Object System.Windows.Forms.Button
+    $btnSetAll.Location = New-Object System.Drawing.Point(20, 285)
+    $btnSetAll.Size = New-Object System.Drawing.Size(80, 26)
+    $btnSetAll.Text = "All RMIT+"
+    $btnSetAll.Add_Click({ foreach ($r in $dgv.Rows) { if (-not $r.IsNewRow) { $r.Cells["IsRMITPlus"].Value = $true } } })
+    $form.Controls.Add($btnSetAll)
+    $btnSetNone = New-Object System.Windows.Forms.Button
+    $btnSetNone.Location = New-Object System.Drawing.Point(105, 285)
+    $btnSetNone.Size = New-Object System.Drawing.Size(80, 26)
+    $btnSetNone.Text = "All RMIT"
+    $btnSetNone.Add_Click({ foreach ($r in $dgv.Rows) { if (-not $r.IsNewRow) { $r.Cells["IsRMITPlus"].Value = $false } } })
+    $form.Controls.Add($btnSetNone)
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Location = New-Object System.Drawing.Point(210, 285)
+    $btnCancel.Size = New-Object System.Drawing.Size(80, 26)
+    $btnCancel.Text = "Cancel"
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($btnCancel)
+    $btnOK = New-Object System.Windows.Forms.Button
+    $btnOK.Location = New-Object System.Drawing.Point(300, 285)
+    $btnOK.Size = New-Object System.Drawing.Size(80, 26)
+    $btnOK.Text = "OK"
+    $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($btnOK)
+    $form.AcceptButton = $btnOK
+    $form.CancelButton = $btnCancel
+    if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    $result = @{}
+    $idx = 0
+    foreach ($c in $CompaniesToProcess) {
+        $val = $false
+        if ($idx -lt $dgv.Rows.Count -and -not $dgv.Rows[$idx].IsNewRow) {
+            $val = [bool]$dgv.Rows[$idx].Cells["IsRMITPlus"].Value
+        }
+        $key = if ($c.Company -and $c.Company.Id -ne $null) { $c.Company.Id } else { $idx }
+        $result[$key] = $val
+        $idx++
+    }
+    return $result
 }
 
 function Show-HostnameReviewDialog {
@@ -238,7 +371,7 @@ function Show-HostnameReviewDialog {
         $colUsername.Name = "Username"
         $colUsername.HeaderText = "Username"
         $colUsername.Width = 150
-        $colUsername.ReadOnly = $true
+        $colUsername.ReadOnly = $false
         $dataGridView.Columns.Add($colUsername) | Out-Null
 
         $colVulnCount = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
@@ -327,6 +460,53 @@ function Show-HostnameReviewDialog {
         & $updateSummary
     })
     $hostDialog.Controls.Add($btnDeselectAll)
+
+    $btnLookupConnectWise = New-Object System.Windows.Forms.Button
+    $btnLookupConnectWise.Location = New-Object System.Drawing.Point(240, $y)
+    $btnLookupConnectWise.Size = New-Object System.Drawing.Size(160, 30)
+    $btnLookupConnectWise.Text = "Lookup from ConnectWise"
+    $btnLookupConnectWise.Add_Click({
+        $creds = Load-ConnectWiseAutomateCredentials
+        if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+            [System.Windows.Forms.MessageBox]::Show("Configure ConnectWise Automate in Settings first (Settings > ConnectWise Automate...).", "Not Configured", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $allHostnames = @()
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $hn = [string]$row.Cells["Hostname"].Value
+                if (-not [string]::IsNullOrWhiteSpace($hn)) { $allHostnames += $hn }
+            }
+        }
+        $allHostnames = $allHostnames | Select-Object -Unique
+        if ($allHostnames.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("No hostnames to look up.", "Lookup", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $hostDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            $userMap = Get-ConnectWiseUsernamesByHostname -Hostnames $allHostnames
+            $filled = 0
+            foreach ($dgv in $tabDataGridViews) {
+                foreach ($row in $dgv.Rows) {
+                    if ($row.IsNewRow) { continue }
+                    $hn = [string]$row.Cells["Hostname"].Value
+                    $currentUser = [string]$row.Cells["Username"].Value
+                    if ($hn -and $userMap.ContainsKey($hn) -and -not [string]::IsNullOrWhiteSpace($userMap[$hn])) {
+                        if ([string]::IsNullOrWhiteSpace($currentUser)) {
+                            $row.Cells["Username"].Value = $userMap[$hn]
+                            $filled++
+                        }
+                    }
+                }
+            }
+            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectWise Automate.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } finally {
+            $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+    $hostDialog.Controls.Add($btnLookupConnectWise)
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Location = New-Object System.Drawing.Point(900, $y)
@@ -798,7 +978,7 @@ function New-TicketInstructions {
             if ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) {
                 [void]$sb.AppendLine()
                 [void]$sb.AppendLine("ConnectSecure Solution:")
-                [void]$sb.AppendLine($item.Fix)
+                [void]$sb.AppendLine((ConvertTo-ReadableFixText -RawFix $item.Fix))
             }
             [void]$sb.AppendLine()
 
@@ -809,6 +989,11 @@ function New-TicketInstructions {
                 [void]$sb.AppendLine($matchingRec.Recommendations)
                 [void]$sb.AppendLine()
             }
+
+            [void]$sb.AppendLine("Uninstalling the software or removing/replacing the device is also a valid form of remediation when updating or patching is not feasible; the vulnerability will show as remediated on the next scan.")
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine("Sometimes it will not be possible to remediate the vulnerability for business or technical reasons. Other times it will be a false positive detection. In the event of either case please reach out to someone on the vulnerability scan team with your findings and we can suppress the vulnerability so it doesn't come up on future scans or remediations.")
+            [void]$sb.AppendLine()
         }
 
         [void]$sb.AppendLine()
@@ -1394,6 +1579,112 @@ function Show-ConnectSecureSettingsDialog {
     $dlg.ShowDialog() | Out-Null
 }
 
+function Show-ConnectWiseAutomateSettingsDialog {
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "ConnectWise Automate - Username Lookup"
+    $dlg.Size = New-Object System.Drawing.Size(480, 260)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+    $dlg.MinimizeBox = $false
+
+    $y = 20
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, $y)
+    $lblHint.Size = New-Object System.Drawing.Size(430, 32)
+    $lblHint.Text = "Configure ConnectWise Automate to look up Last Logged In User for hostnames in the Review Hostnames dialog. Uses AutomateAPI module or REST API."
+    $lblHint.AutoSize = $false
+    $lblHint.MaximumSize = New-Object System.Drawing.Size(430, 0)
+    $dlg.Controls.Add($lblHint)
+    $y += 40
+
+    $lblBaseUrl = New-Object System.Windows.Forms.Label
+    $lblBaseUrl.Location = New-Object System.Drawing.Point(20, $y)
+    $lblBaseUrl.Size = New-Object System.Drawing.Size(100, 20)
+    $lblBaseUrl.Text = "Automate URL:"
+    $dlg.Controls.Add($lblBaseUrl)
+    $txtBaseUrl = New-Object System.Windows.Forms.TextBox
+    $txtBaseUrl.Location = New-Object System.Drawing.Point(130, $y)
+    $txtBaseUrl.Size = New-Object System.Drawing.Size(310, 20)
+    $txtBaseUrl.Text = "https://your-automate-server"
+    $dlg.Controls.Add($txtBaseUrl)
+    $y += 30
+
+    $lblUser = New-Object System.Windows.Forms.Label
+    $lblUser.Location = New-Object System.Drawing.Point(20, $y)
+    $lblUser.Size = New-Object System.Drawing.Size(100, 20)
+    $lblUser.Text = "Username:"
+    $dlg.Controls.Add($lblUser)
+    $txtUser = New-Object System.Windows.Forms.TextBox
+    $txtUser.Location = New-Object System.Drawing.Point(130, $y)
+    $txtUser.Size = New-Object System.Drawing.Size(200, 20)
+    $dlg.Controls.Add($txtUser)
+    $y += 30
+
+    $lblPass = New-Object System.Windows.Forms.Label
+    $lblPass.Location = New-Object System.Drawing.Point(20, $y)
+    $lblPass.Size = New-Object System.Drawing.Size(100, 20)
+    $lblPass.Text = "Password:"
+    $dlg.Controls.Add($lblPass)
+    $txtPass = New-Object System.Windows.Forms.TextBox
+    $txtPass.Location = New-Object System.Drawing.Point(130, $y)
+    $txtPass.Size = New-Object System.Drawing.Size(200, 20)
+    $txtPass.PasswordChar = '*'
+    $dlg.Controls.Add($txtPass)
+    $y += 35
+
+    $chkUseModule = New-Object System.Windows.Forms.CheckBox
+    $chkUseModule.Location = New-Object System.Drawing.Point(20, $y)
+    $chkUseModule.Size = New-Object System.Drawing.Size(400, 20)
+    $chkUseModule.Text = "Use AutomateAPI PowerShell module (Install-Module AutomateAPI) if available"
+    $chkUseModule.Checked = $true
+    $dlg.Controls.Add($chkUseModule)
+    $y += 35
+
+    $btnLoad = New-Object System.Windows.Forms.Button
+    $btnLoad.Location = New-Object System.Drawing.Point(20, $y)
+    $btnLoad.Size = New-Object System.Drawing.Size(80, 28)
+    $btnLoad.Text = "Load Saved"
+    $btnLoad.Add_Click({
+        $saved = Load-ConnectWiseAutomateCredentials
+        if ($saved) {
+            $txtBaseUrl.Text = $saved.BaseUrl
+            $txtUser.Text = $saved.Username
+            $txtPass.Text = $saved.Password
+            $chkUseModule.Checked = $saved.UseAutomateModule
+        }
+    })
+    $dlg.Controls.Add($btnLoad)
+
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Location = New-Object System.Drawing.Point(110, $y)
+    $btnSave.Size = New-Object System.Drawing.Size(80, 28)
+    $btnSave.Text = "Save"
+    $btnSave.Add_Click({
+        if (Save-ConnectWiseAutomateCredentials -BaseUrl $txtBaseUrl.Text.Trim() -Username $txtUser.Text -Password $txtPass.Text -UseAutomateModule $chkUseModule.Checked) {
+            [System.Windows.Forms.MessageBox]::Show("ConnectWise Automate settings saved.", "Saved", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    })
+    $dlg.Controls.Add($btnSave)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(360, $y)
+    $btnClose.Size = New-Object System.Drawing.Size(80, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dlg.Controls.Add($btnClose)
+
+    $saved = Load-ConnectWiseAutomateCredentials
+    if ($saved) {
+        $txtBaseUrl.Text = $saved.BaseUrl
+        $txtUser.Text = $saved.Username
+        $txtPass.Text = $saved.Password
+        $chkUseModule.Checked = $saved.UseAutomateModule
+    }
+
+    $dlg.ShowDialog() | Out-Null
+}
+
 function Show-FiltersDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Report Filters"
@@ -1680,8 +1971,11 @@ function Show-ProcessingSummaryDialog {
 
     $openSelected = {
         $sel = $listView.SelectedItems
-        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag -and (Test-Path $sel[0].Tag)) {
-            Start-Process explorer.exe -ArgumentList $sel[0].Tag
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag) {
+            $path = [System.IO.Path]::GetFullPath($sel[0].Tag)
+            if (Test-Path -LiteralPath $path -PathType Container) {
+                Invoke-Item -LiteralPath $path
+            }
         }
     }
     $listView.Add_DoubleClick($openSelected)
@@ -1692,6 +1986,25 @@ function Show-ProcessingSummaryDialog {
     $btnOpen.Text = "Open folder..."
     $btnOpen.Add_Click($openSelected)
     $dlg.Controls.Add($btnOpen)
+
+    $btnOpenInOutlook = New-Object System.Windows.Forms.Button
+    $btnOpenInOutlook.Location = New-Object System.Drawing.Point(130, 300)
+    $btnOpenInOutlook.Size = New-Object System.Drawing.Size(200, 28)
+    $btnOpenInOutlook.Text = "Open email (Classic Outlook)"
+    $ttOutlook = New-Object System.Windows.Forms.ToolTip
+    $ttOutlook.SetToolTip($btnOpenInOutlook, "Opens email as draft in Classic Outlook. New Outlook does not support this - use the .eml file or shortcut in the folder instead.")
+    $btnOpenInOutlook.Add_Click({
+        $sel = $listView.SelectedItems
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag) {
+            $path = [System.IO.Path]::GetFullPath($sel[0].Tag)
+            if (Open-EmailDraftInOutlook -OutputFolderPath $path) {
+                # Success
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("This requires Classic Outlook (not New Outlook).`n`nUse the .eml file or ""Open in Email"" shortcut in the folder instead - double-click to open the draft.", "Open in Outlook", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
+        }
+    })
+    $dlg.Controls.Add($btnOpenInOutlook)
 
     $btnClose = New-Object System.Windows.Forms.Button
     $btnClose.Location = New-Object System.Drawing.Point(560, 300)
@@ -1745,8 +2058,11 @@ function Show-ReportFolderHistoryDialog {
 
     $openSelected = {
         $sel = $listView.SelectedItems
-        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag -and $sel[0].Tag.OutputPath -and (Test-Path $sel[0].Tag.OutputPath)) {
-            Start-Process explorer.exe -ArgumentList $sel[0].Tag.OutputPath
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag -and $sel[0].Tag.OutputPath) {
+            $path = [System.IO.Path]::GetFullPath($sel[0].Tag.OutputPath)
+            if (Test-Path -LiteralPath $path -PathType Container) {
+                Invoke-Item -LiteralPath $path
+            }
         }
     }
     $listView.Add_DoubleClick($openSelected)
@@ -2116,6 +2432,13 @@ function Show-SettingsDialog {
     $btnAIApiKeys.Text = "AI API Keys..."
     $btnAIApiKeys.Add_Click({ Show-AIApiKeysDialog })
     $settingsForm.Controls.Add($btnAIApiKeys)
+
+    $btnConnectWise = New-Object System.Windows.Forms.Button
+    $btnConnectWise.Location = New-Object System.Drawing.Point(150, $y)
+    $btnConnectWise.Size = New-Object System.Drawing.Size(160, 25)
+    $btnConnectWise.Text = "ConnectWise Automate..."
+    $btnConnectWise.Add_Click({ Show-ConnectWiseAutomateSettingsDialog })
+    $settingsForm.Controls.Add($btnConnectWise)
     $lblAIApiHint = New-Object System.Windows.Forms.Label
     $lblAIApiHint.Location = New-Object System.Drawing.Point(150, ($y + 4))
     $lblAIApiHint.Size = New-Object System.Drawing.Size(320, 18)

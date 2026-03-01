@@ -332,6 +332,18 @@ function Read-FullListSheetData {
             if ([string]::IsNullOrWhiteSpace($fix)) { $fix = '' }
         }
         
+        $username = ''
+        if ($columnIndices.ContainsKey('Username')) {
+            $username = [string]$rangeValues[$row, $columnIndices['Username']]
+            if ([string]::IsNullOrWhiteSpace($username)) { $username = '' }
+        }
+        
+        $cve = ''
+        if ($columnIndices.ContainsKey('CVE')) {
+            $cve = [string]$rangeValues[$row, $columnIndices['CVE']]
+            if ([string]::IsNullOrWhiteSpace($cve)) { $cve = '' }
+        }
+        
         # Skip rows without required data
         if ([string]::IsNullOrWhiteSpace($product) -or [string]::IsNullOrWhiteSpace($severity)) {
             continue
@@ -345,6 +357,8 @@ function Read-FullListSheetData {
             'Severity' = $severity
             'EPSS Score' = $epssScore
             'Fix' = $fix
+            'Username' = $username
+            'CVE' = $cve
         })
     }
     
@@ -389,13 +403,20 @@ function Aggregate-FullListData {
         # Collect Fix: first non-empty, or concatenate unique if multiple differ
         $fixes = $group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
         $fixVal = if ($fixes.Count -gt 0) { ($fixes -join '; ').Trim() } else { '' }
+        # Collect Username: first non-empty from group
+        $usernames = $group.Group | ForEach-Object { $_.Username } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        $usernameVal = if ($usernames.Count -gt 0) { [string]$usernames[0] } else { '' }
+        # Collect CVE: unique non-empty from group (CVE IDs help AI provide specific remediation)
+        $cves = $group.Group | ForEach-Object { $_.CVE } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        $cveVal = if ($cves -and $cves.Count -gt 0) { ($cves -join '; ').Trim() } else { '' }
         
         if ($vulnCount -gt 0) {
             $null = $aggregated.Add([PSCustomObject]@{
                 'Host Name' = $firstItem.'Host Name'
                 'IP' = $firstItem.IP
-                'Username' = ''
+                'Username' = $usernameVal
                 'Product' = $firstItem.Product
+                'CVE' = $cveVal
                 'Critical' = $counts.Critical
                 'High' = $counts.High
                 'Medium' = $counts.Medium
@@ -518,6 +539,8 @@ function Get-VulnerabilityData {
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
                 'Fix' = @('Solution', 'Fix', 'Remediation')
+                'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name', 'Last User', 'Last Logged In User', 'Last Logged In User Name', 'Logged In User', 'Owner', 'Asset Owner', 'Primary User')
+                'CVE' = @('CVE ID', 'CVE', 'Problem Name', 'problem_name')
             }
             $columnIndices = @{}
             foreach ($key in $columnMappings.Keys) {
@@ -594,6 +617,8 @@ function Get-VulnerabilityData {
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
                 'Fix' = @('Solution', 'Fix', 'Remediation')
+                'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name', 'Last User', 'Last Logged In User', 'Last Logged In User Name', 'Logged In User', 'Owner', 'Asset Owner', 'Primary User')
+                'CVE' = @('CVE ID', 'CVE', 'Problem Name', 'problem_name')
             }
             
             # Find column indices
@@ -710,7 +735,7 @@ function Get-VulnerabilityData {
         $columnMappings = @{
             'HostName' = @('Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine')
             'IP' = @('IP', 'IP Address', 'IPAddress', 'Address')
-            'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name')
+            'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name', 'Last User', 'Last Logged In User', 'Last Logged In User Name', 'Logged In User', 'Owner', 'Asset Owner', 'Primary User')
             'Product' = @('Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name', 'Software Name')
             'Critical' = @('Critical', 'Crit', 'Critical Count', 'Critical Vulnerabilities')
             'High' = @('High', 'High Count', 'High Vulnerabilities')
@@ -1051,6 +1076,18 @@ function Get-Top10Vulnerabilities {
             $groupFix = ($group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join '; '
             if ($groupFix -and [string]::IsNullOrWhiteSpace($existing.Fix)) { $existing.Fix = $groupFix.Trim() }
             elseif ($groupFix -and $existing.Fix -notlike "*$groupFix*") { $existing.Fix = ($existing.Fix + '; ' + $groupFix).Trim() }
+            # Collect CVE: append unique from group
+            $groupCves = $group.Group | ForEach-Object { $_.CVE } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            if ($groupCves -and $groupCves.Count -gt 0) {
+                $newCves = ($groupCves -join '; ').Trim()
+                $existingCveIds = if ($existing.CveIds) { $existing.CveIds } else { '' }
+                if ([string]::IsNullOrWhiteSpace($existingCveIds)) { $existing.CveIds = $newCves }
+                else {
+                    $existingSet = $existingCveIds -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                    $merged = ($existingSet + ($newCves -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) | Select-Object -Unique
+                    $existing.CveIds = ($merged -join '; ').Trim()
+                }
+            }
 
             # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
             # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
@@ -1077,6 +1114,9 @@ function Get-Top10Vulnerabilities {
             # Collect Fix: first non-empty or concatenate unique from group
             $fixes = $group.Group | ForEach-Object { $_.Fix } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
             $fixVal = if ($fixes.Count -gt 0) { ($fixes -join '; ').Trim() } else { '' }
+            # Collect CVE: unique non-empty from group
+            $cves = $group.Group | ForEach-Object { $_.CVE } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            $cveIds = if ($cves -and $cves.Count -gt 0) { ($cves -join '; ').Trim() } else { '' }
 
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
@@ -1108,6 +1148,7 @@ function Get-Top10Vulnerabilities {
                 RiskScore = $riskScore
                 AffectedSystems = $affectedSystems
                 Fix = $fixVal
+                CveIds = $cveIds
             }
         }
     }
