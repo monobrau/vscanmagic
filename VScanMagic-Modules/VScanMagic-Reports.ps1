@@ -1357,11 +1357,15 @@ function Open-EmailDraftInOutlook {
 function New-EmailTemplate {
     param(
         [string]$OutputPath,
-        [bool]$IsRMITPlus = $false
+        [bool]$IsRMITPlus = $false,
+        [switch]$PassThru,
+        [string]$FilterTopN = $null
     )
 
     try {
         Write-Log "Generating email template..."
+
+        if ($null -eq $script:Templates) { Load-Templates }
 
         $year = (Get-Date).Year
         $quarter = Get-CurrentQuarter
@@ -1374,52 +1378,19 @@ function New-EmailTemplate {
             $noteText = "Note: We will not generate remediation tickets without your approval. To schedule a discussion of these findings, please use the scheduling link above."
         }
 
-        $emailContent = @"
-Subject: $year Q$quarter Vulnerability Scan Follow Up
+        $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
+        $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
+        $bodyTemplate = $script:Templates.EmailTemplate.Body
+        $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
 
-Good $greeting,
-
-Your quarterly vulnerability scan report has been completed and is available in your client folder.
-
-Recommended remediation priorities (Top Ten):
-<link to top ten report from onedrive>
-
-Complete report package:
-<onedrive link to folder containing reports>
-
-Schedule a discussion:
-<timezest scheduling link>
-
-The folder contains the following reports:
-
-• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
-
-• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
-
-• Executive Summary Report – A high-level overview of your security posture and network information.
-
-• External Scan – Detected vulnerabilities and services exposed to the internet.
-
-• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
-
-Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
-
-$noteText
-
-We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
-
-
-Sincerely,
-
-$($script:UserSettings.PreparedBy)
-"@
-
-        $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
+        if ($OutputPath) {
+            $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
+        }
 
         # Generate .eml file for one-click open in default email client
-        $emlPath = [System.IO.Path]::ChangeExtension($OutputPath, ".eml")
-        $subject = "$year Q$quarter Vulnerability Scan Follow Up"
+        $emlPath = if ($OutputPath) { [System.IO.Path]::ChangeExtension($OutputPath, ".eml") } else { $null }
         $lines = $emailContent -split "`r?`n"
+        $subject = if ($lines.Count -gt 0 -and $lines[0] -match '^Subject:\s*(.+)$') { $matches[1].Trim() } else { "$year Q$quarter Vulnerability Scan Follow Up" }
         $body = if ($lines.Count -gt 1) { ($lines[1..($lines.Count - 1)] -join "`r`n").Trim() } else { $emailContent }
         $body = $body -replace "`r`n", "`n" -replace "`n", "`r`n"  # Normalize to CRLF for email
         $dateRfc = (Get-Date).ToString("r")
@@ -1439,23 +1410,27 @@ $($script:UserSettings.PreparedBy)
             "",
             $bodyBase64Wrapped
         )
-        $emlLines -join "`r`n" | Out-File -FilePath $emlPath -Encoding ASCII
-        Write-Log "Email template (.eml) saved to: $emlPath" -Level Success
+        if ($emlPath) {
+            $emlLines -join "`r`n" | Out-File -FilePath $emlPath -Encoding ASCII
+            Write-Log "Email template (.eml) saved to: $emlPath" -Level Success
 
-        # Create shortcut (.lnk) to open .eml in default email client
-        $shortcutPath = Join-Path ([System.IO.Path]::GetDirectoryName($OutputPath)) ([System.IO.Path]::GetFileNameWithoutExtension($OutputPath) + " - Open in Email.lnk")
-        try {
-            $ws = New-Object -ComObject WScript.Shell
-            $sc = $ws.CreateShortcut($shortcutPath)
-            $sc.TargetPath = $emlPath
-            $sc.WorkingDirectory = [System.IO.Path]::GetDirectoryName($emlPath)
-            $sc.Description = "Open vulnerability scan follow-up email in default email client"
-            $sc.Save()
-            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ws) | Out-Null
-            Write-Log "Shortcut created: $shortcutPath" -Level Success
-        } catch {
-            Write-Log "Could not create shortcut: $($_.Exception.Message)" -Level Warning
+            # Create shortcut (.lnk) to open .eml in default email client
+            $shortcutPath = Join-Path ([System.IO.Path]::GetDirectoryName($OutputPath)) ([System.IO.Path]::GetFileNameWithoutExtension($OutputPath) + " - Open in Email.lnk")
+            try {
+                $ws = New-Object -ComObject WScript.Shell
+                $sc = $ws.CreateShortcut($shortcutPath)
+                $sc.TargetPath = $emlPath
+                $sc.WorkingDirectory = [System.IO.Path]::GetDirectoryName($emlPath)
+                $sc.Description = "Open vulnerability scan follow-up email in default email client"
+                $sc.Save()
+                [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ws) | Out-Null
+                Write-Log "Shortcut created: $shortcutPath" -Level Success
+            } catch {
+                Write-Log "Could not create shortcut: $($_.Exception.Message)" -Level Warning
+            }
         }
+
+        if ($PassThru) { return $emailContent }
 
     } catch {
         Write-Log "Error generating email template: $($_.Exception.Message)" -Level Error

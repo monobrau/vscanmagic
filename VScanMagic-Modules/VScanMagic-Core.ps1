@@ -85,6 +85,8 @@ $script:ConnectSecureCompaniesCachePath = Join-Path $script:SettingsDirectory "C
 $script:ConnectWiseAutomateCredentialsPath = Join-Path $script:SettingsDirectory "ConnectWise-Automate-Credentials.json"
 $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
 $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
+$script:TemplatesPath = Join-Path $script:SettingsDirectory "VScanMagic_Templates.json"
+$script:Templates = $null
 
 # Report Filters and Output Options (modified via dialogs)
 $script:FilterMinEPSS = 0
@@ -181,8 +183,92 @@ function Update-SettingsPaths {
     $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
     $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
     $script:ConnectWiseAutomateCredentialsPath = Join-Path $script:SettingsDirectory "ConnectWise-Automate-Credentials.json"
+    $script:TemplatesPath = Join-Path $script:SettingsDirectory "VScanMagic_Templates.json"
     
     if (Ensure-SettingsDirectory -Path $script:SettingsDirectory) { Write-Host "Created settings directory: $script:SettingsDirectory" }
+}
+
+function Backup-Settings {
+    param([string]$OutputPath = $null)
+    $settingsFiles = @(
+        "VScanMagic_Settings.json",
+        "VScanMagic_RemediationRules.json",
+        "VScanMagic_CoveredSoftware.json",
+        "VScanMagic_GeneralRecommendations.json",
+        "VScanMagic_CompanyFolderMap.json",
+        "VScanMagic_ReportFolderHistory.json",
+        "VScanMagic_Templates.json",
+        "ConnectSecure-Credentials.json",
+        "ConnectSecure-Companies-Cache.json",
+        "ConnectWise-Automate-Credentials.json"
+    )
+    if (-not (Test-Path $script:SettingsDirectory)) {
+        return $null
+    }
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+    $defaultName = "VScanMagic_Settings_Backup_$timestamp.zip"
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        $OutputPath = Join-Path ([Environment]::GetFolderPath("Desktop")) $defaultName
+    } elseif ([System.IO.Directory]::Exists($OutputPath)) {
+        $OutputPath = Join-Path $OutputPath $defaultName
+    }
+    $tempDir = Join-Path $env:TEMP "VScanMagic_Backup_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+    try {
+        New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+        $copied = 0
+        foreach ($f in $settingsFiles) {
+            $src = Join-Path $script:SettingsDirectory $f
+            if (Test-Path $src) {
+                Copy-Item -Path $src -Destination (Join-Path $tempDir $f) -Force
+                $copied++
+            }
+        }
+        if ($copied -eq 0) {
+            Write-Warning "No settings files found to backup."
+            return $null
+        }
+        if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
+        Compress-Archive -Path (Join-Path $tempDir "*") -DestinationPath $OutputPath -Force
+        return $OutputPath
+    } finally {
+        if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Restore-Settings {
+    param([string]$BackupPath)
+    if (-not $BackupPath -or -not (Test-Path $BackupPath)) { return $false }
+    $ext = [System.IO.Path]::GetExtension($BackupPath)
+    if ($ext -ne ".zip") {
+        Write-Warning "Backup file must be a .zip file."
+        return $false
+    }
+    try {
+        Ensure-SettingsDirectory -Path $script:SettingsDirectory | Out-Null
+        $tempDir = Join-Path $env:TEMP "VScanMagic_Restore_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+        Expand-Archive -Path $BackupPath -DestinationPath $tempDir -Force
+        $restored = 0
+        Get-ChildItem -Path $tempDir -Filter "*.json" | ForEach-Object {
+            $dest = Join-Path $script:SettingsDirectory $_.Name
+            Copy-Item -Path $_.FullName -Destination $dest -Force
+            $restored++
+        }
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($restored -gt 0) {
+            Load-UserSettings | Out-Null
+            Update-SettingsPaths
+            Load-RemediationRules
+            Load-CoveredSoftware
+            Load-GeneralRecommendations
+            Load-CompanyFolderMap
+            Load-Templates
+            return $true
+        }
+        return $false
+    } catch {
+        Write-Warning "Restore failed: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Load-UserSettings {
@@ -754,6 +840,117 @@ function Save-GeneralRecommendations {
     }
 }
 
+# --- Templates Persistence (Email, Ticket Notes) ---
+
+function Get-DefaultTemplates {
+    return @{
+        EmailTemplate = @{
+            SubjectFormat = "{Year} Q{Quarter} Vulnerability Scan Follow Up"
+            Body = @"
+Subject: {Year} Q{Quarter} Vulnerability Scan Follow Up
+
+Good {Greeting},
+
+Your quarterly vulnerability scan report has been completed and is available in your client folder.
+
+Recommended remediation priorities ({TopNLabel}):
+<link to top ten report from onedrive>
+
+Complete report package:
+<onedrive link to folder containing reports>
+
+Schedule a discussion:
+<timezest scheduling link>
+
+The folder contains the following reports:
+
+• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
+
+• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
+
+• Executive Summary Report – A high-level overview of your security posture and network information.
+
+• External Scan – Detected vulnerabilities and services exposed to the internet.
+
+• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+
+{NoteText}
+
+We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
+
+
+Sincerely,
+
+{PreparedBy}
+"@
+        }
+        TicketNotes = @{
+            StepsBeforeTickets = @"
+- Examined lightweight agents
+- Verified probe setup
+- Checked agent/probe count compared to other systems
+- Examined credential mappings
+- Examined external assets
+- Checked nmap interface on probe
+- Verified deprecated item list
+- Created all reports
+- Assessed reports
+- {ReportStepLine}
+"@
+            StepsAfterTickets = @"
+- Sent secure email with reports to contact
+- Sent TimeZest meeting request
+"@
+            ResolvedQuestion = "Is the task resolved?"
+            ResolvedAnswer = "Yes - completed"
+            NextStepsQuestion = "Next step(s)"
+            NextStepsText = "TimeZest meeting request has been sent. Please select a time to meet if you would like to discuss this further."
+        }
+    }
+}
+
+function Load-Templates {
+    if (-not [string]::IsNullOrEmpty($script:TemplatesPath) -and (Test-Path $script:TemplatesPath)) {
+        try {
+            $json = Get-Content $script:TemplatesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $script:Templates = @{
+                EmailTemplate = @{
+                    SubjectFormat = if ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { (Get-DefaultTemplates).EmailTemplate.SubjectFormat }
+                    Body = if ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { (Get-DefaultTemplates).EmailTemplate.Body }
+                }
+                TicketNotes = @{
+                    StepsBeforeTickets = if ($json.TicketNotes.StepsBeforeTickets) { $json.TicketNotes.StepsBeforeTickets } else { (Get-DefaultTemplates).TicketNotes.StepsBeforeTickets }
+                    StepsAfterTickets = if ($json.TicketNotes.StepsAfterTickets) { $json.TicketNotes.StepsAfterTickets } else { (Get-DefaultTemplates).TicketNotes.StepsAfterTickets }
+                    ResolvedQuestion = if ($json.TicketNotes.ResolvedQuestion) { $json.TicketNotes.ResolvedQuestion } else { (Get-DefaultTemplates).TicketNotes.ResolvedQuestion }
+                    ResolvedAnswer = if ($json.TicketNotes.ResolvedAnswer) { $json.TicketNotes.ResolvedAnswer } else { (Get-DefaultTemplates).TicketNotes.ResolvedAnswer }
+                    NextStepsQuestion = if ($json.TicketNotes.NextStepsQuestion) { $json.TicketNotes.NextStepsQuestion } else { (Get-DefaultTemplates).TicketNotes.NextStepsQuestion }
+                    NextStepsText = if ($json.TicketNotes.NextStepsText) { $json.TicketNotes.NextStepsText } else { (Get-DefaultTemplates).TicketNotes.NextStepsText }
+                }
+            }
+        } catch {
+            Write-Warning "Could not load templates: $($_.Exception.Message). Using defaults."
+            $script:Templates = Get-DefaultTemplates
+        }
+    } else {
+        $script:Templates = Get-DefaultTemplates
+    }
+}
+
+function Save-Templates {
+    if ([string]::IsNullOrEmpty($script:TemplatesPath)) { return $false }
+    try {
+        $settingsDir = [System.IO.Path]::GetDirectoryName($script:TemplatesPath)
+        if (-not (Test-Path $settingsDir)) { New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null }
+        $script:Templates | ConvertTo-Json -Depth 10 | Set-Content $script:TemplatesPath -Encoding UTF8
+        return $true
+    } catch {
+        Write-Warning "Could not save templates: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Get-ModifierText {
     param(
         [bool]$AfterHours,
@@ -1071,30 +1268,42 @@ Input to rephrase:
 
     $key = $script:UserSettings.AIApiKeyClaude
     if (-not [string]::IsNullOrWhiteSpace($key)) {
-        try {
-            $reqBody = @{
-                model = "claude-3-haiku-20240307"
-                max_tokens = 1024
-                messages = @(
-                    @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
-                )
-            } | ConvertTo-Json -Depth 5
-            $headers = @{
-                "x-api-key" = $key
-                "anthropic-version" = "2023-06-01"
-                "Content-Type" = "application/json"
-            }
-            $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
-            $improved = $resp.content[0].text.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($improved)) {
-                if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
-                    $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
-                    if (-not [string]::IsNullOrWhiteSpace($fallback)) { return $fallback }
+        $claudeRetries = 2
+        for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
+            try {
+                $reqBody = @{
+                    model = "claude-3-haiku-20240307"
+                    max_tokens = 1024
+                    messages = @(
+                        @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
+                    )
+                } | ConvertTo-Json -Depth 5
+                $headers = @{
+                    "x-api-key" = $key
+                    "anthropic-version" = "2023-06-01"
+                    "Content-Type" = "application/json"
                 }
-                return $improved
+                $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+                $improved = $resp.content[0].text.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($improved)) {
+                    if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
+                        $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
+                        if (-not [string]::IsNullOrWhiteSpace($fallback)) { return $fallback }
+                    }
+                    return $improved
+                }
+                break
+            } catch {
+                $is429 = $_.Exception.Message -match '429|Too Many Requests'
+                if ($is429 -and $attempt -lt $claudeRetries) {
+                    $waitSec = 5 + ($attempt * 3)
+                    Write-Log "Claude rate limited (429). Waiting ${waitSec}s before retry..." -Level Warning
+                    Start-Sleep -Seconds $waitSec
+                } else {
+                    Write-Log "Claude AI improvement failed: $($_.Exception.Message)" -Level Warning
+                    break
+                }
             }
-        } catch {
-            Write-Log "Claude AI improvement failed: $($_.Exception.Message)" -Level Warning
         }
     }
 

@@ -30,6 +30,9 @@ function Show-VScanMagicGUI {
     # Load general recommendations from disk
     Load-GeneralRecommendations
 
+    # Load templates (email, ticket notes)
+    Load-Templates
+
     # Load ConnectSecure API (used by Download section)
     $scriptDir = $script:ScriptDirectory
     if ([string]::IsNullOrWhiteSpace($scriptDir)) { $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path } }
@@ -79,8 +82,21 @@ function Show-VScanMagicGUI {
     $btnOutputOptions.Add_Click({ Show-OutputOptionsDialog })
     $form.Controls.Add($btnOutputOptions)
 
+    $btnTemplates = New-Object System.Windows.Forms.Button
+    $btnTemplates.Location = New-Object System.Drawing.Point(330, 52)
+    $btnTemplates.Size = New-Object System.Drawing.Size(90, 24)
+    $btnTemplates.Text = "Templates"
+    $btnTemplates.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnTemplates.ForeColor = [System.Drawing.Color]::White
+    $btnTemplates.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnTemplates.FlatAppearance.BorderSize = 0
+    $btnTemplates.Add_Click({ Show-TemplatesDialog })
+    $form.Controls.Add($btnTemplates)
+    $ttTemplates = New-Object System.Windows.Forms.ToolTip
+    $ttTemplates.SetToolTip($btnTemplates, "Customize email template and ticket notes. Changes are saved to your settings folder.")
+
     $lblOutputHint = New-Object System.Windows.Forms.Label
-    $lblOutputHint.Location = New-Object System.Drawing.Point(138, 56)
+    $lblOutputHint.Location = New-Object System.Drawing.Point(430, 56)
     $lblOutputHint.Size = New-Object System.Drawing.Size(280, 18)
     $lblOutputHint.Text = "Excel, Word, Email, Ticket, Time Estimate"
     $lblOutputHint.ForeColor = [System.Drawing.Color]::Gray
@@ -1109,7 +1125,7 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Email Template..." -Show $true
                 $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
-                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus
+                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
 
                 $script:EmailTemplatePath = $emailOutputPath
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
@@ -1117,7 +1133,16 @@ function Show-VScanMagicGUI {
 
             # General Recommendations, Hostname Review, Time Estimate (or skip dialogs in bulk mode)
             $skipDialogs = $skipDialogsForBulk
-            if (-not $skipDialogs) {
+            $hasTop10Data = $top10 -and $top10.Count -gt 0
+            if (-not $hasTop10Data -and -not $skipDialogs) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "No vulnerabilities matched your filters (EPSS, severity, Top N). The following dialogs will be skipped: General Recommendations, Hostname Review, Time Estimate.`n`nExcel and Email Template (if selected) have been generated. Check your filter settings or source data if you expected vulnerability items.",
+                    "No Vulnerability Data",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            }
+            if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Entering General Recommendations..." -Show $true
                 $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
                 if ($null -eq $generalRecommendations) {
@@ -1141,7 +1166,7 @@ function Show-VScanMagicGUI {
                 [System.Windows.Forms.Application]::DoEvents()
             }
 
-            if (-not $skipDialogs) {
+            if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Reviewing Hostnames..." -Show $true
                 $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
                 if ($null -eq $filteredTop10) {
@@ -1157,10 +1182,10 @@ function Show-VScanMagicGUI {
             $script:CurrentTop10Data = $top10
 
             if ($script:OutputTimeEstimate) {
-                if (-not $skipDialogs) {
+                if (-not $skipDialogs -and $hasTop10Data) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
-                } else {
+                } elseif ($skipDialogs -and $hasTop10Data) {
                     $timeEstimates = foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
                         [PSCustomObject]@{
@@ -1172,9 +1197,11 @@ function Show-VScanMagicGUI {
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
+                } else {
+                    $timeEstimates = $null
                 }
                 
-                if ($null -ne $timeEstimates) {
+                if ($null -ne $timeEstimates -and $timeEstimates.Count -gt 0) {
                     $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
@@ -1219,22 +1246,28 @@ function Show-VScanMagicGUI {
                 }
             }
 
-            # Generate Ticket Instructions
-            if ($script:OutputTicketInstructions) {
-                Update-Progress -Status "Generating Ticket Instructions..." -Show $true
-                $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
+            # Generate combined report (Ticket Instructions + Email Template + Time Estimate in tabs)
+            if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
+                Update-Progress -Status "Generating Report (HTML)..." -Show $true
+                $reportHtmlPath = Join-Path $textOutputDir "$companyName Report_$reportTimestamp.html"
 
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
+                New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
+                    -IncludeTicketInstructions $script:OutputTicketInstructions `
+                    -IncludeEmailTemplate $script:OutputEmailTemplate `
+                    -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
+                    -FilterTopN $script:FilterTopN `
+                    -CompanyName $companyName
 
-                $script:TicketInstructionsPath = $ticketOutputPath
-                Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
+                $script:TicketInstructionsPath = $reportHtmlPath
+                $script:TicketInstructionsHtmlPath = $reportHtmlPath
+                Write-Log "Report saved to: $reportHtmlPath" -Level Success
             }
 
             # Auto-generate ticket notes file if we have data
             if ($null -ne $script:CurrentTop10Data) {
                 $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
-                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus
+                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
                 
                 if ($script:TicketNotesPath) {
                     $script:buttonOpenTicketNotes.Enabled = $true
@@ -1337,14 +1370,23 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Email Template..." -Show $true
                 $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
 
-                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus
+                New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
 
                 $script:EmailTemplatePath = $emailOutputPath
                 Write-Log "Email Template saved to: $emailOutputPath" -Level Success
             }
 
             $skipDialogs = $chkBulkProcessing.Checked
-            if (-not $skipDialogs) {
+            $hasTop10Data = $top10 -and $top10.Count -gt 0
+            if (-not $hasTop10Data -and -not $skipDialogs) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "No vulnerabilities matched your filters (EPSS, severity, Top N). The following dialogs will be skipped: General Recommendations, Hostname Review, Time Estimate.`n`nExcel and Email Template (if selected) have been generated. Check your filter settings or source data if you expected vulnerability items.",
+                    "No Vulnerability Data",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            }
+            if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Entering General Recommendations..." -Show $true
                 $generalRecommendations = Show-GeneralRecommendationsDialog -Top10Data $top10
                 if ($null -eq $generalRecommendations) {
@@ -1368,7 +1410,7 @@ function Show-VScanMagicGUI {
                 [System.Windows.Forms.Application]::DoEvents()
             }
 
-            if (-not $skipDialogs) {
+            if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Reviewing Hostnames..." -Show $true
                 $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
                 if ($null -eq $filteredTop10) {
@@ -1384,10 +1426,10 @@ function Show-VScanMagicGUI {
             $script:CurrentTop10Data = $top10
 
             if ($script:OutputTimeEstimate) {
-                if (-not $skipDialogs) {
+                if (-not $skipDialogs -and $hasTop10Data) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
-                } else {
+                } elseif ($skipDialogs -and $hasTop10Data) {
                     $timeEstimates = foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
                         [PSCustomObject]@{
@@ -1399,9 +1441,11 @@ function Show-VScanMagicGUI {
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
+                } else {
+                    $timeEstimates = $null
                 }
                 
-                if ($null -ne $timeEstimates) {
+                if ($null -ne $timeEstimates -and $timeEstimates.Count -gt 0) {
                     $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
@@ -1442,20 +1486,26 @@ function Show-VScanMagicGUI {
                 }
             }
 
-            if ($script:OutputTicketInstructions) {
-                Update-Progress -Status "Generating Ticket Instructions..." -Show $true
-                $ticketOutputPath = Join-Path $textOutputDir "$companyName Ticket Instructions_$reportTimestamp.txt"
+            if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
+                Update-Progress -Status "Generating Report (HTML)..." -Show $true
+                $reportHtmlPath = Join-Path $textOutputDir "$companyName Report_$reportTimestamp.html"
 
-                New-TicketInstructions -OutputPath $ticketOutputPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
+                New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
+                    -IncludeTicketInstructions $script:OutputTicketInstructions `
+                    -IncludeEmailTemplate $script:OutputEmailTemplate `
+                    -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
+                    -FilterTopN $script:FilterTopN `
+                    -CompanyName $companyName
 
-                $script:TicketInstructionsPath = $ticketOutputPath
-                Write-Log "Ticket Instructions saved to: $ticketOutputPath" -Level Success
+                $script:TicketInstructionsPath = $reportHtmlPath
+                $script:TicketInstructionsHtmlPath = $reportHtmlPath
+                Write-Log "Report saved to: $reportHtmlPath" -Level Success
             }
 
             if ($null -ne $script:CurrentTop10Data) {
                 $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
                 
-                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus
+                New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
                 
                 if ($script:TicketNotesPath) {
                     $script:buttonOpenTicketNotes.Enabled = $true

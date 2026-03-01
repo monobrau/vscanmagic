@@ -5,6 +5,16 @@ function Show-GeneralRecommendationsDialog {
         [array]$Top10Data
     )
 
+    if (-not $Top10Data -or $Top10Data.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No vulnerabilities in this report to add recommendations for. The General Recommendations dialog requires vulnerability data from the Top N list.`n`nIf you expected to see items, check your filters (EPSS, severity, Top N count) or verify the source Excel file has vulnerability data.",
+            "No Data",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return @()
+    }
+
     # Load recommendations if not already loaded
     if ($null -eq $script:GeneralRecommendations) {
         Load-GeneralRecommendations
@@ -50,20 +60,26 @@ function Show-GeneralRecommendationsDialog {
 
     # Populate grid with top 10 data and pre-populate from saved recommendations
     foreach ($item in $Top10Data) {
+        if ($null -eq $item) { continue }
+        $productName = if ($item.Product) { [string]$item.Product } else { "(Unknown Product)" }
         $row = $dataGridView.Rows.Add()
-        $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
+        $dataGridView.Rows[$row].Cells["Product"].Value = $productName
         $dataGridView.Rows[$row].Tag = $item  # Store item for CVE/context when using AI improve
         
         # Try to find matching recommendation using pattern matching
         $matchingRec = $null
         foreach ($rec in $script:GeneralRecommendations) {
-            if ($item.Product -like $rec.Product) {
+            if ($productName -like $rec.Product) {
                 $matchingRec = $rec
                 break
             }
         }
         
-        $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $item.Product -OutputType 'Word' }
+        try {
+            $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $productName -OutputType 'Word' }
+        } catch {
+            $recommendationsText = "Unable to load recommendation: $($_.Exception.Message)"
+        }
         $dataGridView.Rows[$row].Cells["Recommendations"].Value = $recommendationsText
     }
 
@@ -110,6 +126,7 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
+            $idx = 0
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
@@ -117,6 +134,11 @@ function Show-GeneralRecommendationsDialog {
                 if (-not [string]::IsNullOrWhiteSpace($currentText)) {
                     $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
                     $row.Cells["Recommendations"].Value = $improved
+                    $idx++
+                    if ($idx -lt $rowsToImprove.Count) {
+                        Start-Sleep -Seconds 2
+                        [System.Windows.Forms.Application]::DoEvents()
+                    }
                 }
             }
         } finally {
@@ -144,12 +166,18 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
+            $idx = 0
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
                 $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
                 $row.Cells["Recommendations"].Value = $improved
+                $idx++
+                if ($idx -lt $rowsToImprove.Count) {
+                    Start-Sleep -Seconds 2
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
             }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -707,7 +735,8 @@ function New-TimeEstimate {
         [array]$Top10Data,
         [array]$TimeEstimates,
         [bool]$IsRMITPlus,
-        [array]$GeneralRecommendations = $null
+        [array]$GeneralRecommendations = $null,
+        [switch]$PassThru
     )
 
     try {
@@ -855,7 +884,11 @@ function New-TimeEstimate {
             [void]$sb.AppendLine("Note: We will not begin remediation without your prior approval.")
         }
 
-        $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
+        $content = $sb.ToString()
+        if ($OutputPath) {
+            $content | Out-File -FilePath $OutputPath -Encoding UTF8
+        }
+        if ($PassThru) { return $content }
 
     } catch {
         Write-Log "Error generating time estimate: $($_.Exception.Message)" -Level Error
@@ -875,9 +908,12 @@ function New-TicketInstructions {
     try {
         Write-Log "Generating ticket instructions..."
 
+        $count = if ($TopTenData) { $TopTenData.Count } else { 0 }
+        $headerTitle = if ($count -eq 10) { "TOP 10 VULNERABILITIES" } elseif ($count -gt 0) { "TOP $count VULNERABILITIES" } else { "VULNERABILITY REMEDIATIONS" }
+
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.AppendLine("=".PadRight(100, '='))
-        [void]$sb.AppendLine("TOP 10 VULNERABILITIES - TICKET INSTRUCTIONS")
+        [void]$sb.AppendLine("$headerTitle - TICKET INSTRUCTIONS")
         [void]$sb.AppendLine("Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
         [void]$sb.AppendLine("=".PadRight(100, '='))
         [void]$sb.AppendLine()
@@ -1008,12 +1044,443 @@ function New-TicketInstructions {
     }
 }
 
+function New-TicketInstructionsHtml {
+    param(
+        [string]$OutputPath,
+        [array]$TopTenData,
+        [array]$TimeEstimates = $null,
+        [bool]$IsRMITPlus = $false,
+        [array]$GeneralRecommendations = $null,
+        [switch]$PassThru
+    )
+
+    try {
+        Write-Log "Generating ticket instructions (HTML)..."
+
+        $count = if ($TopTenData) { $TopTenData.Count } else { 0 }
+        $headerTitle = if ($count -eq 10) { "TOP 10 VULNERABILITIES" } elseif ($count -gt 0) { "TOP $count VULNERABILITIES" } else { "VULNERABILITY REMEDIATIONS" }
+
+        $escapeHtml = { param([string]$s) if ([string]::IsNullOrEmpty($s)) { return "" }; [System.Net.WebUtility]::HtmlEncode($s) }
+        $timeEstimateMap = @{}
+        if ($null -ne $TimeEstimates) {
+            foreach ($te in $TimeEstimates) {
+                if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeEstimateMap[$te.Product] = $te }
+            }
+        }
+        $generalRecMap = @{}
+        if ($null -ne $GeneralRecommendations -and $GeneralRecommendations.Count -gt 0) {
+            foreach ($rec in $GeneralRecommendations) {
+                if (-not [string]::IsNullOrWhiteSpace($rec.Product)) { $generalRecMap[$rec.Product] = $rec }
+            }
+        }
+
+        $sections = [System.Collections.ArrayList]::new()
+
+        for ($i = 0; $i -lt $TopTenData.Count; $i++) {
+            $item = $TopTenData[$i]
+            $num = $i + 1
+            $sectionId = "vuln-$num"
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+
+            $ticketSubject = "Vulnerability Remediation - "
+            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
+                $ticketSubject += "$($item.Product) - End of Support Migration Required"
+            } elseif ($item.Product -like "*Windows 10*") {
+                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
+            } elseif ($item.Product -like "*Windows Server*") {
+                $ticketSubject += "$($item.Product) - Updates Required"
+            } elseif ($item.Product -like "*Windows*") {
+                $ticketSubject += "$($item.Product) - Patch Management Required"
+            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
+                $ticketSubject += "$($item.Product) - Firmware Update Required"
+            } elseif ($item.Product -like "*Microsoft Teams*") {
+                $ticketSubject += "$($item.Product) - Application Update Required"
+            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
+                $ticketSubject += "$($item.Product) - RMIT+ ticketed"
+            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
+                $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
+            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
+                $ticketSubject += "$($item.Product) - This software updates automatically"
+            } else {
+                $ticketSubject += "$($item.Product) - Update Required"
+            }
+            if ($null -ne $timeEstimate) {
+                $afterHours = $timeEstimate.AfterHours
+                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
+                if ($afterHours -and $ticketGenerated) {
+                    $ticketSubject = "After Hours - " + $ticketSubject
+                }
+            }
+
+            $productDisplay = & $escapeHtml $item.Product
+            $isThirdParty = -not (Test-IsFirstPartyVendor -ProductName $item.Product)
+            if ($isThirdParty) {
+                $productDisplay = "<span class=`"third-party`">$productDisplay</span>"
+            }
+
+            $sectionBody = @"
+$ticketSubject
+
+Product/System:          $($item.Product)
+Risk Score:              $($item.RiskScore.ToString('N2'))
+EPSS Score:              $($item.EPSSScore.ToString('N4'))
+Average CVSS:            $($item.AvgCVSS.ToString('N2'))
+Total Vulnerabilities:   $($item.VulnCount)
+Affected Systems Count:  $($item.AffectedSystems.Count)
+
+NOTE: This remediation can go to any available technician.
+
+Affected Systems:
+"@
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            foreach ($sys in $uniqueSystems) {
+                $hostname = $sys.HostName
+                $ip = $sys.IP
+                $username = $sys.Username
+                $systemLine = if ($hostname) { $hostname } else { $ip }
+                if (-not [string]::IsNullOrWhiteSpace($username)) { $systemLine += " ($username)" }
+                if (-not [string]::IsNullOrWhiteSpace($ip)) { $systemLine += " - $ip" }
+                $sectionBody += "`n  - $systemLine"
+            }
+            $sectionBody += "`n`nRemediation Instructions:`n"
+            $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Ticket'
+            $sectionBody += $remediationText
+            if ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) {
+                $sectionBody += "`n`nConnectSecure Solution:`n"
+                $sectionBody += (ConvertTo-ReadableFixText -RawFix $item.Fix)
+            }
+            $matchingRec = if ($generalRecMap.ContainsKey($item.Product)) { $generalRecMap[$item.Product] } else { $null }
+            if ($null -ne $matchingRec -and -not [string]::IsNullOrWhiteSpace($matchingRec.Recommendations)) {
+                $sectionBody += "`n`nGeneral Recommendations:`n"
+                $sectionBody += $matchingRec.Recommendations
+            }
+            $sectionBody += "`n`nUninstalling the software or removing/replacing the device is also a valid form of remediation when updating or patching is not feasible; the vulnerability will show as remediated on the next scan.`n`n"
+            $sectionBody += "Sometimes it will not be possible to remediate the vulnerability for business or technical reasons. Other times it will be a false positive detection. In the event of either case please reach out to someone on the vulnerability scan team with your findings and we can suppress the vulnerability so it doesn't come up on future scans or remediations."
+
+            $sectionBodyEscaped = & $escapeHtml $sectionBody
+            $sectionBodyEscaped = $sectionBodyEscaped -replace "`r?`n", "<br>`n"
+            $sectionBodyEscaped = $sectionBodyEscaped -replace "  ", "&nbsp;&nbsp;"
+            if ($isThirdParty) {
+                $productEscaped = & $escapeHtml $item.Product
+                $sectionBodyEscaped = $sectionBodyEscaped -replace [regex]::Escape($productEscaped), $productDisplay
+            }
+            $subjectEscaped = & $escapeHtml $ticketSubject
+            $subjectEscaped = $subjectEscaped -replace "`r?`n", " "
+            $subjectDisplay = $subjectEscaped
+            if ($isThirdParty) {
+                $productEscaped = & $escapeHtml $item.Product
+                $subjectDisplay = $subjectDisplay -replace [regex]::Escape($productEscaped), $productDisplay
+            }
+
+            $sectionHtml = @"
+<section id="$sectionId" class="vuln-section collapsed">
+  <div class="section-header">
+    <h2>Vulnerability #$num</h2>
+    <div class="subject-line">$subjectDisplay</div>
+    <div class="section-actions">
+      <button type="button" onclick="copySubject(this)" data-subject="$subjectEscaped">Copy Subject</button>
+      <button type="button" onclick="copySection('$sectionId')">Copy Section</button>
+      <button type="button" class="toggle-btn" onclick="toggleSection('$sectionId')">▸ Show details</button>
+    </div>
+  </div>
+  <div class="section-content">
+    <pre class="section-text">$sectionBodyEscaped</pre>
+  </div>
+</section>
+"@
+            $null = $sections.Add($sectionHtml)
+        }
+
+        $sectionsHtml = ($sections -join "`n")
+
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ticket Instructions - $(Get-Date -Format 'yyyy-MM-dd HH:mm')</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+    .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+    .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
+    .section-actions { margin-bottom: 0; }
+    .section-actions button { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
+    .section-actions button:hover { background: #0052a3; }
+    .section-actions .toggle-btn { background: #6c757d; }
+    .section-actions .toggle-btn:hover { background: #5a6268; }
+    .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
+    .vuln-section.collapsed .section-content { display: none; }
+    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .third-party { color: #c00; font-weight: bold; }
+    .header { margin-bottom: 20px; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .header .meta { color: #666; font-size: 12px; margin-top: 4px; }
+    .key { margin-top: 12px; padding: 8px 12px; background: #fff3cd; border-radius: 4px; font-size: 12px; }
+    .key .third-party { color: #c00; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>$headerTitle - TICKET INSTRUCTIONS</h1>
+    <div class="meta">Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+    <div class="key"><span class="third-party">Red</span> = Third-party software; requires authorization/quoting</div>
+  </div>
+  $sectionsHtml
+  <script>
+    function copySubject(btn) {
+      var text = btn.getAttribute('data-subject');
+      if (!text) return;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+    function copySection(id) {
+      var el = document.getElementById(id);
+      var pre = el ? el.querySelector('.section-text') : null;
+      if (!pre) return;
+      var text = pre.innerText || pre.textContent;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+    function toggleSection(id) {
+      var el = document.getElementById(id);
+      var btn = el ? el.querySelector('.toggle-btn') : null;
+      if (!el || !btn) return;
+      if (el.classList.contains('collapsed')) {
+        el.classList.remove('collapsed');
+        btn.textContent = '▾ Hide details';
+      } else {
+        el.classList.add('collapsed');
+        btn.textContent = '▸ Show details';
+      }
+    }
+  </script>
+</body>
+</html>
+"@
+
+        if ($OutputPath) {
+            $html | Out-File -FilePath $OutputPath -Encoding UTF8
+            Write-Log "Ticket instructions (HTML) saved to: $OutputPath" -Level Success
+        }
+        if ($PassThru) { return $html }
+
+    } catch {
+        Write-Log "Error generating ticket instructions (HTML): $($_.Exception.Message)" -Level Error
+    }
+}
+
+function New-CombinedReportHtml {
+    param(
+        [string]$OutputPath,
+        [array]$TopTenData,
+        [array]$TimeEstimates = $null,
+        [bool]$IsRMITPlus = $false,
+        [array]$GeneralRecommendations = $null,
+        [bool]$IncludeTicketInstructions = $true,
+        [bool]$IncludeEmailTemplate = $false,
+        [bool]$IncludeTimeEstimate = $false,
+        [string]$FilterTopN = $null,
+        [string]$CompanyName = $null
+    )
+
+    try {
+        Write-Log "Generating combined report (HTML)..."
+
+        $tabButtons = [System.Collections.ArrayList]::new()
+        $tabPanels = [System.Collections.ArrayList]::new()
+        $firstTab = $true
+
+        # Tab 1: Ticket Instructions
+        if ($IncludeTicketInstructions -and $TopTenData -and $TopTenData.Count -gt 0) {
+            $ticketHtml = New-TicketInstructionsHtml -OutputPath $null -TopTenData $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -PassThru
+            if ($ticketHtml -match '(?s)<body[^>]*>(.*)</body>') {
+                $ticketBody = $matches[1].Trim()
+            } else {
+                $ticketBody = $ticketHtml
+            }
+            $activeClass = if ($firstTab) { ' active' } else { '' }
+            $null = $tabButtons.Add("<button class=`"tab-btn$activeClass`" data-tab=`"ticket`">Ticket Instructions</button>")
+            $null = $tabPanels.Add("<div id=`"panel-ticket`" class=`"tab-panel$activeClass`">$ticketBody</div>")
+            $firstTab = $false
+        }
+
+        # Tab 2: Email Template
+        if ($IncludeEmailTemplate) {
+            $emailContent = New-EmailTemplate -OutputPath $null -IsRMITPlus $IsRMITPlus -FilterTopN $FilterTopN -PassThru
+            $firstLine = ($emailContent -split "`r?`n")[0]
+            $emailSubject = $firstLine -replace '^Subject:\s*', ''
+            $emailSubjectEscaped = [System.Net.WebUtility]::HtmlEncode($emailSubject)
+            $emailEscaped = [System.Net.WebUtility]::HtmlEncode($emailContent)
+            $activeClass = if ($firstTab) { ' active' } else { '' }
+            $null = $tabButtons.Add("<button class=`"tab-btn$activeClass`" data-tab=`"email`">Email Template</button>")
+            $emailPanelHtml = "<div id=`"panel-email`" class=`"tab-panel$activeClass`" data-email-subject=`"$emailSubjectEscaped`"><div class=`"tab-actions`"><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailSubject(this)`">Copy Subject</button><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailBody()`">Copy Body</button></div><pre id=`"email-content`" class=`"tab-pre`">$emailEscaped</pre></div>"
+            $null = $tabPanels.Add($emailPanelHtml)
+            $firstTab = $false
+        }
+
+        # Tab 3: Time Estimate
+        if ($IncludeTimeEstimate -and $TopTenData -and $TopTenData.Count -gt 0 -and $null -ne $TimeEstimates) {
+            $timeContent = New-TimeEstimate -OutputPath $null -Top10Data $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -PassThru
+            $timeEscaped = [System.Net.WebUtility]::HtmlEncode($timeContent)
+            $activeClass = if ($firstTab) { ' active' } else { '' }
+            $null = $tabButtons.Add("<button class=`"tab-btn$activeClass`" data-tab=`"time`">Time Estimate</button>")
+            $timePanelHtml = "<div id=`"panel-time`" class=`"tab-panel$activeClass`"><div class=`"tab-actions`"><button type=`"button`" class=`"copy-btn`" onclick=`"copyTimeEstimate()`">Copy Time Estimate</button></div><pre id=`"time-estimate-content`" class=`"tab-pre`">$timeEscaped</pre></div>"
+            $null = $tabPanels.Add($timePanelHtml)
+            $firstTab = $false
+        }
+
+        # Tab 4: Ticket Notes (always include when we have Top10Data)
+        if ($TopTenData -and $TopTenData.Count -gt 0) {
+            $notesContent = New-TicketNotes -Top10Data $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -FilterTopN $FilterTopN -PassThru
+            $notesEscaped = [System.Net.WebUtility]::HtmlEncode($notesContent)
+            $activeClass = if ($firstTab) { ' active' } else { '' }
+            $null = $tabButtons.Add("<button class=`"tab-btn$activeClass`" data-tab=`"notes`">Ticket Notes</button>")
+            $notesPanelHtml = "<div id=`"panel-notes`" class=`"tab-panel$activeClass`"><div class=`"tab-actions`"><button type=`"button`" class=`"copy-btn`" onclick=`"copyTicketNotes()`">Copy Ticket Notes</button></div><pre id=`"ticket-notes-content`" class=`"tab-pre`">$notesEscaped</pre></div>"
+            $null = $tabPanels.Add($notesPanelHtml)
+        }
+
+        $tabsHtml = $tabButtons -join "`n    "
+        $panelsHtml = $tabPanels -join "`n  "
+
+        $displayCompanyName = if ([string]::IsNullOrWhiteSpace($CompanyName)) {
+            if ($script:UserSettings -and -not [string]::IsNullOrWhiteSpace($script:UserSettings.CompanyName)) { $script:UserSettings.CompanyName }
+            else { "Client" }
+        } else { $CompanyName }
+        $companyNameEscaped = [System.Net.WebUtility]::HtmlEncode($displayCompanyName)
+
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vulnerability Report - $companyNameEscaped - $(Get-Date -Format 'yyyy-MM-dd HH:mm')</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+    .report-header { margin-bottom: 20px; padding: 16px 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .report-header .company-name { font-size: 24px; font-weight: bold; color: #1a1a1a; margin: 0; }
+    .report-header .report-meta { color: #666; font-size: 13px; margin-top: 6px; }
+    .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid #ddd; }
+    .tab-btn { padding: 10px 20px; cursor: pointer; background: #e9ecef; border: none; border-radius: 4px 4px 0 0; font-size: 14px; }
+    .tab-btn:hover { background: #dee2e6; }
+    .tab-btn.active { background: #fff; border: 1px solid #ddd; border-bottom: 2px solid #fff; margin-bottom: -2px; font-weight: bold; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .tab-actions { margin-bottom: 12px; }
+    .tab-actions .copy-btn { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
+    .tab-actions .copy-btn:hover { background: #0052a3; }
+    .tab-pre { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; padding: 20px; background: #fff; border-radius: 8px; }
+    .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+    .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
+    .section-actions { margin-bottom: 0; }
+    .section-actions button { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
+    .section-actions button:hover { background: #0052a3; }
+    .section-actions .toggle-btn { background: #6c757d; }
+    .section-actions .toggle-btn:hover { background: #5a6268; }
+    .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
+    .vuln-section.collapsed .section-content { display: none; }
+    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .third-party { color: #c00; font-weight: bold; }
+    .header { margin-bottom: 20px; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .header .meta { color: #666; font-size: 12px; margin-top: 4px; }
+    .key { margin-top: 12px; padding: 8px 12px; background: #fff3cd; border-radius: 4px; font-size: 12px; }
+    .key .third-party { color: #c00; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="report-header">
+    <h1 class="company-name">$companyNameEscaped</h1>
+    <div class="report-meta">Vulnerability Report - $(Get-Date -Format 'MMMM d, yyyy')</div>
+  </div>
+  <div class="tab-bar">
+    $tabsHtml
+  </div>
+  $panelsHtml
+  <script>
+    document.querySelectorAll('.tab-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var tab = this.getAttribute('data-tab');
+        document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+        document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+        this.classList.add('active');
+        var panel = document.getElementById('panel-' + tab);
+        if (panel) panel.classList.add('active');
+      });
+    });
+    function copySubject(btn) {
+      var text = btn.getAttribute('data-subject');
+      if (!text) return;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+    function copySection(id) {
+      var el = document.getElementById(id);
+      var pre = el ? el.querySelector('.section-text') : null;
+      if (!pre) return;
+      var text = pre.innerText || pre.textContent;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+    function toggleSection(id) {
+      var el = document.getElementById(id);
+      var btn = el ? el.querySelector('.toggle-btn') : null;
+      if (!el || !btn) return;
+      if (el.classList.contains('collapsed')) {
+        el.classList.remove('collapsed');
+        btn.textContent = '▾ Hide details';
+      } else {
+        el.classList.add('collapsed');
+        btn.textContent = '▸ Show details';
+      }
+    }
+    function copyEmailSubject(btn) {
+      var panel = document.getElementById('panel-email');
+      var subject = panel ? panel.getAttribute('data-email-subject') : '';
+      if (subject) navigator.clipboard.writeText(subject).catch(function() { prompt('Copy this:', subject); });
+    }
+    function copyEmailBody() {
+      var pre = document.getElementById('email-content');
+      if (!pre) return;
+      var full = pre.innerText || pre.textContent;
+      var bodyStart = full.indexOf('\n\n');
+      var body = bodyStart >= 0 ? full.substring(bodyStart + 2) : full;
+      navigator.clipboard.writeText(body).catch(function() { prompt('Copy this:', body); });
+    }
+    function copyTimeEstimate() {
+      var pre = document.getElementById('time-estimate-content');
+      if (!pre) return;
+      var text = pre.innerText || pre.textContent;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+    function copyTicketNotes() {
+      var pre = document.getElementById('ticket-notes-content');
+      if (!pre) return;
+      var text = pre.innerText || pre.textContent;
+      navigator.clipboard.writeText(text).catch(function() { prompt('Copy this:', text); });
+    }
+  </script>
+</body>
+</html>
+"@
+
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            $html | Out-File -FilePath $OutputPath -Encoding UTF8
+            Write-Log "Combined report (HTML) saved to: $OutputPath" -Level Success
+        }
+
+    } catch {
+        Write-Log "Error generating combined report (HTML): $($_.Exception.Message)" -Level Error
+    }
+}
+
 function New-TicketNotes {
     param(
         [array]$Top10Data = $null,
         [array]$TimeEstimates = $null,
         [string]$OutputPath = $null,
-        [bool]$IsRMITPlus = $false
+        [bool]$IsRMITPlus = $false,
+        [switch]$PassThru,
+        [string]$FilterTopN = $null
     )
 
     # Use script variables if Top10Data not provided (backward compatibility)
@@ -1021,23 +1488,16 @@ function New-TicketNotes {
         $Top10Data = $script:CurrentTop10Data
         $TimeEstimates = $script:CurrentTimeEstimates
         $IsRMITPlus = $script:IsRMITPlus
-    } elseif ($null -eq $TimeEstimates) {
-        $TimeEstimates = $script:CurrentTimeEstimates
+        if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $FilterTopN = $script:FilterTopN }
+    } elseif ([string]::IsNullOrWhiteSpace($FilterTopN)) {
+        $FilterTopN = $script:FilterTopN
     }
+    $topNLabel = if ($FilterTopN -eq "All") { "top" } elseif ($FilterTopN -eq "10") { "top ten" } elseif (-not [string]::IsNullOrWhiteSpace($FilterTopN)) { "top $FilterTopN" } else { "top ten" }
+    $reportStepLine = "Produced $topNLabel vulnerabilities docx report"
 
-    # Build steps performed list with ticket creation lines inserted in the correct position
-    $stepsBeforeTickets = @"
-- Examined lightweight agents
-- Verified probe setup
-- Checked agent/probe count compared to other systems
-- Examined credential mappings
-- Examined external assets
-- Checked nmap interface on probe
-- Verified deprecated item list
-- Created all reports
-- Assessed reports
-- Produced top ten vulnerabilities docx report
-"@
+    if ($null -eq $script:Templates) { Load-Templates }
+
+    $stepsBeforeTickets = $script:Templates.TicketNotes.StepsBeforeTickets -replace '\{ReportStepLine\}', $reportStepLine
 
     # Collect ticket creation lines for vulnerabilities with tickets generated
     $ticketLines = @()
@@ -1055,10 +1515,7 @@ function New-TicketNotes {
         }
     }
 
-    $stepsAfterTickets = @"
-- Sent secure email with reports to contact
-- Sent TimeZest meeting request
-"@
+    $stepsAfterTickets = $script:Templates.TicketNotes.StepsAfterTickets
 
     # Combine steps with ticket lines inserted in the middle
     if ($ticketLines.Count -gt 0) {
@@ -1073,14 +1530,16 @@ Steps performed
 
 $stepsText
 
-Is the task resolved?
+$($script:Templates.TicketNotes.ResolvedQuestion)
 
-Yes - completed
+$($script:Templates.TicketNotes.ResolvedAnswer)
 
-Next step(s)
+$($script:Templates.TicketNotes.NextStepsQuestion)
 
-TimeZest meeting request has been sent. Please select a time to meet if you would like to discuss this further.
+$($script:Templates.TicketNotes.NextStepsText)
 "@
+
+    if ($PassThru) { return $result }
 
     # Save to file if output path provided, otherwise copy to clipboard
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -1822,7 +2281,7 @@ function Show-OutputOptionsDialog {
     $chkTicket = New-Object System.Windows.Forms.CheckBox
     $chkTicket.Location = New-Object System.Drawing.Point(20, 100)
     $chkTicket.Size = New-Object System.Drawing.Size(360, 20)
-    $chkTicket.Text = "Generate Ticket Instructions (Text)"
+    $chkTicket.Text = "Generate Ticket Instructions (Text + HTML)"
     $chkTicket.Checked = $script:OutputTicketInstructions
     $dlg.Controls.Add($chkTicket)
 
@@ -1862,6 +2321,180 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
     }
+}
+
+function Show-TemplatesDialog {
+    if ($null -eq $script:Templates) { Load-Templates }
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Customize Templates"
+    $dlg.Size = New-Object System.Drawing.Size(750, 550)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $tabControl = New-Object System.Windows.Forms.TabControl
+    $tabControl.Location = New-Object System.Drawing.Point(12, 12)
+    $tabControl.Size = New-Object System.Drawing.Size(710, 460)
+
+    # --- Email Template Tab ---
+    $tabEmail = New-Object System.Windows.Forms.TabPage
+    $tabEmail.Text = "Email Template"
+    $lblEmailHint = New-Object System.Windows.Forms.Label
+    $lblEmailHint.Location = New-Object System.Drawing.Point(8, 8)
+    $lblEmailHint.Size = New-Object System.Drawing.Size(650, 32)
+    $lblEmailHint.Text = "Placeholders: {Year}, {Quarter}, {Greeting}, {NoteText}, {PreparedBy}, {TopNLabel}"
+    $lblEmailHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblEmailHint.AutoSize = $false
+    $tabEmail.Controls.Add($lblEmailHint)
+    $txtEmail = New-Object System.Windows.Forms.TextBox
+    $txtEmail.Location = New-Object System.Drawing.Point(8, 44)
+    $txtEmail.Size = New-Object System.Drawing.Size(680, 360)
+    $txtEmail.Multiline = $true
+    $txtEmail.ScrollBars = "Vertical"
+    $txtEmail.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $txtEmail.Text = $script:Templates.EmailTemplate.Body
+    $tabEmail.Controls.Add($txtEmail)
+    $tabControl.TabPages.Add($tabEmail)
+
+    # --- Ticket Notes Tab ---
+    $tabNotes = New-Object System.Windows.Forms.TabPage
+    $tabNotes.Text = "Ticket Notes"
+    $notesPanel = New-Object System.Windows.Forms.Panel
+    $notesPanel.Location = New-Object System.Drawing.Point(0, 0)
+    $notesPanel.Size = New-Object System.Drawing.Size(694, 420)
+    $notesPanel.AutoScroll = $true
+    $notesPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $notesY = 8
+    $notesGap = 6
+    $notesLabelHeight = 18
+    $lblNotesHint = New-Object System.Windows.Forms.Label
+    $lblNotesHint.Location = New-Object System.Drawing.Point(8, $notesY)
+    $lblNotesHint.Size = New-Object System.Drawing.Size(680, 40)
+    $lblNotesHint.Text = "Placeholders: {ReportStepLine} (in steps before tickets). Ticket creation lines are inserted between Steps Before and Steps After."
+    $lblNotesHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblNotesHint.AutoSize = $false
+    $notesPanel.Controls.Add($lblNotesHint)
+    $notesY += 40 + $notesGap
+    $lblStepsBefore = New-Object System.Windows.Forms.Label
+    $lblStepsBefore.Location = New-Object System.Drawing.Point(8, $notesY)
+    $lblStepsBefore.Size = New-Object System.Drawing.Size(680, $notesLabelHeight)
+    $lblStepsBefore.Text = "Steps Before Tickets:"
+    $lblStepsBefore.AutoSize = $false
+    $notesPanel.Controls.Add($lblStepsBefore)
+    $notesY += $notesLabelHeight + $notesGap
+    $txtStepsBefore = New-Object System.Windows.Forms.TextBox
+    $txtStepsBefore.Location = New-Object System.Drawing.Point(8, $notesY)
+    $txtStepsBefore.Size = New-Object System.Drawing.Size(680, 90)
+    $txtStepsBefore.Multiline = $true
+    $txtStepsBefore.ScrollBars = "Vertical"
+    $txtStepsBefore.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $txtStepsBefore.Text = $script:Templates.TicketNotes.StepsBeforeTickets
+    $notesPanel.Controls.Add($txtStepsBefore)
+    $notesY += 90 + $notesGap
+    $lblStepsAfter = New-Object System.Windows.Forms.Label
+    $lblStepsAfter.Location = New-Object System.Drawing.Point(8, $notesY)
+    $lblStepsAfter.Size = New-Object System.Drawing.Size(680, $notesLabelHeight)
+    $lblStepsAfter.Text = "Steps After Tickets:"
+    $lblStepsAfter.AutoSize = $false
+    $notesPanel.Controls.Add($lblStepsAfter)
+    $notesY += $notesLabelHeight + $notesGap
+    $txtStepsAfter = New-Object System.Windows.Forms.TextBox
+    $txtStepsAfter.Location = New-Object System.Drawing.Point(8, $notesY)
+    $txtStepsAfter.Size = New-Object System.Drawing.Size(680, 55)
+    $txtStepsAfter.Multiline = $true
+    $txtStepsAfter.ScrollBars = "Vertical"
+    $txtStepsAfter.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $txtStepsAfter.Text = $script:Templates.TicketNotes.StepsAfterTickets
+    $notesPanel.Controls.Add($txtStepsAfter)
+    $notesY += 55 + $notesGap
+    $lblResolved = New-Object System.Windows.Forms.Label
+    $lblResolved.Location = New-Object System.Drawing.Point(8, $notesY)
+    $lblResolved.Size = New-Object System.Drawing.Size(680, $notesLabelHeight)
+    $lblResolved.Text = "Resolved (Question / Answer):"
+    $lblResolved.AutoSize = $false
+    $notesPanel.Controls.Add($lblResolved)
+    $notesY += $notesLabelHeight + $notesGap
+    $txtResolvedQ = New-Object System.Windows.Forms.TextBox
+    $txtResolvedQ.Location = New-Object System.Drawing.Point(8, $notesY)
+    $txtResolvedQ.Size = New-Object System.Drawing.Size(330, 22)
+    $txtResolvedQ.Text = $script:Templates.TicketNotes.ResolvedQuestion
+    $notesPanel.Controls.Add($txtResolvedQ)
+    $txtResolvedA = New-Object System.Windows.Forms.TextBox
+    $txtResolvedA.Location = New-Object System.Drawing.Point(348, $notesY)
+    $txtResolvedA.Size = New-Object System.Drawing.Size(340, 22)
+    $txtResolvedA.Text = $script:Templates.TicketNotes.ResolvedAnswer
+    $notesPanel.Controls.Add($txtResolvedA)
+    $notesY += 22 + $notesGap
+    $lblNextSteps = New-Object System.Windows.Forms.Label
+    $lblNextSteps.Location = New-Object System.Drawing.Point(8, $notesY)
+    $lblNextSteps.Size = New-Object System.Drawing.Size(680, $notesLabelHeight)
+    $lblNextSteps.Text = "Next Steps (Question / Text):"
+    $lblNextSteps.AutoSize = $false
+    $notesPanel.Controls.Add($lblNextSteps)
+    $notesY += $notesLabelHeight + $notesGap
+    $txtNextStepsQ = New-Object System.Windows.Forms.TextBox
+    $txtNextStepsQ.Location = New-Object System.Drawing.Point(8, $notesY)
+    $txtNextStepsQ.Size = New-Object System.Drawing.Size(330, 22)
+    $txtNextStepsQ.Text = $script:Templates.TicketNotes.NextStepsQuestion
+    $notesPanel.Controls.Add($txtNextStepsQ)
+    $notesY += 22 + $notesGap
+    $txtNextStepsT = New-Object System.Windows.Forms.TextBox
+    $txtNextStepsT.Location = New-Object System.Drawing.Point(8, $notesY)
+    $txtNextStepsT.Size = New-Object System.Drawing.Size(680, 50)
+    $txtNextStepsT.Multiline = $true
+    $txtNextStepsT.Text = $script:Templates.TicketNotes.NextStepsText
+    $notesPanel.Controls.Add($txtNextStepsT)
+    $tabNotes.Controls.Add($notesPanel)
+    $tabControl.TabPages.Add($tabNotes)
+
+    $dlg.Controls.Add($tabControl)
+
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Location = New-Object System.Drawing.Point(12, 482)
+    $btnSave.Size = New-Object System.Drawing.Size(100, 28)
+    $btnSave.Text = "Save"
+    $btnSave.Add_Click({
+        $script:Templates.EmailTemplate.Body = $txtEmail.Text
+        $script:Templates.TicketNotes.StepsBeforeTickets = $txtStepsBefore.Text
+        $script:Templates.TicketNotes.StepsAfterTickets = $txtStepsAfter.Text
+        $script:Templates.TicketNotes.ResolvedQuestion = $txtResolvedQ.Text
+        $script:Templates.TicketNotes.ResolvedAnswer = $txtResolvedA.Text
+        $script:Templates.TicketNotes.NextStepsQuestion = $txtNextStepsQ.Text
+        $script:Templates.TicketNotes.NextStepsText = $txtNextStepsT.Text
+        if (Save-Templates) {
+            [System.Windows.Forms.MessageBox]::Show("Templates saved successfully.", "Saved", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Failed to save templates.", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        }
+    })
+    $dlg.Controls.Add($btnSave)
+
+    $btnLoadDefaults = New-Object System.Windows.Forms.Button
+    $btnLoadDefaults.Location = New-Object System.Drawing.Point(120, 482)
+    $btnLoadDefaults.Size = New-Object System.Drawing.Size(120, 28)
+    $btnLoadDefaults.Text = "Load Defaults"
+    $btnLoadDefaults.Add_Click({
+        $defaults = Get-DefaultTemplates
+        $txtEmail.Text = $defaults.EmailTemplate.Body
+        $txtStepsBefore.Text = $defaults.TicketNotes.StepsBeforeTickets
+        $txtStepsAfter.Text = $defaults.TicketNotes.StepsAfterTickets
+        $txtResolvedQ.Text = $defaults.TicketNotes.ResolvedQuestion
+        $txtResolvedA.Text = $defaults.TicketNotes.ResolvedAnswer
+        $txtNextStepsQ.Text = $defaults.TicketNotes.NextStepsQuestion
+        $txtNextStepsT.Text = $defaults.TicketNotes.NextStepsText
+    })
+    $dlg.Controls.Add($btnLoadDefaults)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point(622, 482)
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $btnClose.Add_Click({ $dlg.Close() })
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.ShowDialog() | Out-Null
 }
 
 function Show-AIApiKeysDialog {
@@ -1987,8 +2620,28 @@ function Show-ProcessingSummaryDialog {
     $btnOpen.Add_Click($openSelected)
     $dlg.Controls.Add($btnOpen)
 
+    $btnOpenTicketHtml = New-Object System.Windows.Forms.Button
+    $btnOpenTicketHtml.Location = New-Object System.Drawing.Point(130, 300)
+    $btnOpenTicketHtml.Size = New-Object System.Drawing.Size(160, 28)
+    $btnOpenTicketHtml.Text = "Open Report"
+    $ttTicket = New-Object System.Windows.Forms.ToolTip
+    $ttTicket.SetToolTip($btnOpenTicketHtml, "Opens the Report (Ticket Instructions, Email Template, Time Estimate) with tabs.")
+    $btnOpenTicketHtml.Add_Click({
+        $sel = $listView.SelectedItems
+        if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag) {
+            $path = [System.IO.Path]::GetFullPath($sel[0].Tag)
+            $htmlFile = Get-ChildItem -LiteralPath $path -Filter "*.html" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*Report*" -or $_.Name -like "*Ticket Instructions*" } | Select-Object -First 1
+            if ($htmlFile -and (Test-Path -LiteralPath $htmlFile.FullName)) {
+                Invoke-Item -LiteralPath $htmlFile.FullName
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("No Report file found in this folder.", "Not Found", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
+        }
+    })
+    $dlg.Controls.Add($btnOpenTicketHtml)
+
     $btnOpenInOutlook = New-Object System.Windows.Forms.Button
-    $btnOpenInOutlook.Location = New-Object System.Drawing.Point(130, 300)
+    $btnOpenInOutlook.Location = New-Object System.Drawing.Point(300, 300)
     $btnOpenInOutlook.Size = New-Object System.Drawing.Size(200, 28)
     $btnOpenInOutlook.Text = "Open email (Classic Outlook)"
     $ttOutlook = New-Object System.Windows.Forms.ToolTip
@@ -2007,7 +2660,7 @@ function Show-ProcessingSummaryDialog {
     $dlg.Controls.Add($btnOpenInOutlook)
 
     $btnClose = New-Object System.Windows.Forms.Button
-    $btnClose.Location = New-Object System.Drawing.Point(560, 300)
+    $btnClose.Location = New-Object System.Drawing.Point(510, 300)
     $btnClose.Size = New-Object System.Drawing.Size(100, 28)
     $btnClose.Text = "Close"
     $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2446,6 +3099,57 @@ function Show-SettingsDialog {
     $lblAIApiHint.ForeColor = [System.Drawing.Color]::Gray
     $lblAIApiHint.Font = New-Object System.Drawing.Font($lblAIApiHint.Font.FontFamily, 8.5)
     $settingsForm.Controls.Add($lblAIApiHint)
+    $y += 40
+
+    # Backup / Restore Settings
+    $btnBackup = New-Object System.Windows.Forms.Button
+    $btnBackup.Location = New-Object System.Drawing.Point(20, $y)
+    $btnBackup.Size = New-Object System.Drawing.Size(100, 30)
+    $btnBackup.Text = "Backup Settings"
+    $btnBackup.Add_Click({
+        $defaultName = "VScanMagic_Settings_Backup_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').zip"
+        $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDlg.Filter = "ZIP Archive (*.zip)|*.zip|All Files (*.*)|*.*"
+        $saveDlg.Title = "Save Settings Backup"
+        $saveDlg.FileName = $defaultName
+        $saveDlg.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+        if ($saveDlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $outPath = Backup-Settings -OutputPath $saveDlg.FileName
+        } else {
+            $outPath = $null
+        }
+        if ($outPath) {
+            [System.Windows.Forms.MessageBox]::Show("Settings backed up to:`n$outPath", "Backup Complete",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("No settings files found to backup.", "Backup",
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        }
+    })
+    $settingsForm.Controls.Add($btnBackup)
+
+    $btnRestore = New-Object System.Windows.Forms.Button
+    $btnRestore.Location = New-Object System.Drawing.Point(130, $y)
+    $btnRestore.Size = New-Object System.Drawing.Size(100, 30)
+    $btnRestore.Text = "Restore Settings"
+    $btnRestore.Add_Click({
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Filter = "Backup ZIP (*.zip)|*.zip|All Files (*.*)|*.*"
+        $dlg.Title = "Select VScanMagic Settings Backup"
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $result = Restore-Settings -BackupPath $dlg.FileName
+            if ($result) {
+                [System.Windows.Forms.MessageBox]::Show("Settings restored successfully. Restart the application for full effect.", "Restore Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                $settingsForm.Close()
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("Restore failed or backup contained no valid files.", "Restore Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+    $settingsForm.Controls.Add($btnRestore)
     $y += 40
 
     # Save Button

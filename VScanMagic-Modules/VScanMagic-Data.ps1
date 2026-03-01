@@ -535,10 +535,10 @@ function Get-VulnerabilityData {
             $columnMappings = @{
                 'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Device')
                 'IP' = @('IP Address', 'IP', 'Address')
-                'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name')
+                'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name', 'OS Name', 'OS Full Name', 'Name', 'Problem Name')
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
-                'Fix' = @('Solution', 'Fix', 'Remediation')
+                'Fix' = @('Solution', 'Fix', 'Remediation', 'FIX')
                 'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name', 'Last User', 'Last Logged In User', 'Last Logged In User Name', 'Logged In User', 'Owner', 'Asset Owner', 'Primary User')
                 'CVE' = @('CVE ID', 'CVE', 'Problem Name', 'problem_name')
             }
@@ -613,10 +613,10 @@ function Get-VulnerabilityData {
             $columnMappings = @{
                 'HostName' = @('Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine')
                 'IP' = @('IP', 'IP Address', 'IPAddress', 'Address')
-                'Product' = @('Software Name', 'Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name')
+                'Product' = @('Software Name', 'Product', 'Software', 'Application', 'App', 'Program', 'Title', 'Product Name', 'OS Name', 'OS Full Name', 'Name', 'Problem Name')
                 'Severity' = @('Severity')
                 'EPSS' = @('EPSS Score', 'EPSS', 'Exploit Prediction Score')
-                'Fix' = @('Solution', 'Fix', 'Remediation')
+                'Fix' = @('Solution', 'Fix', 'Remediation', 'FIX')
                 'Username' = @('Username', 'User Name', 'User', 'Account', 'Login', 'Login Name', 'Last User', 'Last Logged In User', 'Last Logged In User Name', 'Logged In User', 'Owner', 'Asset Owner', 'Primary User')
                 'CVE' = @('CVE ID', 'CVE', 'Problem Name', 'problem_name')
             }
