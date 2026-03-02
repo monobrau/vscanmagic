@@ -896,6 +896,13 @@ function New-TimeEstimate {
     }
 }
 
+function Format-TicketInstructionSpacing {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
+    $t = $Text -replace '[ \t]+', ' ' -replace '(\r?\n){2,}', "`r`n"
+    return $t.Trim()
+}
+
 function New-TicketInstructions {
     param(
         [string]$OutputPath,
@@ -1037,7 +1044,8 @@ function New-TicketInstructions {
         [void]$sb.AppendLine("END OF TICKET INSTRUCTIONS")
         [void]$sb.AppendLine("=".PadRight(100, '='))
 
-        $sb.ToString() | Out-File -FilePath $OutputPath -Encoding UTF8
+        $output = Normalize-TicketInstructionSpacing -Text $sb.ToString()
+        $output | Out-File -FilePath $OutputPath -Encoding UTF8
 
     } catch {
         Write-Log "Error generating ticket instructions: $($_.Exception.Message)" -Level Error
@@ -1157,9 +1165,9 @@ Affected Systems:
             $sectionBody += "`n`nUninstalling the software or removing/replacing the device is also a valid form of remediation when updating or patching is not feasible; the vulnerability will show as remediated on the next scan.`n`n"
             $sectionBody += "Sometimes it will not be possible to remediate the vulnerability for business or technical reasons. Other times it will be a false positive detection. In the event of either case please reach out to someone on the vulnerability scan team with your findings and we can suppress the vulnerability so it doesn't come up on future scans or remediations."
 
+            $sectionBody = Format-TicketInstructionSpacing -Text $sectionBody
             $sectionBodyEscaped = & $escapeHtml $sectionBody
             $sectionBodyEscaped = $sectionBodyEscaped -replace "`r?`n", "<br>`n"
-            $sectionBodyEscaped = $sectionBodyEscaped -replace "  ", "&nbsp;&nbsp;"
             if ($isThirdParty) {
                 $productEscaped = & $escapeHtml $item.Product
                 $sectionBodyEscaped = $sectionBodyEscaped -replace [regex]::Escape($productEscaped), $productDisplay
@@ -2853,11 +2861,18 @@ function Show-ProcessingSummaryDialog {
         $sel = $listView.SelectedItems
         if ($sel -and $sel.Count -gt 0 -and $sel[0].Tag) {
             $path = [System.IO.Path]::GetFullPath($sel[0].Tag)
-            $htmlFile = Get-ChildItem -LiteralPath $path -Filter "*.html" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*Report*" -or $_.Name -like "*Ticket Instructions*" } | Select-Object -First 1
+            $miscPath = Join-Path $path "Misc"
+            $searchPaths = @($path)
+            if (Test-Path -LiteralPath $miscPath -PathType Container) { $searchPaths = @($miscPath, $path) }
+            $htmlFile = $null
+            foreach ($dir in $searchPaths) {
+                $htmlFile = Get-ChildItem -LiteralPath $dir -Filter "*.html" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*Report*" -or $_.Name -like "*Ticket Instructions*" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if ($htmlFile) { break }
+            }
             if ($htmlFile -and (Test-Path -LiteralPath $htmlFile.FullName)) {
                 Invoke-Item -LiteralPath $htmlFile.FullName
             } else {
-                [System.Windows.Forms.MessageBox]::Show("No Report file found in this folder.", "Not Found", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                [System.Windows.Forms.MessageBox]::Show("No Report file found in this folder or Misc subfolder.", "Not Found", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
         }
     })

@@ -1354,6 +1354,15 @@ function Open-EmailDraftInOutlook {
     }
 }
 
+function Format-EmailTemplateSpacing {
+    <# Collapse multiple spaces to single; preserve paragraph breaks and signature. #>
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
+    $lines = $Text -split "`r?`n"
+    $result = ($lines | ForEach-Object { ($_ -replace '[ \t]+', ' ') }) -join "`r`n"
+    return $result.Trim()
+}
+
 function New-EmailTemplate {
     param(
         [string]$OutputPath,
@@ -1382,6 +1391,7 @@ function New-EmailTemplate {
         $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
         $bodyTemplate = $script:Templates.EmailTemplate.Body
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
+        $emailContent = Format-EmailTemplateSpacing -Text $emailContent
 
         if ($OutputPath) {
             $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8
