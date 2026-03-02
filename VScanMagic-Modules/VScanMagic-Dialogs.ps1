@@ -276,6 +276,7 @@ function Show-SetClientTypesDialog {
         $row = $dgv.Rows.Add($clientName, $defaultVal)
         $dgv.Rows[$row].Tag = $c
     }
+    $form.Controls.Add($dgv)
     $btnSetAll = New-Object System.Windows.Forms.Button
     $btnSetAll.Location = New-Object System.Drawing.Point(20, 285)
     $btnSetAll.Size = New-Object System.Drawing.Size(80, 26)
