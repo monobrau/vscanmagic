@@ -2566,6 +2566,229 @@ function Show-AIApiKeysDialog {
     $dlg.ShowDialog() | Out-Null
 }
 
+function Show-CompanyReviewDialog {
+    <#
+    .SYNOPSIS
+    Displays 7 tenant configuration checks plus IP ranges, external assets, subnet issues, and offline agents.
+    #>
+    param([int]$CompanyId, [string]$CompanyName = '')
+
+    if ($CompanyId -le 0) {
+        [System.Windows.Forms.MessageBox]::Show("Select a single company (not All Companies) to run Company Review.", "Company Review", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+
+    $creds = Load-ConnectSecureCredentials
+    if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
+        [System.Windows.Forms.MessageBox]::Show("Please configure API credentials first. Click Settings > API Settings.", "Credentials Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+    if (-not $connected) {
+        [System.Windows.Forms.MessageBox]::Show("Failed to connect to ConnectSecure. Check API Settings.", "Connection Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    try {
+        $data = Get-ConnectSecureCompanyReviewData -CompanyId $CompanyId -CompanyName $CompanyName
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to fetch Company Review data: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Company Review - $CompanyName"
+    $dlg.Size = New-Object System.Drawing.Size(620, 560)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.FormBorderStyle = "FixedDialog"
+    $dlg.MaximizeBox = $false
+
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Location = New-Object System.Drawing.Point(0, 0)
+    $panel.Size = New-Object System.Drawing.Size(600, 490)
+    $panel.AutoScroll = $true
+    $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $dlg.Controls.Add($panel)
+
+    $y = 12
+    $fontB = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+
+    # --- 7 configuration checks ---
+    $extCount = if ($data.ExternalAssets) { $data.ExternalAssets.Count } else { 0 }
+    $off7 = 0; $off14 = 0; $off30 = 0
+    if ($null -ne $data.AgentsOffline7PlusDays) { $off7 = [int]$data.AgentsOffline7PlusDays }
+    if ($null -ne $data.AgentsOffline14PlusDays) { $off14 = [int]$data.AgentsOffline14PlusDays }
+    if ($null -ne $data.AgentsOffline30PlusDays) { $off30 = [int]$data.AgentsOffline30PlusDays }
+    $checks = @(
+        @{ L = "1. Lightweight agents"; V = [string]$data.AgentCount; Ok = ($data.AgentCount -gt 0) }
+        @{ L = "2. Probes w/ creds + networks"; V = [string]$data.ProbesWithBoth; Ok = ($data.ProbesWithBoth -gt 0) }
+        @{ L = "3. External scan targets"; V = [string]$extCount; Ok = ($extCount -gt 0) }
+        @{ L = "4. Offline (7d / 14d / 30+d)"; V = "$off7 / $off14 / $off30"; Ok = ($off30 -eq 0) }
+        @{ L = "5. Firewall integration"; V = if ($data.FirewallActive) { $cnt = if ($data.FirewallCount -gt 0) { $data.FirewallCount } else { 0 }; $types = if ($data.FirewallType) { $data.FirewallType } else { "Unknown" }; "$cnt firewall(s): $types" } else { "Not configured" }; Ok = $data.FirewallActive }
+        @{ L = "6. Last internal scan"; V = if ($data.LastInternalScan) { $data.LastInternalScan } else { "None" }; Ok = [bool]$data.LastInternalScan }
+        @{ L = "7. Last external scan"; V = if ($data.LastExternalScan) { $data.LastExternalScan } else { "None" }; Ok = [bool]$data.LastExternalScan }
+    )
+
+    foreach ($c in $checks) {
+        $lbl = New-Object System.Windows.Forms.Label
+        $lbl.Location = New-Object System.Drawing.Point(12, $y)
+        $lbl.AutoSize = $true
+        $lbl.Text = $c.L
+        $lbl.Font = $fontB
+        $panel.Controls.Add($lbl)
+        $val = New-Object System.Windows.Forms.Label
+        $val.Location = New-Object System.Drawing.Point(220, $y)
+        $val.Size = New-Object System.Drawing.Size(340, 20)
+        $val.Text = $c.V
+        $val.ForeColor = if ($c.Ok) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkOrange }
+        $panel.Controls.Add($val)
+        $y += 22
+    }
+    $y += 8
+
+    # --- IP Ranges / Probe Subnets ---
+    $lblSubnets = New-Object System.Windows.Forms.Label
+    $lblSubnets.Location = New-Object System.Drawing.Point(12, $y)
+    $lblSubnets.Size = New-Object System.Drawing.Size(550, 18)
+    $lblSubnets.Text = "IP Ranges / Probe Subnets:"
+    $lblSubnets.Font = $fontB
+    $panel.Controls.Add($lblSubnets)
+    $y += 20
+
+    $subnetLines = @()
+    if ($data.ProbesSubnets -and $data.ProbesSubnets.Count -gt 0) {
+        foreach ($s in $data.ProbesSubnets) { $subnetLines += [string]$s }
+    }
+    if ($data.ScanTargets -and $data.ScanTargets.Count -gt 0) {
+        foreach ($t in $data.ScanTargets) {
+            $ts = [string]$t
+            if ($subnetLines -notcontains $ts) { $subnetLines += $ts }
+        }
+    }
+    $subnetText = if ($subnetLines.Count -gt 0) { ($subnetLines | Sort-Object) -join "`r`n" } else { "(none)" }
+
+    $txtSubnets = New-Object System.Windows.Forms.TextBox
+    $txtSubnets.Location = New-Object System.Drawing.Point(12, $y)
+    $txtSubnets.Size = New-Object System.Drawing.Size(550, 52)
+    $txtSubnets.Multiline = $true
+    $txtSubnets.ReadOnly = $true
+    $txtSubnets.ScrollBars = "Vertical"
+    $txtSubnets.Text = $subnetText
+    $txtSubnets.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+    $panel.Controls.Add($txtSubnets)
+    $y += 58
+
+    # --- External Assets (name + address) ---
+    $lblExt = New-Object System.Windows.Forms.Label
+    $lblExt.Location = New-Object System.Drawing.Point(12, $y)
+    $lblExt.Size = New-Object System.Drawing.Size(550, 18)
+    $lblExt.Text = "External Scan Targets (Name / Address):"
+    $lblExt.Font = $fontB
+    $panel.Controls.Add($lblExt)
+    $y += 20
+
+    $extLines = @()
+    if ($data.ExternalAssets -and $data.ExternalAssets.Count -gt 0) {
+        foreach ($ea in $data.ExternalAssets) {
+            $n = if ($ea.Name) { $ea.Name } else { "(unnamed)" }
+            $a = if ($ea.Address) { $ea.Address } else { "" }
+            $extLines += "$n : $a"
+        }
+    }
+    $extText = if ($extLines.Count -gt 0) { $extLines -join "`r`n" } else { "(none)" }
+
+    $txtExt = New-Object System.Windows.Forms.TextBox
+    $txtExt.Location = New-Object System.Drawing.Point(12, $y)
+    $txtExt.Size = New-Object System.Drawing.Size(550, 52)
+    $txtExt.Multiline = $true
+    $txtExt.ReadOnly = $true
+    $txtExt.ScrollBars = "Vertical"
+    $txtExt.Text = $extText
+    $txtExt.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+    $panel.Controls.Add($txtExt)
+    $y += 58
+
+    # --- Subnet Issues ---
+    if ($data.SubnetIssues -and $data.SubnetIssues.Count -gt 0) {
+        $lblIssues = New-Object System.Windows.Forms.Label
+        $lblIssues.Location = New-Object System.Drawing.Point(12, $y)
+        $lblIssues.Size = New-Object System.Drawing.Size(550, 18)
+        $lblIssues.Text = "Subnet Configuration Issues:"
+        $lblIssues.Font = $fontB
+        $lblIssues.ForeColor = [System.Drawing.Color]::DarkRed
+        $panel.Controls.Add($lblIssues)
+        $y += 20
+        $issueText = ($data.SubnetIssues | ForEach-Object { [string]$_ }) -join "`r`n"
+        $txtIssues = New-Object System.Windows.Forms.TextBox
+        $txtIssues.Location = New-Object System.Drawing.Point(12, $y)
+        $txtIssues.Size = New-Object System.Drawing.Size(550, 40)
+        $txtIssues.Multiline = $true
+        $txtIssues.ReadOnly = $true
+        $txtIssues.Text = $issueText
+        $txtIssues.ForeColor = [System.Drawing.Color]::DarkRed
+        $txtIssues.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+        $panel.Controls.Add($txtIssues)
+        $y += 46
+    }
+
+    # --- Offline agent names ---
+    if ($data.AgentsOffline30PlusNames -and $data.AgentsOffline30PlusNames.Count -gt 0) {
+        $offCount = $data.AgentsOffline30PlusNames.Count
+        $lblOff = New-Object System.Windows.Forms.Label
+        $lblOff.Location = New-Object System.Drawing.Point(12, $y)
+        $lblOff.Size = New-Object System.Drawing.Size(550, 18)
+        $lblOff.Text = "Offline 30+ days ($offCount):"
+        $lblOff.Font = $fontB
+        $lblOff.ForeColor = [System.Drawing.Color]::DarkOrange
+        $panel.Controls.Add($lblOff)
+        $y += 20
+        $offText = ($data.AgentsOffline30PlusNames | ForEach-Object { [string]$_ }) -join "`r`n"
+        $txtOff = New-Object System.Windows.Forms.TextBox
+        $txtOff.Location = New-Object System.Drawing.Point(12, $y)
+        $txtOff.Size = New-Object System.Drawing.Size(550, [Math]::Min(200, 40 + ($offCount * 16)))
+        $txtOff.Multiline = $true
+        $txtOff.ReadOnly = $true
+        $txtOff.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+        $txtOff.Text = $offText
+        $txtOff.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+        $panel.Controls.Add($txtOff)
+        $offH = [Math]::Min(200, 40 + ($offCount * 16))
+        $y += $offH + 8
+    }
+
+    # --- Quick Wins ---
+    if ($data.QuickWins -and $data.QuickWins.Count -gt 0) {
+        $y += 4
+        $lblQ = New-Object System.Windows.Forms.Label
+        $lblQ.Location = New-Object System.Drawing.Point(12, $y)
+        $lblQ.Size = New-Object System.Drawing.Size(550, 18)
+        $lblQ.Text = "Recommendations:"
+        $lblQ.Font = $fontB
+        $panel.Controls.Add($lblQ)
+        $y += 22
+        foreach ($qw in $data.QuickWins) {
+            $l = New-Object System.Windows.Forms.Label
+            $l.Location = New-Object System.Drawing.Point(16, $y)
+            $l.Size = New-Object System.Drawing.Size(540, 16)
+            $l.Text = "• $qw"
+            $l.AutoSize = $false
+            $panel.Controls.Add($l)
+            $y += 18
+        }
+    }
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Location = New-Object System.Drawing.Point -ArgumentList 250, 500
+    $btnClose.Size = New-Object System.Drawing.Size(100, 28)
+    $btnClose.Text = "Close"
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dlg.Controls.Add($btnClose)
+    $dlg.AcceptButton = $btnClose
+
+    $dlg.ShowDialog() | Out-Null
+}
+
 function Show-ProcessingSummaryDialog {
     param([array]$ProcessedOutputs = @())
     if (-not $ProcessedOutputs -or $ProcessedOutputs.Count -eq 0) { return }

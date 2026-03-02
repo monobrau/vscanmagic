@@ -1003,6 +1003,7 @@ $script:CompanyReviewEndpoints = @{
     DiscoverySettingsReport   = '/r/report_queries/discovery_settings'
     AgentDiscoveryMapping     = '/r/company/agent_discoverysettings_mapping'
     AssetFirewallPolicy       = '/r/asset/asset_firewall_policy'
+    FirewallAssetView         = '/r/report_queries/firewall_asset_view'
     Assets                    = '/r/asset/assets'
 }
 
@@ -1180,9 +1181,12 @@ function Get-ConnectSecureCompanyReviewData {
         ScanTargets = [System.Collections.ArrayList]::new()
         ExternalAssets = [System.Collections.ArrayList]::new()
         OldestOfflineDays = $null
+        AgentsOffline7PlusDays = 0
+        AgentsOffline14PlusDays = 0
         AgentsOffline30PlusDays = 0
         AgentsOffline30PlusNames = [System.Collections.ArrayList]::new()
         FirewallActive = $false
+        FirewallCount = 0
         FirewallType = ''
         LastInternalScan = $null
         LastExternalScan = $null
@@ -1297,11 +1301,17 @@ function Get-ConnectSecureCompanyReviewData {
         } }
     }
 
-    # 5. Agents offline 30+ days - use lightweight_assets (same source as portal) for host_name and last_ping_time
+    # 5. Agents/Probes offline 7+, 14+, 30+ days - based on last_ping_time of agents OR probes
+    # Exclude deprecated agents (already auto-archived); counts show only active agents that need attention
     $now = Get-Date
     $oldestDays = $null
+    $offline7Plus = 0
+    $offline14Plus = 0
     $offline30Plus = 0
-    $offlineSource = switch ($lwAssets -is [array] -and $lwAssets.Count -gt 0) { $true { $lwAssets } default { $agents } }
+    $offlineSource = @($agents | Where-Object {
+        $dep = $_.is_deprecated; if ($null -eq $dep) { $dep = $_.isDeprecated }
+        -not $dep
+    })
     foreach ($a in $offlineSource) {
         $lp = $a.last_ping_time; switch (-not $lp) { $true { $lp = $a.lastPingTime } }
         switch (-not $lp) { $true { $lp = $a.'Last Ping Time' } }
@@ -1310,30 +1320,51 @@ function Get-ConnectSecureCompanyReviewData {
             $dt = [DateTime]::Parse($lp)
             $days = ($now - $dt).TotalDays
             switch ($null -eq $oldestDays -or $days -gt $oldestDays) { $true { $oldestDays = [int][Math]::Floor($days) } }
-            switch ($days -ge 30) {
-                $true {
-                    $offline30Plus++
-                    $an = $a.host_name; switch (-not $an) { $true { $an = $a.'Host Name' } }
-                    switch (-not $an) { $true { $an = $a.agent_name } }
-                    switch (-not $an) { $true { $an = $a.hostname } }
-                    switch (-not $an) { $true { $an = $a.name } }
-                    switch (-not $an) { $true { $an = $a.computer_name } }
-                    switch ($an) { { $_ } { [void]$result.AgentsOffline30PlusNames.Add([string]$an) } }
-                }
+            if ($days -ge 7) { $offline7Plus++ }
+            if ($days -ge 14) { $offline14Plus++ }
+            if ($days -ge 30) {
+                $offline30Plus++
+                $an = $a.host_name; switch (-not $an) { $true { $an = $a.'Host Name' } }
+                switch (-not $an) { $true { $an = $a.agent_name } }
+                switch (-not $an) { $true { $an = $a.hostname } }
+                switch (-not $an) { $true { $an = $a.name } }
+                switch (-not $an) { $true { $an = $a.computer_name } }
+                switch (-not $an) { $true { $an = $a.display_name } }
+                switch (-not $an) { $true { $an = $a.asset_name } }
+                switch (-not $an) { $true { $ip = $a.ip; if ($ip) { $an = "IP: $ip" } } }
+                switch (-not $an) { $true { $aid = $a.id; if ($null -ne $aid) { $an = "Agent #$aid" } } }
+                [void]$result.AgentsOffline30PlusNames.Add([string](if ($an) { $an } else { "Unknown" }))
             }
         } catch { }
     }
     $result.OldestOfflineDays = $oldestDays
+    $result.AgentsOffline7PlusDays = $offline7Plus
+    $result.AgentsOffline14PlusDays = $offline14Plus
     $result.AgentsOffline30PlusDays = $offline30Plus
 
-    # 6. Firewall - asset_firewall_policy
-    $fwPolicies = Get-ConnectSecureAssetFirewallPolicy -CompanyId $CompanyId
-    $hasFw = $fwPolicies -and $fwPolicies.Count -gt 0
-    switch ($hasFw) { $true {
-        $result.FirewallActive = $true
-        $types = $fwPolicies | ForEach-Object { $_.policy_type } | Where-Object { $_ } | Select-Object -Unique
-        $result.FirewallType = ($types -join ', ')
-    } }
+    # 6. Firewall - managed devices (Cisco Meraki, Fortigate, Sonicwall, etc.) per client
+    # Portal uses /r/report_queries/firewall_asset_view with condition=company_id=X (per capture)
+    $fwAssets = @()
+    try {
+        $qp = @{ condition = "company_id=$CompanyId"; limit = 500; skip = 0; order_by = "host_name asc" }
+        $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.FirewallAssetView -QueryParams $qp
+        $fwAssets = if ($null -eq $raw) { @() } elseif ($raw -is [array]) { @($raw) } else { @(,$raw) }
+    } catch { }
+
+    $result.FirewallCount = $fwAssets.Count
+    $manufacturers = @{}
+    foreach ($a in $fwAssets) {
+        $isFw = $a.is_firewall; if ($null -eq $isFw) { $isFw = $a.isFirewall }
+        if (-not $isFw) { continue }
+        $mfr = $a.manufacturer; if ($null -eq $mfr) { $mfr = $a.asset_type }
+        if ($mfr) { $manufacturers[[string]$mfr] = $true }
+    }
+    if ($manufacturers.Count -eq 0 -and $result.FirewallCount -gt 0) {
+        $manufacturers['Managed firewall'] = $true
+    }
+
+    $result.FirewallActive = $result.FirewallCount -gt 0
+    $result.FirewallType = ($manufacturers.Keys | Sort-Object) -join ', '
 
     # 7. Last scan dates - internal from probe agents; external from jobs_view (server-side, no assets fetch)
     $lastInternal = $null
@@ -1381,7 +1412,7 @@ function Get-ConnectSecureCompanyReviewData {
     switch ($result.AgentCount -eq 0) { $true { [void]$result.QuickWins.Add('Add lightweight agents to enable internal scanning') } }
     switch ($result.ProbesWithBoth -eq 0) { $true { [void]$result.QuickWins.Add('Map credentials and discovery networks to at least one probe agent') } }
     switch ($result.SubnetIssues.Count -gt 0) { $true { [void]$result.QuickWins.Add('Exclude network and broadcast addresses from external scan targets') } }
-    switch ($result.AgentsOffline30PlusDays -gt 0) { $true { [void]$result.QuickWins.Add('Investigate agents offline more than 30 days; reinstall or remove') } }
+    switch ($result.AgentsOffline30PlusDays -gt 0) { $true { [void]$result.QuickWins.Add('Investigate agents/probes offline more than 30 days; reinstall or remove') } }
     switch (-not $result.FirewallActive) { $true { [void]$result.QuickWins.Add('Configure firewall integration for visibility') } }
     switch (-not $result.LastInternalScan -and -not $result.LastExternalScan) { $true { [void]$result.QuickWins.Add('Run internal and external scans to populate vulnerability data') } }
 

@@ -197,6 +197,28 @@ function Show-VScanMagicGUI {
         }
     })
     $groupBoxDownload.Controls.Add($btnClearAllCompanies)
+
+    $btnCompanyReview = New-Object System.Windows.Forms.Button
+    $btnCompanyReview.Location = New-Object System.Drawing.Point(348, ($dlgY + 52))
+    $btnCompanyReview.Size = New-Object System.Drawing.Size(124, 22)
+    $btnCompanyReview.Text = "Company Review"
+    $btnCompanyReview.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnCompanyReview.ForeColor = [System.Drawing.Color]::White
+    $btnCompanyReview.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnCompanyReview.FlatAppearance.BorderSize = 0
+    $btnCompanyReview.Add_Click({
+        $checked = @($checkedListCompany.CheckedItems)
+        if ($checked.Count -ne 1 -or $checked[0].Id -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Select exactly one company (not All Companies) to run Company Review.", "Company Review", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $company = $checked[0]
+        $clientName = ($company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($clientName)) { $clientName = $company.DisplayName }
+        Show-CompanyReviewDialog -CompanyId $company.Id -CompanyName $clientName
+    })
+    $groupBoxDownload.Controls.Add($btnCompanyReview)
+
     $checkedListCompany.Add_ItemCheck({
         param($sender, $e)
         if ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked) {

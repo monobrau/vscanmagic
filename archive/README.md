@@ -27,8 +27,9 @@ Company Review API test scripts archived during single-item array fix work (2026
 
 ## portal-capture/
 
-Browser console scripts and guides for capturing ConnectSecure portal API calls (report creation, company review). Use when debugging API differences vs portal behavior.
+Browser console scripts and guides for capturing ConnectSecure portal API calls (report creation, company review, firewall). Use when debugging API differences vs portal behavior.
 
 - **Capture-PortalCompanyReview.js**, **Capture-PortalCompanyReview-DEBUG.js** — Company Review capture
 - **Capture-PortalReportCreation.js** — Report creation capture
-- **CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md**, **CAPTURE-PORTAL-REPORT-GUIDE.md** — Usage guides
+- **Capture-PortalFirewall.js** — Firewall API capture (device count, vendor types)
+- **CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md**, **CAPTURE-PORTAL-REPORT-GUIDE.md**, **CAPTURE-PORTAL-FIREWALL-GUIDE.md** — Usage guides
