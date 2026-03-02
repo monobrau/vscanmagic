@@ -40,7 +40,7 @@ The following endpoints require read access to vulnerability/report data:
 ## How to Check/Set Permissions in ConnectSecure
 
 1. **Log into ConnectSecure Portal**
-   - Go to: `https://pod104.myconnectsecure.com` (or your pod URL)
+   - Go to: `https://pod0.myconnectsecure.com` (or your pod URL)
 
 2. **Navigate to API Key Settings**
    - Go to: **Global > Settings > Users**

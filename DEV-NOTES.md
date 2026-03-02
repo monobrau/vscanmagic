@@ -34,7 +34,6 @@ Notes for future development and debugging.
 
 - `Get-ConnectSecureLightweightAssets` — `@(,$raw)` when single object
 - `Get-ConnectSecureCompanyAgents` — `@(,$raw)` when single object
-- `Get-ConnectSecureCompanyCredentials` — `@(,$raw)` when single object
 - `Get-ConnectSecureAgentCredentialsMapping` — `@(,$raw)` when single object
 - `Get-ConnectSecureAgentDiscoveryMapping` — `@(,$raw)` when single object
 - `Get-ConnectSecureDiscoverySettings` — `@(,$raw)` in both report and fallback paths

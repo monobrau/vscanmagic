@@ -1895,7 +1895,7 @@ function Show-ConnectSecureSettingsDialog {
     $txtBaseUrl = New-Object System.Windows.Forms.TextBox
     $txtBaseUrl.Location = New-Object System.Drawing.Point(140, $y)
     $txtBaseUrl.Size = New-Object System.Drawing.Size(340, 20)
-    $txtBaseUrl.Text = "https://pod104.myconnectsecure.com"
+    $txtBaseUrl.Text = "https://pod0.myconnectsecure.com"
     $dlg.Controls.Add($txtBaseUrl)
     $y += 35
 
@@ -1978,7 +1978,7 @@ function Show-ConnectSecureSettingsDialog {
     $btnClear.Size = New-Object System.Drawing.Size(90, 28)
     $btnClear.Text = "Clear"
     $btnClear.Add_Click({
-        $txtBaseUrl.Text = "https://pod104.myconnectsecure.com"
+        $txtBaseUrl.Text = "https://pod0.myconnectsecure.com"
         $txtTenant.Text = "river-run"
         $txtClientId.Text = ""
         $txtClientSecret.Text = ""
@@ -3367,8 +3367,8 @@ You need four values: Base URL, Tenant Name, Client ID, and Client Secret.
 STEP 1: Find the Base URL
    - Log into your ConnectSecure portal in a web browser.
    - Click the user profile icon, then click "API Documentation".
-   - The page URL will look like: https://pod104.myconnectsecure.com/apidocs/
-   - The Base URL is the part before /apidocs/ (e.g., https://pod104.myconnectsecure.com)
+   - The page URL will look like: https://pod0.myconnectsecure.com/apidocs/
+   - The Base URL is the part before /apidocs/ (e.g., https://pod0.myconnectsecure.com)
 
 STEP 2: Open the API Key page
    - Go to: Global > Settings > Users
@@ -3378,7 +3378,7 @@ STEP 2: Open the API Key page
 STEP 3: Copy each value
    - Base URL
      Use the URL from Step 1 (from Profile > API Documentation, before /apidocs/).
-     Example: https://pod104.myconnectsecure.com
+     Example: https://pod0.myconnectsecure.com
 
    - Tenant Name
      The name you use to log in. Example: river-run

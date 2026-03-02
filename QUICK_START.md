@@ -9,7 +9,7 @@
    - **Client ID**
    - **Client Secret**
    - **Tenant Name**
-   - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod104.myconnectsecure.com` - POD number from API Key page)
+   - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod0.myconnectsecure.com` - POD number from API Key page)
    - **Tenant Name** (e.g., `river-run` - found on API Key page)
 
 ## 2. Start the API Server
@@ -30,7 +30,7 @@ Keep this terminal open - the server needs to stay running.
 2. Replace the placeholder values in the `$config` hashtable:
    ```powershell
    $config = @{
-       BaseUrl = "https://pod104.myconnectsecure.com"  # Format: https://pod{number}.myconnectsecure.com
+       BaseUrl = "https://pod0.myconnectsecure.com"  # Format: https://pod{number}.myconnectsecure.com
        TenantName = "river-run"  # Found on API Key page
        TenantName = "your-tenant-name"                  # Your tenant
        ClientId = "your-client-id"                      # From API Key
@@ -51,7 +51,7 @@ Keep this terminal open - the server needs to stay running.
 ```powershell
 $body = @{
     useConnectSecure = $true
-    connectSecureBaseUrl = "https://pod104.myconnectsecure.com"
+    connectSecureBaseUrl = "https://pod0.myconnectsecure.com"
     connectSecureTenant = "river-run"
     connectSecureTenant = "your-tenant-name"
     connectSecureClientId = "your-client-id"

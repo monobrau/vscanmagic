@@ -10,7 +10,7 @@
    - **Client ID**
    - **Client Secret**
    - **Tenant Name** (your tenant identifier, e.g., `river-run` - found on API Key page)
-   - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod104.myconnectsecure.com` - POD number found on API Key page)
+   - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod0.myconnectsecure.com` - POD number found on API Key page)
 
 ## Step 2: Use the API
 
@@ -21,7 +21,7 @@ Create a PowerShell script with your credentials:
 ```powershell
 # Your ConnectSecure API credentials
 $connectSecureConfig = @{
-    BaseUrl = "https://pod401.myconnectsecure.com"  # Replace with your pod URL
+    BaseUrl = "https://pod0.myconnectsecure.com"  # Replace with your pod URL
     TenantName = "your-tenant-name"                  # Replace with your tenant
     ClientId = "your-client-id"                      # Replace with your Client ID
     ClientSecret = "your-client-secret"              # Replace with your Client Secret
@@ -60,7 +60,7 @@ curl -X POST "http://localhost:8080/api/reports/pending-epss" \
   -H "Content-Type: application/json" \
   -d '{
     "useConnectSecure": true,
-    "connectSecureBaseUrl": "https://pod401.myconnectsecure.com",
+    "connectSecureBaseUrl": "https://pod0.myconnectsecure.com",
     "connectSecureTenant": "your-tenant-name",
     "connectSecureClientId": "your-client-id",
     "connectSecureClientSecret": "your-client-secret",
@@ -79,7 +79,7 @@ from datetime import datetime
 
 # Your ConnectSecure API credentials
 config = {
-    "base_url": "https://pod401.myconnectsecure.com",
+    "base_url": "https://pod0.myconnectsecure.com",
     "tenant_name": "your-tenant-name",
     "client_id": "your-client-id",
     "client_secret": "your-client-secret",
@@ -136,7 +136,7 @@ The server will start on `http://localhost:8080` by default.
 
 2. **Use environment variables** (recommended):
    ```powershell
-   $env:CONNECTSECURE_BASEURL = "https://pod401.myconnectsecure.com"
+   $env:CONNECTSECURE_BASEURL = "https://pod0.myconnectsecure.com"
    $env:CONNECTSECURE_TENANT = "your-tenant-name"
    $env:CONNECTSECURE_CLIENTID = "your-client-id"
    $env:CONNECTSECURE_CLIENTSECRET = "your-client-secret"

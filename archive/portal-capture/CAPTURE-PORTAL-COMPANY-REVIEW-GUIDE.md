@@ -94,21 +94,21 @@ If the portal gets the date from `company_stats` (or another single-call endpoin
 
 **jobs_view (implemented):** The portal calls `/r/company/jobs_view`. With `condition=company_id=X and type='External Scan'` it returns external scan jobs server-side. Use max(updated) for last external scan date—no assets fetch. Implemented in Get-ConnectSecureCompanyReviewData.
 
-## Capturing for a Company Where External Assets Don't Show (e.g. Adron Tool Corp)
+## Capturing for a Company Where External Assets Don't Show (e.g. Example Company)
 
 When the portal shows external assets for a company but VScanMagic Company Review does not, capture from that company's view to compare.
 
-1. **Find the company ID** – In the portal, select "Adron Tool Corp" (or the company). The URL may contain the company ID (e.g. `company_id=12345` or `company/12345`). Or run:
+1. **Find the company ID** – In the portal, select your target company. The URL may contain the company ID (e.g. `company_id=12345` or `company/12345`). Or run:
    ```powershell
    .\Test-ExternalAssetsByCompany.ps1 -ListCompanies
    ```
-   Then search the output for "Adron Tool Corp" and note its ID.
+   Then search the output for your company name and note its ID.
 
 2. **Clear and start capture** – Paste `Capture-PortalCompanyReview-DEBUG.js` into the console. Clear any previous capture: `window.__capturedAllApiCalls = []`
 
-3. **Navigate to Adron Tool Corp** – Select Adron Tool Corp from the company selector, then go to **External Assets** or **External Scan Endpoints** (where the portal shows their external assets).
+3. **Navigate to the company** – Select the company from the company selector, then go to **External Assets** or **External Scan Endpoints** (where the portal shows their external assets).
 
-4. **Export** – Run: `copy(JSON.stringify(window.__capturedAllApiCalls, null, 2))` and save to `portal-adron-tool-capture.json`
+4. **Export** – Run: `copy(JSON.stringify(window.__capturedAllApiCalls, null, 2))` and save to `portal-company-capture.json`
 
 5. **Share** – Paste the captured calls (or the `discovery_settings` and `external_asset` related entries) so we can see:
    - What endpoint the portal uses

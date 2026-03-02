@@ -58,6 +58,9 @@ TestResults/
 # Sample vulnerability reports
 All Vulnerabilities Report*.xlsx
 
+# Generated ticket instructions / report outputs
+*Ticket Instructions*.txt
+
 # Export outputs
 VulnerabilitiesExport_*.csv
 unique-software-*.csv
@@ -65,6 +68,10 @@ unique-software-*.csv
 VScanMagic_Settings.json
 VScanMagic_CompanyFolderMap.json
 VScanMagic_ReportFolderHistory.json
+
+# Build outputs
+VScanMagic.exe
+VScanMagic.zip
 
 # Old version zips (current VScanMagic.zip from build is used for releases)
 VScanMagic-4.0.1.zip

@@ -11,7 +11,7 @@ Capture the exact API calls the ConnectSecure web UI makes when creating a stand
 5. **Create a report** in the portal:
    - Go to Reports (or equivalent menu)
    - Select a standard report type
-   - Choose company (e.g. 15853)
+   - Choose company (e.g. 12345)
    - Click Generate / Create / Download
    - Wait for the report to be ready and downloaded
 6. **Export captured data**:

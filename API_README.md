@@ -77,7 +77,7 @@ Generates a report and returns it as a file download.
 ```json
 {
   "useConnectSecure": true,
-  "connectSecureBaseUrl": "https://pod401.myconnectsecure.com",
+  "connectSecureBaseUrl": "https://pod0.myconnectsecure.com",
   "connectSecureTenant": "your-tenant-name",
   "connectSecureClientId": "your-client-id",
   "connectSecureClientSecret": "your-client-secret",
@@ -90,7 +90,7 @@ Generates a report and returns it as a file download.
 **Query Parameters (alternative to JSON body):**
 - `inputPath` (required for Excel mode) - Path to the input Excel file
 - `useConnectSecure` (optional) - Set to `true` to use ConnectSecure API
-- `connectSecureBaseUrl` (required for ConnectSecure mode) - ConnectSecure API base URL (e.g., `https://pod401.myconnectsecure.com`)
+- `connectSecureBaseUrl` (required for ConnectSecure mode) - ConnectSecure API base URL (e.g., `https://pod0.myconnectsecure.com`)
 - `connectSecureTenant` (required for ConnectSecure mode) - Your ConnectSecure tenant name
 - `connectSecureClientId` (required for ConnectSecure mode) - Your ConnectSecure API client ID
 - `connectSecureClientSecret` (required for ConnectSecure mode) - Your ConnectSecure API client secret
@@ -134,7 +134,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/reports/pending-epss" `
 # Generate Pending EPSS Report from ConnectSecure API
 $body = @{
     useConnectSecure = $true
-    connectSecureBaseUrl = "https://pod401.myconnectsecure.com"
+    connectSecureBaseUrl = "https://pod0.myconnectsecure.com"
     connectSecureTenant = "your-tenant-name"
     connectSecureClientId = "your-client-id"
     connectSecureClientSecret = "your-client-secret"

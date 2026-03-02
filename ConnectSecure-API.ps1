@@ -451,7 +451,7 @@ function Connect-ConnectSecureAPI {
             Write-CSApiLog "  1. Check tenant name is correct (no spaces, exact match, case-sensitive)" -Level Error
             Write-CSApiLog "  2. Verify Client ID and Client Secret are correct (copy exactly from ConnectSecure)" -Level Error
             Write-CSApiLog "  3. Ensure format is: tenant+client_id:client_secret (with + separator)" -Level Error
-            Write-CSApiLog "  4. Check Base URL is correct - e.g. https://pod104.myconnectsecure.com" -Level Error
+            Write-CSApiLog "  4. Check Base URL is correct - e.g. https://pod0.myconnectsecure.com" -Level Error
             Write-CSApiLog "  5. Verify your API key is active in ConnectSecure portal" -Level Error
             
             return $false
@@ -933,46 +933,6 @@ function Get-ConnectSecureSuppressedVulnerabilities {
     return $data
 }
 
-function Get-ConnectSecureRemediationPlan {
-    param(
-        [int]$CompanyId = 0,
-        [int]$Limit = 5000,
-        [int]$Skip = 0,
-        [string]$Filter = ""
-    )
-
-    Write-CSApiLog ('Fetching remediation plan (CompanyId: ' + $CompanyId + ', Limit: ' + $Limit + ', Skip: ' + $Skip + ')...') -Level Info
-
-    $queryParams = @{
-        limit = $Limit
-        skip = $Skip
-    }
-
-    if ($CompanyId -gt 0) {
-        $queryParams.company_id = $CompanyId
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($Filter)) {
-        $queryParams.filter = $Filter
-    }
-
-    try {
-        $response = Invoke-ConnectSecureRequest -Endpoint '/r/asset/get_asset_remediation_plan' -QueryParameters $queryParams
-        
-        if ($response.status -and $response.data) {
-            Write-CSApiLog ('Retrieved ' + $response.data.Count + ' remediation plan records') -Level Success
-            return $response.data
-        } else {
-            Write-CSApiLog 'No remediation plan data returned' -Level Warning
-            return @()
-        }
-
-    } catch {
-        Write-CSApiLog ('Error fetching remediation plan: ' + $_.Exception.Message) -Level Error
-        throw
-    }
-}
-
 function Get-ConnectSecureAssets {
     <#
     .SYNOPSIS
@@ -1030,7 +990,7 @@ function Get-ConnectSecureAssets {
 
 # --- Company Review (agents, probes, credentials, firewall, scan dates) ---
 # NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first
-# (see CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
+# (see archive/portal-capture/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
 # Endpoints from swagger.yaml
 $script:CompanyReviewEndpoints = @{
     JobsView                  = '/r/company/jobs_view'
@@ -1044,7 +1004,6 @@ $script:CompanyReviewEndpoints = @{
     AgentDiscoveryMapping     = '/r/company/agent_discoverysettings_mapping'
     AssetFirewallPolicy       = '/r/asset/asset_firewall_policy'
     Assets                    = '/r/asset/assets'
-    ExternalAssetExternalscan = '/r/report_queries/external_asset_externalscan'
 }
 
 function Get-NetworkBroadcastFromCidr {
@@ -1126,16 +1085,6 @@ function Get-ConnectSecureCompanyAgents {
     switch ($CompanyId -le 0) { $true { return @() } }
     $qp = @{ condition = "company_id=$CompanyId"; limit = 5000; skip = 0 }
     $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.Agents -QueryParams $qp
-    if ($null -eq $raw) { return @() }
-    if ($raw -is [array]) { return @($raw) }
-    return @(,$raw)
-}
-
-function Get-ConnectSecureCompanyCredentials {
-    param([int]$CompanyId)
-    switch ($CompanyId -le 0) { $true { return @() } }
-    $qp = @{ condition = "company_id=$CompanyId"; limit = 2000; skip = 0 }
-    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.Credentials -QueryParams $qp
     if ($null -eq $raw) { return @() }
     if ($raw -is [array]) { return @($raw) }
     return @(,$raw)
@@ -2306,7 +2255,7 @@ function Get-StandardReportIdForType {
         # Fallback: use known IDs when dynamic match fails (API structure may vary by tenant)
         if ($categoryPatterns[$InternalReportType]) {
             $knownIds = @{
-                'all-vulnerabilities'        = 'f836d6a4e4d54ac6a9d2967254796373'
+                'all-vulnerabilities'        = '00000000000000000000000000000000'
                 'suppressed-vulnerabilities'   = '1d091564830b44c485a0ddc35ace9ac6'
                 'external-vulnerabilities'    = '01beb6b930744e11b690bb9dc25118fb'
                 'executive-summary'           = '1cd4f45884264d15bee4173dc58b6a57'
@@ -2770,195 +2719,12 @@ function Invoke-ConnectSecureReportsBatch {
     return @{ Succeeded = [array]$succeeded; Failed = [array]$failed }
 }
 
-function Invoke-ConnectSecureReportDownload {
-    <#
-    .SYNOPSIS
-    Creates a report job, polls until ready, and downloads the file. (Single-report; batch flow uses Invoke-ConnectSecureReportsBatch.)
-    .PARAMETER ReportType
-    ConnectSecure report type (e.g. pending_epss, executive_summary).
-    .PARAMETER OutputPath
-    Full path to save the downloaded file.
-    .PARAMETER CompanyId
-    Company ID (0 for all).
-    .PARAMETER ReportFormat
-    xlsx, docx, or pdf.
-    .PARAMETER PollIntervalSeconds
-    Seconds between status checks.
-    .PARAMETER MaxWaitSeconds
-    Maximum time to wait for job completion.
-    #>
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$ReportType,
-        [Parameter(Mandatory=$true)]
-        [string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ReportFormat = 'xlsx',
-        [int]$PollIntervalSeconds = 5,
-        [int]$MaxWaitSeconds = 300
-    )
-
-    $jobId = New-ConnectSecureReportJob -ReportType $ReportType -CompanyId $CompanyId -ReportFormat $ReportFormat
-    $start = Get-Date
-
-    while ($true) {
-        $elapsed = ((Get-Date) - $start).TotalSeconds
-        if ($elapsed -ge $MaxWaitSeconds) {
-            throw ('Report job timed out after ' + $MaxWaitSeconds + ' seconds')
-        }
-
-        $status = Get-ConnectSecureReportJobStatus -JobId $jobId
-        $jobStatus = $null
-        if ($status.data) {
-            $jobStatus = $status.data.status
-            if ([string]::IsNullOrWhiteSpace($jobStatus)) { $jobStatus = $status.data.job_status }
-        }
-
-        if ($jobStatus -eq 'completed' -or $jobStatus -eq 'complete' -or $jobStatus -eq 'ready') {
-            break
-        }
-        if ($jobStatus -eq 'failed' -or $jobStatus -eq 'error') {
-            $errMsg = if ($status.data.error_message) { $status.data.error_message } else { 'Report job failed' }
-            throw $errMsg
-        }
-
-        Start-Sleep -Seconds $PollIntervalSeconds
-    }
-
-    $downloadUrl = Get-ConnectSecureReportLink -JobId $jobId -IsGlobal ($CompanyId -eq 0)
-    if (-not $downloadUrl.StartsWith('http')) {
-        $slash = [char]47
-        $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd($slash)
-        $path = $downloadUrl.TrimStart($slash)
-        $downloadUrl = $base + '/' + $path
-    }
-
-    # Pre-signed R2/S3 URLs authenticate via query params - do NOT send Authorization (causes 400)
-    $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
-    $headers = @{}
-    if (-not $isPresigned) {
-        $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
-        if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
-            $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
-        }
-    }
-    Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
-    Write-CSApiLog ('Downloaded report from ConnectSecure to ' + $OutputPath) -Level Success
-}
-
-function Invoke-ConnectSecureReportBuilderDownload {
-    <#
-    .SYNOPSIS
-    Uses ConnectSecure Report Builder to generate a report with asset-level data (Host Name, IP, CVE per row).
-    Polls get_report_link (avoids report_jobs_view which often returns 502).
-    Returns $true if successful, $false if report builder unavailable (404) or fails - caller should fall back to local generation.
-    #>
-    param(
-        [Parameter(Mandatory=$true)][string]$InternalReportType,
-        [Parameter(Mandatory=$true)][string]$OutputPath,
-        [int]$CompanyId = 0,
-        [string]$ReportFormat = 'xlsx',
-        [int]$PollIntervalSeconds = 2,
-        [int]$MaxWaitSeconds = 600,
-        [scriptblock]$OnProgress = $null
-    )
-    function Update-Prog { param($m) if ($OnProgress) { & $OnProgress $m } }
-
-    if ($script:CSReportBuilderUnavailable) { return $false }
-    $ext = if ($ReportFormat -eq 'docx') { 'docx' } elseif ($ReportFormat -eq 'pdf') { 'pdf' } else { 'xlsx' }
-    $reportId = Get-StandardReportIdForType -InternalReportType $InternalReportType -ReportFormat $ext -CompanyId $CompanyId
-    if (-not $reportId) {
-        Write-CSApiLog ('No standard report match for ' + $InternalReportType + ' - check standard_reports API') -Level Warning
-        return $false
-    }
-    $reportName = $script:CSReportNameMap[$InternalReportType]
-    try {
-        $companyLabel = if ($CompanyId -eq 0) { 'All Companies' } else { ('company ' + $CompanyId) }
-        Update-Prog ('Creating report for ' + $companyLabel + '...')
-        $jobId = New-ConnectSecureReportJob -ReportType $reportId -CompanyId $CompanyId -ReportFormat $ext -ReportName $reportName
-        $start = Get-Date
-        $isGlobal = ($CompanyId -eq 0)
-
-        # Poll get_report_link and validate via download - URL can 404 until report is actually ready
-        $script:LastReportJobId = $jobId
-        Update-Prog 'Polling for download link...'
-        Start-Sleep -Seconds 5
-        $retries = 0
-        $maxRetriesByTime = [Math]::Max(60, [int]($MaxWaitSeconds / 5))
-        while ($true) {
-            $elapsed = ((Get-Date) - $start).TotalSeconds
-            if ($elapsed -ge $MaxWaitSeconds) {
-                Write-CSApiLog ('Report job timed out after ' + $MaxWaitSeconds + 's. Job ID ' + $jobId + ' - use Download by Job ID when ready.') -Level Warning
-                return $false
-            }
-            Update-Prog ('Waiting for report to be ready... (' + [int]$elapsed + 's)')
-            $downloadUrl = $null
-            try {
-                $downloadUrl = Get-ConnectSecureReportLink -JobId $jobId -IsGlobal $isGlobal -CompanyId $CompanyId
-            } catch {
-                $retries++
-                $delay = [Math]::Min(5 + ($retries * 2), 20)
-                $errMsg = $_.Exception.Message
-                if ($errMsg -match '404') {
-                    Write-CSApiLog ('Report still generating (404) - retry ' + $retries + '/' + $maxRetriesByTime + ', waiting ' + $delay + 's...') -Level Info
-                } else {
-                    Write-CSApiLog ('Report not ready - retry ' + $retries + '/' + $maxRetriesByTime + ', waiting ' + $delay + 's...') -Level Warning
-                }
-                if ($retries -ge $maxRetriesByTime) { throw }
-                Start-Sleep -Seconds $delay
-                Start-Sleep -Seconds $PollIntervalSeconds
-                continue
-            }
-            if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
-                Start-Sleep -Seconds $PollIntervalSeconds
-                continue
-            }
-            if (-not $downloadUrl.StartsWith('http')) {
-                $base = $script:ConnectSecureConfig.BaseUrl.TrimEnd('/')
-                $downloadUrl = $base + '/' + $downloadUrl.TrimStart('/')
-            }
-            # Try download - if 404, URL is a placeholder, treat as not ready and keep polling
-            $isPresigned = $downloadUrl -match 'r2\.cloudflarestorage|X-Amz-Signature'
-            $headers = @{}
-            if (-not $isPresigned) {
-                $headers['Authorization'] = 'Bearer ' + $script:ConnectSecureConfig.AccessToken
-                if (-not [string]::IsNullOrWhiteSpace($script:ConnectSecureConfig.UserId)) {
-                    $headers['X-USER-ID'] = $script:ConnectSecureConfig.UserId.ToString()
-                }
-            }
-            try {
-                Invoke-WebRequest -Uri $downloadUrl -Method GET -Headers $headers -OutFile $OutputPath -UseBasicParsing
-                Write-CSApiLog ('Report Builder: Downloaded asset-level report to ' + $OutputPath) -Level Success
-                return $true
-            } catch {
-                $dlErr = $_.Exception.Message
-                if ($dlErr -match '404') {
-                    Write-CSApiLog ('Download 404 - URL not ready yet, continuing to poll...') -Level Info
-                    $retries++
-                    if ($retries -ge $maxRetriesByTime) { throw }
-                    Start-Sleep -Seconds 5
-                } else {
-                    throw
-                }
-            }
-            Start-Sleep -Seconds $PollIntervalSeconds
-        }
-    } catch {
-        $msg = $_.Exception.Message
-        # Only set when create_report_job returns Please Contact Support - 404 on get_report_link means report still generating
-        if ($msg -match 'Please Contact Support') { $script:CSReportBuilderUnavailable = $true }
-        $jobHint = if ($script:LastReportJobId) { ' Job ID ' + $script:LastReportJobId + ' - use Download by Job ID when ready.' } else { '' }
-        Write-CSApiLog ('Report Builder failed (' + $InternalReportType + '): ' + $msg + $jobHint) -Level Warning
-        return $false
-    }
-}
-
 # When CS report builder returns 404, skip attempts for remaining reports (reduces failed requests)
 $script:CSReportBuilderUnavailable = $false
 
 # Standard report IDs from report_builder/standard_reports - used for asset-level data (Host Name, IP, CVE per row)
 $script:CSReportIdMap = @{
-    'all-vulnerabilities' = 'f836d6a4e4d54ac6a9d2967254796373'
+    'all-vulnerabilities' = '00000000000000000000000000000000'
     'suppressed-vulnerabilities' = '1d091564830b44c485a0ddc35ace9ac6'
     'external-vulnerabilities' = '01beb6b930744e11b690bb9dc25118fb'
     'executive-summary' = '1cd4f45884264d15bee4173dc58b6a57'

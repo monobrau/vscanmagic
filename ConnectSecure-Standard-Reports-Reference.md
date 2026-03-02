@@ -9,7 +9,7 @@ These IDs are for reference if using the report builder (`create_report_job`) in
 
 | VScanMagic Report | ConnectSecure Title | Report ID (xlsx) | reportType |
 |-------------------|---------------------|------------------|------------|
-| All Vulnerabilities | All Vulnerabilities Report | `f836d6a4e4d54ac6a9d2967254796373` | xlsx |
+| All Vulnerabilities | All Vulnerabilities Report | `{report-id}` (from standard_reports API) | xlsx |
 | Suppressed Vulnerabilities | Suppressed Vulnerabilities | `1d091564830b44c485a0ddc35ace9ac6` | xlsx |
 | External Scan | External Scan | `01beb6b930744e11b690bb9dc25118fb` | xlsx |
 | Executive Summary | Executive Summary Report | `1cd4f45884264d15bee4173dc58b6a57` | docx |

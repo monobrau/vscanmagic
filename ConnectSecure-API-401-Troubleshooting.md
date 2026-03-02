@@ -32,7 +32,7 @@ The 401 on `/r/` endpoints with a valid auth token points to:
 
 ### 2. Test via Swagger UI
 
-1. Open `https://pod104.myconnectsecure.com/apidocs/` in a browser
+1. Open `https://pod0.myconnectsecure.com/apidocs/` in a browser
 2. Authenticate via `/w/authorize` to obtain a token
 3. Call the companies endpoint (e.g. `/r/company/companies`)
 4. If Swagger returns 401 as well, the issue is on the ConnectSecure side
@@ -47,7 +47,7 @@ Since auth works but data endpoints return 401:
 
 ### 4. Confirm Endpoint Path and Base URL
 
-- Confirm your base URL is correct (e.g. `https://pod104.myconnectsecure.com`)
+- Confirm your base URL is correct (e.g. `https://pod0.myconnectsecure.com`)
 - If you have access to ConnectSecure’s API docs, verify the exact path for the companies endpoint (e.g. `/r/company/companies` vs. another variant)
 
 ## Reference
