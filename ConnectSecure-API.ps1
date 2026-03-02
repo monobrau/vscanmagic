@@ -1028,6 +1028,417 @@ function Get-ConnectSecureAssets {
     return $allData
 }
 
+# --- Company Review (agents, probes, credentials, firewall, scan dates) ---
+# NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first
+# (see CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
+# Endpoints from swagger.yaml
+$script:CompanyReviewEndpoints = @{
+    JobsView                  = '/r/company/jobs_view'
+    CompanyStats              = '/r/company/company_stats'
+    LightweightAssets         = '/r/report_queries/lightweight_assets'
+    Agents                    = '/r/company/agents'
+    Credentials               = '/r/company/credentials'
+    AgentCredentialsMapping   = '/r/company/agent_credentials_mapping'
+    DiscoverySettings         = '/r/company/discovery_settings'
+    DiscoverySettingsReport   = '/r/report_queries/discovery_settings'
+    AgentDiscoveryMapping     = '/r/company/agent_discoverysettings_mapping'
+    AssetFirewallPolicy       = '/r/asset/asset_firewall_policy'
+    Assets                    = '/r/asset/assets'
+    ExternalAssetExternalscan = '/r/report_queries/external_asset_externalscan'
+}
+
+function Get-NetworkBroadcastFromCidr {
+    <#
+    .SYNOPSIS
+    Returns network and broadcast addresses for a CIDR. For /29, usable IPs exclude network, broadcast, and typically gateway.
+    #>
+    param([string]$Cidr)
+    if ([string]::IsNullOrWhiteSpace($Cidr) -or $Cidr -notmatch '^(\d+\.\d+\.\d+\.\d+)/(\d+)$') { return $null }
+    $ip = $Matches[1]; $prefix = [int]$Matches[2]
+    $ipLong = 0
+    foreach ($octet in ($ip -split '\.')) { $ipLong = ($ipLong -shl 8) + [int]$octet }
+    $mask = if ($prefix -ge 32) { 0xFFFFFFFF } else { [uint32]::MaxValue -shl (32 - $prefix) }
+    $networkLong = $ipLong -band $mask
+    $broadcastLong = $networkLong -bor (-bnot $mask -band 0xFFFFFFFF)
+    $netStr = (($networkLong -shr 24) -band 0xFF).ToString() + '.' + (($networkLong -shr 16) -band 0xFF).ToString() + '.' + (($networkLong -shr 8) -band 0xFF).ToString() + '.' + ($networkLong -band 0xFF).ToString()
+    $bcastStr = (($broadcastLong -shr 24) -band 0xFF).ToString() + '.' + (($broadcastLong -shr 16) -band 0xFF).ToString() + '.' + (($broadcastLong -shr 8) -band 0xFF).ToString() + '.' + ($broadcastLong -band 0xFF).ToString()
+    return @{ Network = $netStr; Broadcast = $bcastStr; Prefix = $prefix }
+}
+
+function Test-ExternalSubnetConfig {
+    <#
+    .SYNOPSIS
+    Checks if scan targets include network/broadcast (and optionally gateway). Returns array of issue strings.
+    #>
+    param([string[]]$Targets, [string]$Cidr)
+    $issues = [System.Collections.ArrayList]::new()
+    $nb = Get-NetworkBroadcastFromCidr -Cidr $Cidr
+    switch (-not $nb) { $true { return @() } }
+    foreach ($t in $Targets) {
+        $t = ($t -replace '\s+', '').Trim()
+        switch ([string]::IsNullOrWhiteSpace($t)) { $true { continue } }
+        switch ($t -eq $nb.Network) { $true { [void]$issues.Add("Target includes network address: $t") } }
+        switch ($t -eq $nb.Broadcast) { $true { [void]$issues.Add("Target includes broadcast address: $t") } }
+    }
+    return @($issues)
+}
+
+function Invoke-ConnectSecureCompanyReviewRequest {
+    param([string]$Endpoint, [hashtable]$QueryParams = @{})
+    try {
+        $response = Invoke-ConnectSecureRequest -Endpoint $Endpoint -QueryParameters $QueryParams
+        switch ($response -is [array]) { $true { return @($response) } }
+        $data = $response.data
+        # API returns data as string "Failed to retrieve data from the server...." when condition param causes error
+        switch ($data -is [string] -and $data -match 'Failed|error|Error') { $true { return @() } }
+        switch ($data -is [array]) { $true { return @($data) } }
+        switch ($data -and $data -isnot [string]) { $true { return @(,$data) } }
+        return @()
+    } catch {
+        Write-CSApiLog "Company review endpoint $Endpoint failed: $($_.Exception.Message)" -Level Warning
+        return $null
+    }
+}
+
+function Get-ConnectSecureCompanyStats {
+    param([int]$CompanyId = 0)
+    $qp = if ($CompanyId -gt 0) { @{ condition = "company_id=$CompanyId"; limit = 100; skip = 0 } } else { @{ limit = 1000; skip = 0 } }
+    $data = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.CompanyStats -QueryParams $qp
+    switch ($null -eq $data) { $true { return @{} } }
+    $rows = switch ($data -is [array] -and $data.Count -gt 0) { $true { $data } default { @($data) } }
+    switch (-not $rows -or $rows.Count -eq 0) { $true { return @{} } }
+    $sorted = $rows | Sort-Object -Property @{ Expression = { $_.date }; Descending = $true }, @{ Expression = { $_.ad_last_scan_time }; Descending = $true }
+    return $sorted[0]
+}
+
+function Get-ConnectSecureLightweightAssets {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ company_id = $CompanyId; limit = 5000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.LightweightAssets -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureCompanyAgents {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 5000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.Agents -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureCompanyCredentials {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 2000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.Credentials -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureAgentCredentialsMapping {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 5000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.AgentCredentialsMapping -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureDiscoverySettings {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 500; skip = 0; order_by = 'updated desc' }
+    try {
+        $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.DiscoverySettingsReport -QueryParams $qp
+        if ($null -ne $raw) {
+            $data = if ($raw -is [array]) { @($raw) } else { @(,$raw) }
+            if ($data.Count -gt 0) { return $data }
+        }
+    } catch { }
+    $qp2 = @{ limit = 2000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.DiscoverySettings -QueryParams $qp2
+    if ($null -eq $raw) { return @() }
+    $data = if ($raw -is [array]) { @($raw) } else { @(,$raw) }
+    return @($data | Where-Object { ($_.company_id -eq $CompanyId) -or ($_.companyId -eq $CompanyId) })
+}
+
+function Get-ConnectSecureExternalScanDiscoverySettings {
+    <#
+    .SYNOPSIS
+    Returns external scan discovery_settings for a company. Server-side filtered via condition.
+    Used for Company Review section 3 (External assets).
+    #>
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId and discovery_settings_type='externalscan'"; limit = 500; skip = 0; order_by = 'updated desc' }
+    try {
+        $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.DiscoverySettingsReport -QueryParams $qp
+        if ($null -eq $raw) { return @() }
+        if ($raw -is [array]) { return @($raw) }
+        return @(,$raw)
+    } catch {
+        Write-CSApiLog "Get-ConnectSecureExternalScanDiscoverySettings catch: $($_.Exception.Message)" -Level Warning
+    }
+    return @()
+}
+
+function Get-ConnectSecureAgentDiscoveryMapping {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 5000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.AgentDiscoveryMapping -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureAssetFirewallPolicy {
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $qp = @{ condition = "company_id=$CompanyId"; limit = 2000; skip = 0 }
+    $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.AssetFirewallPolicy -QueryParams $qp
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [array]) { return @($raw) }
+    return @(,$raw)
+}
+
+function Get-ConnectSecureCompanyReviewData {
+    <#
+    .SYNONOPSIS
+    Fetches data for Company Review dialog: agents, probes, assets, company stats.
+    Uses company_stats and assets; extends when swagger endpoints are available.
+    #>
+    param([int]$CompanyId, [string]$CompanyName = '')
+
+    $result = @{
+        CompanyId = $CompanyId
+        CompanyName = $CompanyName
+        AgentCount = 0
+        Agents = @()
+        Probes = @()
+        ProbesWithCredentials = 0
+        ProbesWithNetworks = 0
+        ProbesWithBoth = 0
+        ProbesSubnets = [System.Collections.ArrayList]::new()
+        SubnetIssues = [System.Collections.ArrayList]::new()
+        ScanTargets = [System.Collections.ArrayList]::new()
+        ExternalAssets = [System.Collections.ArrayList]::new()
+        OldestOfflineDays = $null
+        AgentsOffline30PlusDays = 0
+        AgentsOffline30PlusNames = [System.Collections.ArrayList]::new()
+        FirewallActive = $false
+        FirewallType = ''
+        LastInternalScan = $null
+        LastExternalScan = $null
+        QuickWins = [System.Collections.ArrayList]::new()
+    }
+
+    switch ($CompanyId -le 0) { $true { return $result } }
+
+    $cidStr = [string]$CompanyId
+
+    # 1. Lightweight agent count - /r/report_queries/lightweight_assets
+    $lwAssets = Get-ConnectSecureLightweightAssets -CompanyId $CompanyId
+    switch ($lwAssets -is [array]) { $true { $result.AgentCount = $lwAssets.Count } }
+
+    # 2. Agents (for probe check, oldest offline)
+    $agents = Get-ConnectSecureCompanyAgents -CompanyId $CompanyId
+    switch (-not $agents) { $true { $agents = @() } }
+    $result.Agents = @($agents)
+
+    $needFallback = $result.AgentCount -eq 0 -and $agents.Count -gt 0
+    switch ($needFallback) {
+        $true {
+            $lwAgents = $agents | Where-Object { $_.agent_type -and [string]$_.agent_type -match 'lightweight' }
+            $ac = ($lwAgents | Measure-Object).Count
+            $result.AgentCount = switch ($ac -gt 0) { $true { $ac } default { $agents.Count } }
+        }
+    }
+
+    # 3. Probes with credentials and networks
+    $credMappings = Get-ConnectSecureAgentCredentialsMapping -CompanyId $CompanyId
+    $discMappings = Get-ConnectSecureAgentDiscoveryMapping -CompanyId $CompanyId
+    switch (-not $credMappings) { $true { $credMappings = @() } }
+    switch (-not $discMappings) { $true { $discMappings = @() } }
+    $agentIdsWithCreds = @{}
+    foreach ($m in $credMappings) { $aid = $m.agent_id; switch ($null -ne $aid) { $true { $agentIdsWithCreds[[int]$aid] = $true } } }
+    $agentIdsWithNetworks = @{}
+    foreach ($m in $discMappings) { $aid = $m.agent_id; switch ($null -ne $aid) { $true { $agentIdsWithNetworks[[int]$aid] = $true } } }
+    $probesWithBoth = 0
+    foreach ($a in $agents) {
+        $aid = $a.id
+        switch ($null -eq $aid) { $true { continue } }
+        $aidInt = [int]$aid
+        switch ($agentIdsWithCreds[$aidInt] -and $agentIdsWithNetworks[$aidInt]) { $true { $probesWithBoth++ } }
+    }
+    $result.ProbesWithCredentials = ($agentIdsWithCreds.Keys | Measure-Object).Count
+    $result.ProbesWithNetworks = ($agentIdsWithNetworks.Keys | Measure-Object).Count
+    $result.ProbesWithBoth = $probesWithBoth
+
+    # 4. External subnet config - discovery_settings with address (CIDR) and target_ip (external IPs to scan)
+    $discoverySettings = Get-ConnectSecureDiscoverySettings -CompanyId $CompanyId
+    $dsIdToAddr = @{}
+    switch ($discoverySettings) { { $_ } {
+        foreach ($ds in $discoverySettings) {
+            $dsId = $ds.id; switch ($null -ne $dsId) { $true { $dsIdToAddr[[int]$dsId] = $ds.address } }
+            $addr = $ds.address
+            $targets = @()
+            switch ($addr) { { $_ } {
+                $addrStr = ([string]$addr).Trim()
+                switch ($addrStr -match '^(\d+\.\d+\.\d+\.\d+)(/(\d+))?$') {
+                    $true { $targets += $addrStr }
+                    default {
+                        $parts = $addrStr -split '[,\s;]+' | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+(\/\d+)?$' }
+                        foreach ($a in $parts) { $targets += $a.Trim() }
+                    }
+                }
+            } }
+            $tipVal = $ds.target_ip; switch (-not $tipVal) { $true { $tipVal = $ds.target_ips } }
+            switch (-not $tipVal) { $true { $tipVal = $ds.targetIp } }
+            switch ($tipVal) { { $_ } {
+                $tip = $tipVal
+                switch ($tip -is [array]) { $true { foreach ($x in $tip) { $targets += ([string]$x).Trim() } } default { foreach ($x in (([string]$tip) -split '[,\s;]+' | Where-Object { $_ })) { $targets += ([string]$x).Trim() } } }
+            } }
+            foreach ($t in $targets) { $tStr = ([string]$t -replace '\s+', '').Trim(); switch ($tStr) { { $_ } { [void]$result.ScanTargets.Add($tStr) } } }
+            switch ($addr -match '^(\d+\.\d+\.\d+\.\d+)/(\d+)$') { $true {
+                $targetsForValidation = @($addr)
+                switch ($tipVal) { { $_ } {
+                    $tip = $tipVal
+                    switch ($tip -is [array]) { $true { foreach ($x in $tip) { $targetsForValidation += [string]$x } } default { foreach ($x in (([string]$tip) -split '[,\s;]+' | Where-Object { $_ })) { $targetsForValidation += $x } } }
+                } }
+                $issues = Test-ExternalSubnetConfig -Targets $targetsForValidation -Cidr $addr
+                switch ($issues) { { $_ } { foreach ($i in $issues) { [void]$result.SubnetIssues.Add($i) } } }
+            } }
+        }
+    } }
+    foreach ($m in $discMappings) {
+        $dsId = $m.discovery_settings_id; switch (-not $dsId) { $true { $dsId = $m.discoverysettings_id } }
+        switch ($null -ne $dsId -and $dsIdToAddr.ContainsKey([int]$dsId)) { $true {
+            $a = $dsIdToAddr[[int]$dsId]
+            switch ($a -and -not $result.ProbesSubnets.Contains($a)) { $true { [void]$result.ProbesSubnets.Add($a) } }
+        } }
+    }
+
+    # 4b. External assets (external scan endpoints) - from discovery_settings externalscan
+    $extScanDs = @(Get-ConnectSecureExternalScanDiscoverySettings -CompanyId $CompanyId)
+    switch ($extScanDs.Count -eq 0) { $true {
+        $allDs = Get-ConnectSecureDiscoverySettings -CompanyId $CompanyId
+        $extScanDs = @($allDs | Where-Object {
+            $t = $_.discovery_settings_type; switch (-not $t) { $true { $t = $_.type } }
+            $t -and [string]$t -match 'external|externalscan'
+        })
+    } }
+    foreach ($ds in $extScanDs) {
+        $dsName = $ds.discovery_settings_name; switch (-not $dsName) { $true { $dsName = $ds.name } }
+        $dsAddr = $ds.address; switch (-not $dsAddr) { $true { $dsAddr = $ds.target_ip } }
+        switch (-not $dsAddr) { $true { $dsAddr = $ds.targetIp } }
+        switch ($dsAddr -is [array]) { $true { $dsAddr = ($dsAddr | Where-Object { $_ }) -join ', ' } }
+        switch ($dsAddr) { { $_ } {
+            $addrStr = ([string]$dsAddr).Trim()
+            [void]$result.ExternalAssets.Add(@{ Name = [string]$dsName; Address = $addrStr })
+            $parts = $addrStr -split '[,\s;]+' | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+(-|\/|$)' }
+            foreach ($p in $parts) { $t = ([string]$p -replace '\s+', '').Trim(); switch ($t) { { $_ } { [void]$result.ScanTargets.Add($t) } } }
+        } }
+    }
+
+    # 5. Agents offline 30+ days - use lightweight_assets (same source as portal) for host_name and last_ping_time
+    $now = Get-Date
+    $oldestDays = $null
+    $offline30Plus = 0
+    $offlineSource = switch ($lwAssets -is [array] -and $lwAssets.Count -gt 0) { $true { $lwAssets } default { $agents } }
+    foreach ($a in $offlineSource) {
+        $lp = $a.last_ping_time; switch (-not $lp) { $true { $lp = $a.lastPingTime } }
+        switch (-not $lp) { $true { $lp = $a.'Last Ping Time' } }
+        switch (-not $lp) { $true { continue } }
+        try {
+            $dt = [DateTime]::Parse($lp)
+            $days = ($now - $dt).TotalDays
+            switch ($null -eq $oldestDays -or $days -gt $oldestDays) { $true { $oldestDays = [int][Math]::Floor($days) } }
+            switch ($days -ge 30) {
+                $true {
+                    $offline30Plus++
+                    $an = $a.host_name; switch (-not $an) { $true { $an = $a.'Host Name' } }
+                    switch (-not $an) { $true { $an = $a.agent_name } }
+                    switch (-not $an) { $true { $an = $a.hostname } }
+                    switch (-not $an) { $true { $an = $a.name } }
+                    switch (-not $an) { $true { $an = $a.computer_name } }
+                    switch ($an) { { $_ } { [void]$result.AgentsOffline30PlusNames.Add([string]$an) } }
+                }
+            }
+        } catch { }
+    }
+    $result.OldestOfflineDays = $oldestDays
+    $result.AgentsOffline30PlusDays = $offline30Plus
+
+    # 6. Firewall - asset_firewall_policy
+    $fwPolicies = Get-ConnectSecureAssetFirewallPolicy -CompanyId $CompanyId
+    $hasFw = $fwPolicies -and $fwPolicies.Count -gt 0
+    switch ($hasFw) { $true {
+        $result.FirewallActive = $true
+        $types = $fwPolicies | ForEach-Object { $_.policy_type } | Where-Object { $_ } | Select-Object -Unique
+        $result.FirewallType = ($types -join ', ')
+    } }
+
+    # 7. Last scan dates - internal from probe agents; external from jobs_view (server-side, no assets fetch)
+    $lastInternal = $null
+    $probeAgentIds = @{}
+    foreach ($aid in $agentIdsWithCreds.Keys) { switch ($agentIdsWithNetworks[$aid]) { $true { $probeAgentIds[$aid] = $true } } }
+    foreach ($a in $agents) {
+        $aid = $a.id; switch ($null -eq $aid) { $true { continue } }
+        switch (-not $probeAgentIds[[int]$aid]) { $true { continue } }
+        $lst = $a.last_scanned_time; switch (-not $lst) { $true { $lst = $a.lastScannedTime } }
+        switch ($lst) { { $_ } {
+            try { $dt = [DateTime]::Parse($lst); switch ($null -eq $lastInternal -or $dt -gt $lastInternal) { $true { $lastInternal = $dt } } } catch { }
+        } }
+    }
+    $result.LastInternalScan = switch ($lastInternal) { { $_ } { $lastInternal.ToLocalTime().ToString('yyyy-MM-dd HH:mm') } default { $null } }
+    $stats = Get-ConnectSecureCompanyStats -CompanyId $CompanyId
+    $hasStats = $stats -and $stats.PSObject.Properties.Count -gt 0
+    switch (-not $result.LastInternalScan -and $hasStats) { $true {
+        $result.LastInternalScan = $stats.ad_last_scan_time
+        switch (-not $result.LastInternalScan) { $true { $result.LastInternalScan = $stats.date } }
+    } }
+    $lastExternal = $null
+    $jobsView = @()
+    try {
+        $qp = @{ condition = "company_id=$CompanyId and type='External Scan'"; limit = 50; skip = 0; order_by = 'updated desc' }
+        $jobsData = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.JobsView -QueryParams $qp
+        $jobsView = if ($null -eq $jobsData) { @() } elseif ($jobsData -is [array]) { @($jobsData) } else { @(,$jobsData) }
+    } catch { }
+    foreach ($j in $jobsView) {
+        $u = $j.updated; switch (-not $u) { $true { $u = $j.created } }
+        switch ($u) { { $_ } {
+            try { $dt = [DateTime]::Parse($u); switch ($null -eq $lastExternal -or $dt -gt $lastExternal) { $true { $lastExternal = $dt } } } catch { }
+        } }
+    }
+    $result.LastExternalScan = switch ($lastExternal) { { $_ } { $lastExternal.ToLocalTime().ToString('yyyy-MM-dd HH:mm') } default { $null } }
+    switch (-not $result.LastExternalScan -and $hasStats) { $true {
+        $result.LastExternalScan = $stats.external_last_scan_time
+        switch (-not $result.LastExternalScan) { $true { $result.LastExternalScan = $stats.date } }
+        switch (-not $result.LastExternalScan) { $true { $result.LastExternalScan = $stats.updated } }
+        switch ($result.LastExternalScan) { { $_ } {
+            try { $dt = [DateTime]::Parse($result.LastExternalScan); $result.LastExternalScan = $dt.ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { }
+        } }
+    } }
+
+    # 8. Quick wins
+    switch ($result.AgentCount -eq 0) { $true { [void]$result.QuickWins.Add('Add lightweight agents to enable internal scanning') } }
+    switch ($result.ProbesWithBoth -eq 0) { $true { [void]$result.QuickWins.Add('Map credentials and discovery networks to at least one probe agent') } }
+    switch ($result.SubnetIssues.Count -gt 0) { $true { [void]$result.QuickWins.Add('Exclude network and broadcast addresses from external scan targets') } }
+    switch ($result.AgentsOffline30PlusDays -gt 0) { $true { [void]$result.QuickWins.Add('Investigate agents offline more than 30 days; reinstall or remove') } }
+    switch (-not $result.FirewallActive) { $true { [void]$result.QuickWins.Add('Configure firewall integration for visibility') } }
+    switch (-not $result.LastInternalScan -and -not $result.LastExternalScan) { $true { [void]$result.QuickWins.Add('Run internal and external scans to populate vulnerability data') } }
+
+    return $result
+}
+
 function Get-ConnectSecureCompanyAssetIds {
     <#
     .SYNOPSIS
