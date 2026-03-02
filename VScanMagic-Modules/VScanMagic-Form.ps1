@@ -1134,6 +1134,10 @@ function Show-VScanMagicGUI {
                 Update-Progress -Status "Generating Excel Report..." -Show $true
                 $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
 
+                # Allow previous Excel instance (from Get-VulnerabilityData) to fully release before starting report generation
+                [System.GC]::Collect()
+                [System.GC]::WaitForPendingFinalizers()
+
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
                 }
@@ -1379,6 +1383,9 @@ function Show-VScanMagicGUI {
             if ($script:OutputExcel) {
                 Update-Progress -Status "Generating Excel Report..." -Show $true
                 $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
+
+                [System.GC]::Collect()
+                [System.GC]::WaitForPendingFinalizers()
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath

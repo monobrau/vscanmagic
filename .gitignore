@@ -77,6 +77,10 @@ VScanMagic.zip
 VScanMagic-4.0.1.zip
 VScanMagic-4.0.2.zip
 
+# Portal API capture outputs (may contain API response data)
+portal-probe-nmap-capture.json
+portal-company-review-capture.json
+
 # API Configuration files (may contain credentials)
 ConnectSecure-Config.ps1
 *Config.ps1

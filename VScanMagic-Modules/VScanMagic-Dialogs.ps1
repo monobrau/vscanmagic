@@ -899,7 +899,7 @@ function New-TimeEstimate {
 function Format-TicketInstructionSpacing {
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
-    $t = $Text -replace '[ \t]+', ' ' -replace '(\r?\n){2,}', "`r`n"
+    $t = $Text -replace '[ \t]+', ' ' -replace '(\r?\n){2,}', "`r`n`r`n"
     return $t.Trim()
 }
 
@@ -1044,7 +1044,7 @@ function New-TicketInstructions {
         [void]$sb.AppendLine("END OF TICKET INSTRUCTIONS")
         [void]$sb.AppendLine("=".PadRight(100, '='))
 
-        $output = Normalize-TicketInstructionSpacing -Text $sb.ToString()
+        $output = Format-TicketInstructionSpacing -Text $sb.ToString()
         $output | Out-File -FilePath $OutputPath -Encoding UTF8
 
     } catch {
@@ -2607,14 +2607,14 @@ function Show-CompanyReviewDialog {
 
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Company Review - $CompanyName"
-    $dlg.Size = New-Object System.Drawing.Size(620, 560)
+    $dlg.Size = New-Object System.Drawing.Size(620, 780)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
 
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Location = New-Object System.Drawing.Point(0, 0)
-    $panel.Size = New-Object System.Drawing.Size(600, 490)
+    $panel.Size = New-Object System.Drawing.Size(600, 690)
     $panel.AutoScroll = $true
     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dlg.Controls.Add($panel)
@@ -2678,14 +2678,14 @@ function Show-CompanyReviewDialog {
 
     $txtSubnets = New-Object System.Windows.Forms.TextBox
     $txtSubnets.Location = New-Object System.Drawing.Point(12, $y)
-    $txtSubnets.Size = New-Object System.Drawing.Size(550, 52)
+    $txtSubnets.Size = New-Object System.Drawing.Size(550, 150)
     $txtSubnets.Multiline = $true
     $txtSubnets.ReadOnly = $true
-    $txtSubnets.ScrollBars = "Vertical"
+    $txtSubnets.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
     $txtSubnets.Text = $subnetText
     $txtSubnets.Font = New-Object System.Drawing.Font("Consolas", 8.5)
     $panel.Controls.Add($txtSubnets)
-    $y += 58
+    $y += 156
 
     # --- External Assets (name + address) ---
     $lblExt = New-Object System.Windows.Forms.Label
@@ -2708,14 +2708,51 @@ function Show-CompanyReviewDialog {
 
     $txtExt = New-Object System.Windows.Forms.TextBox
     $txtExt.Location = New-Object System.Drawing.Point(12, $y)
-    $txtExt.Size = New-Object System.Drawing.Size(550, 52)
+    $txtExt.Size = New-Object System.Drawing.Size(550, 150)
     $txtExt.Multiline = $true
     $txtExt.ReadOnly = $true
-    $txtExt.ScrollBars = "Vertical"
+    $txtExt.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
     $txtExt.Text = $extText
     $txtExt.Font = New-Object System.Drawing.Font("Consolas", 8.5)
     $panel.Controls.Add($txtExt)
-    $y += 58
+    $y += 156
+
+    # --- Probe Agent(s) Nmap Interface (IP / Port) ---
+    $lblProbeNmap = New-Object System.Windows.Forms.Label
+    $lblProbeNmap.Location = New-Object System.Drawing.Point(12, $y)
+    $lblProbeNmap.Size = New-Object System.Drawing.Size(550, 18)
+    $lblProbeNmap.Text = "Probe Agent(s) Nmap Interface (IP / Port):"
+    $lblProbeNmap.Font = $fontB
+    $panel.Controls.Add($lblProbeNmap)
+    $y += 20
+
+    $probeNmapLines = @()
+    if ($data.ProbeAgentsNmapInfo -and $data.ProbeAgentsNmapInfo.Count -gt 0) {
+        foreach ($p in $data.ProbeAgentsNmapInfo) {
+            $line = "$($p.HostName) - IP: $($p.IP)"
+            if ($p.NmapInterface -and $p.NmapInterface -ne '(not set)') {
+                $line += " | Nmap Interface: $($p.NmapInterface)"
+            } else {
+                $line += " | Nmap Interface: (not set)"
+            }
+            if ($p.Port) {
+                $line += " | Port: $($p.Port)"
+            }
+            $probeNmapLines += $line
+        }
+    }
+    $probeNmapText = if ($probeNmapLines.Count -gt 0) { $probeNmapLines -join "`r`n" } else { "(none - no probe agents)" }
+
+    $txtProbeNmap = New-Object System.Windows.Forms.TextBox
+    $txtProbeNmap.Location = New-Object System.Drawing.Point(12, $y)
+    $txtProbeNmap.Size = New-Object System.Drawing.Size(550, 80)
+    $txtProbeNmap.Multiline = $true
+    $txtProbeNmap.ReadOnly = $true
+    $txtProbeNmap.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+    $txtProbeNmap.Text = $probeNmapText
+    $txtProbeNmap.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+    $panel.Controls.Add($txtProbeNmap)
+    $y += 86
 
     # --- Subnet Issues ---
     if ($data.SubnetIssues -and $data.SubnetIssues.Count -gt 0) {
@@ -2787,7 +2824,8 @@ function Show-CompanyReviewDialog {
     }
 
     $btnClose = New-Object System.Windows.Forms.Button
-    $btnClose.Location = New-Object System.Drawing.Point -ArgumentList 250, 500
+    $btnClose.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom
+    $btnClose.Location = New-Object System.Drawing.Point(250, 698)
     $btnClose.Size = New-Object System.Drawing.Size(100, 28)
     $btnClose.Text = "Close"
     $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK

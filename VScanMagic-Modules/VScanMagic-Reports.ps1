@@ -732,6 +732,22 @@ function New-ExcelReport {
     $pivotSheet = $null
 
     try {
+        # Ensure Desktop folder exists (Excel COM can fail with "Unable to get the Open property"
+        # when running in contexts without proper profile - e.g. RDP, packaged exe, scheduled task)
+        $desktopPath = if ([Environment]::Is64BitProcess) {
+            "C:\Windows\System32\config\systemprofile\Desktop"
+        } else {
+            "C:\Windows\SysWOW64\config\systemprofile\Desktop"
+        }
+        if (-not (Test-Path $desktopPath)) {
+            try {
+                New-Item -ItemType Directory -Path $desktopPath -Force -ErrorAction Stop | Out-Null
+                Write-Log "Created Excel automation profile folder: $desktopPath" -Level Info
+            } catch {
+                Write-Log "Could not create profile Desktop (non-fatal): $($_.Exception.Message)" -Level Warning
+            }
+        }
+
         # Create Excel COM Object
         Write-Log "Creating Excel COM object..." -Level Info
         $excel = New-Object -ComObject Excel.Application
@@ -744,11 +760,46 @@ function New-ExcelReport {
         $excel.ScreenUpdating = $false
 
         # Open Input Workbook
+        # Workaround for OneDrive/sync folder locks - copy to temp before opening.
+        # Excel COM can fail with "Unable to get the Open property" on cloud-synced paths
+        # or when exe bitness (32/64) doesn't match Excel. Build with -x64 to match Office.
+        $pathToOpen = $InputPath
+        $tempPath = $null  # Used by OneDrive workaround and finally cleanup
+        if ($InputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
+            $tempDir = [System.IO.Path]::GetTempPath()
+            $baseName = [System.IO.Path]::GetFileName($InputPath)
+            if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
+            $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
+            $pathToOpen = $tempPath
+            Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
+        }
+
+        # Ensure canonical path (helps Excel COM with long/UNC paths)
+        if (Test-Path -LiteralPath $pathToOpen) {
+            $pathToOpen = [System.IO.Path]::GetFullPath($pathToOpen)
+        }
+
         Write-Log "Opening input workbook..." -Level Info
-        if (Test-FileLocked $InputPath) {
+        if (Test-FileLocked $pathToOpen) {
+            if ($tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
             throw "The file is in use by another process. Please close it and try again."
         }
-        $workbook = $excel.Workbooks.Open($InputPath)
+        # Use single-arg Open to avoid COM parameter binding issues; ReadOnly via optional params can trigger "Unable to get the Open property"
+        try {
+            $workbook = $excel.Workbooks.Open($pathToOpen)
+        } catch {
+            if (-not $tempPath) {
+                $tempDir = [System.IO.Path]::GetTempPath()
+                $baseName = [System.IO.Path]::GetFileName($InputPath)
+                if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
+                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
+                $pathToOpen = [System.IO.Path]::GetFullPath($tempPath)
+                Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
+                $workbook = $excel.Workbooks.Open($pathToOpen)
+            } else { throw }
+        }
         if ($null -eq $workbook) {
             throw "Failed to open workbook. File may be corrupted or in use."
         }
@@ -1273,6 +1324,10 @@ function New-ExcelReport {
         Write-Log "Excel report generation failed: $($_.Exception.Message)" -Level Error
         throw $_
     } finally {
+        # Cleanup temp copy if created for OneDrive workaround
+        if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
+            try { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue } catch {}
+        }
         # Cleanup COM objects
         Clear-ComObject $pivotSheet
         Clear-ComObject $sourceDataSheet
