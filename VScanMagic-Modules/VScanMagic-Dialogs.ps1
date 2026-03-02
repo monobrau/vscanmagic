@@ -248,11 +248,14 @@ function Show-SetClientTypesDialog {
     $lbl.Size = New-Object System.Drawing.Size(360, 36)
     $lbl.Text = "Set RMIT+ for each client before processing. RMIT+ clients have ticketing and remediation coverage under the agreement."
     $lbl.AutoSize = $false
-    $lbl.MaximumSize = New-Object System.Drawing.Size(360, 0)
+    $lbl.MaximumSize = New-Object System.Drawing.Size(360, 50)
     $form.Controls.Add($lbl)
+    $panelDgv = New-Object System.Windows.Forms.Panel
+    $panelDgv.Location = New-Object System.Drawing.Point(20, 55)
+    $panelDgv.Size = New-Object System.Drawing.Size(360, 220)
+    $panelDgv.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dgv = New-Object System.Windows.Forms.DataGridView
-    $dgv.Location = New-Object System.Drawing.Point(20, 55)
-    $dgv.Size = New-Object System.Drawing.Size(360, 220)
+    $dgv.Dock = [System.Windows.Forms.DockStyle]::Fill
     $dgv.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
     $dgv.AllowUserToAddRows = $false
     $dgv.AllowUserToDeleteRows = $false
@@ -276,7 +279,8 @@ function Show-SetClientTypesDialog {
         $row = $dgv.Rows.Add($clientName, $defaultVal)
         $dgv.Rows[$row].Tag = $c
     }
-    $form.Controls.Add($dgv)
+    $panelDgv.Controls.Add($dgv)
+    $form.Controls.Add($panelDgv)
     $btnSetAll = New-Object System.Windows.Forms.Button
     $btnSetAll.Location = New-Object System.Drawing.Point(20, 285)
     $btnSetAll.Size = New-Object System.Drawing.Size(80, 26)
