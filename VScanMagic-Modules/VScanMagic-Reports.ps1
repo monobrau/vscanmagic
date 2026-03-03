@@ -537,39 +537,43 @@ function New-WordReport {
 
             $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
 
-            # Add modifier text based on checkbox states (only if time estimates are available)
-            if ($null -ne $timeEstimate) {
+            # Add modifier text or product-type suffix (same logic as Ticket Instructions)
+            if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
-                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
-                $thirdParty = if ($IsRMITPlus) { $timeEstimate.ThirdParty } else { $false }
+                $ticketGenerated = $timeEstimate.TicketGenerated
+                $thirdParty = $timeEstimate.ThirdParty
+                $autoTicketGenerated = $thirdParty -and $afterHours
+                $isTicketGenerated = $ticketGenerated -or $autoTicketGenerated
 
-                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $ticketGenerated -ThirdParty $thirdParty
+                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
                 if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
                     $title += $modifierText
                 }
-            }
-
-            # Add End of Life note for Windows 10 (only if no checkbox suffix was added)
-            if ($item.Product -like "*Windows 10*" -and $null -eq $timeEstimate) {
-                $title += " - Windows 10 is End of Life"
-            }
-
-            # Add RMIT+ note for Microsoft applications (not OS) - only for RMIT+ clients (only if no checkbox suffix was added)
-            $isMicrosoftApp = Test-IsMicrosoftApplication -ProductName $item.Product
-            if ($isMicrosoftApp -and $IsRMITPlus -and $null -eq $timeEstimate) {
-                $title += " - RMIT+ ticketed"
-            }
-
-            # Add after-hours ticket note for VMware products - only for RMIT+ clients (only if no checkbox suffix was added)
-            $isVMwareProduct = Test-IsVMwareProduct -ProductName $item.Product
-            if ($isVMwareProduct -and $IsRMITPlus -and $null -eq $timeEstimate) {
-                $title += " - RMIT+ after-hours ticket created if we maintain this"
-            }
-
-            # Add auto-update note for Chrome/Firefox
-            $isAutoUpdating = Test-IsAutoUpdatingSoftware -ProductName $item.Product
-            if ($isAutoUpdating) {
-                $title += " - This software updates automatically"
+            } else {
+                # Product-type suffix when no modifier (same chain as ticket subject)
+                if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
+                    $title += " - End of Support Migration Required"
+                } elseif ($item.Product -like "*Windows 10*") {
+                    $title += " - Windows 10 is End of Life"
+                } elseif ($item.Product -like "*Windows 11*") {
+                    $title += " - Updates Required"
+                } elseif ($item.Product -like "*Windows Server*") {
+                    $title += " - Updates Required"
+                } elseif ($item.Product -like "*Windows*") {
+                    $title += " - Patch Management Required"
+                } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
+                    $title += " - Firmware Update Required"
+                } elseif ($item.Product -like "*Microsoft Teams*") {
+                    $title += " - Application Update Required"
+                } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
+                    $title += " - RMIT+ ticketed"
+                } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
+                    $title += " - RMIT+ after-hours ticket created if we maintain this"
+                } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
+                    $title += " - This software updates automatically"
+                } else {
+                    $title += " - Update Required"
+                }
             }
 
             $selection.TypeText($title)
@@ -604,18 +608,15 @@ function New-WordReport {
             $selection.TypeParagraph()
             $selection.Font.Bold = $false
 
-            # Display systems as comma-separated list with indent
-            # Use hostname or IP as identifier; format as "hostname (username)" if username present
+            # Display systems as comma-separated list with indent (same uniqueness as Ticket Instructions: HostName, IP, Username)
             $selection.ParagraphFormat.LeftIndent = 36
-            $systemsList = ($item.AffectedSystems | ForEach-Object {
-                $display = if ($_.HostName) { $_.HostName } else { $_.IP }
-                $username = $_.Username
-                if (-not [string]::IsNullOrWhiteSpace($username)) {
-                    "$display ($username)"
-                } else {
-                    $display
-                }
-            } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ", "
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            $systemsList = ($uniqueSystems | ForEach-Object {
+                $systemLine = if ($_.HostName) { $_.HostName } else { $_.IP }
+                if (-not [string]::IsNullOrWhiteSpace($_.Username)) { $systemLine += " ($($_.Username))" }
+                if (-not [string]::IsNullOrWhiteSpace($_.IP)) { $systemLine += " - $($_.IP)" }
+                $systemLine
+            } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
             $selection.TypeText($systemsList)
             $selection.TypeParagraph()
             $selection.ParagraphFormat.LeftIndent = 0
@@ -1388,6 +1389,7 @@ function New-EmailTemplate {
         }
 
         $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
+        if ([string]::IsNullOrWhiteSpace($topNLabel)) { $topNLabel = "10" }
         $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
         $bodyTemplate = $script:Templates.EmailTemplate.Body
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel

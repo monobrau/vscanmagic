@@ -128,6 +128,7 @@ $script:UserSettings = @{
     SettingsDirectory = ""  # Empty = use default (LOCALAPPDATA\VScanMagic)
     LastOutputDirectory = ""  # Last-used output directory for reports
     ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
+    HostnameReviewWindows11Threshold = 350  # VulnCount threshold: below = unselected, above = selected for Windows 11 O/S tabs
     # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
     AIApiKeyCopilot = ""
     AIApiKeyChatGPT = ""
@@ -288,6 +289,7 @@ function Load-UserSettings {
         if ($json.SettingsDirectory) { $script:UserSettings.SettingsDirectory = $json.SettingsDirectory }
         if ($json.LastOutputDirectory -and (Test-Path $json.LastOutputDirectory)) { $script:UserSettings.LastOutputDirectory = $json.LastOutputDirectory }
         if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
+        if ($null -ne $json.HostnameReviewWindows11Threshold -and $json.HostnameReviewWindows11Threshold -ge 0) { $script:UserSettings.HostnameReviewWindows11Threshold = [int]$json.HostnameReviewWindows11Threshold } else { $script:UserSettings.HostnameReviewWindows11Threshold = 350 }
         if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
         if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
         if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }

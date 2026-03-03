@@ -1214,7 +1214,7 @@ function Show-VScanMagicGUI {
                             Product = $prod
                             TimeEstimate = 0.0
                             AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
                             TicketGenerated = $false
                         }
                     }
@@ -1458,7 +1458,7 @@ function Show-VScanMagicGUI {
                             Product = $prod
                             TimeEstimate = 0.0
                             AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { if (Test-IsFirstPartyVendor -ProductName $prod) { $false } else { Test-IsCoveredSoftware -ProductName $prod } } else { $false }
+                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
                             TicketGenerated = $false
                         }
                     }

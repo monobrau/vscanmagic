@@ -248,11 +248,14 @@ function Show-SetClientTypesDialog {
     $lbl.Size = New-Object System.Drawing.Size(360, 36)
     $lbl.Text = "Set RMIT+ for each client before processing. RMIT+ clients have ticketing and remediation coverage under the agreement."
     $lbl.AutoSize = $false
-    $lbl.MaximumSize = New-Object System.Drawing.Size(360, 0)
+    $lbl.MaximumSize = New-Object System.Drawing.Size(360, 50)
     $form.Controls.Add($lbl)
+    $panelDgv = New-Object System.Windows.Forms.Panel
+    $panelDgv.Location = New-Object System.Drawing.Point(20, 55)
+    $panelDgv.Size = New-Object System.Drawing.Size(360, 220)
+    $panelDgv.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $dgv = New-Object System.Windows.Forms.DataGridView
-    $dgv.Location = New-Object System.Drawing.Point(20, 55)
-    $dgv.Size = New-Object System.Drawing.Size(360, 220)
+    $dgv.Dock = [System.Windows.Forms.DockStyle]::Fill
     $dgv.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::Fill
     $dgv.AllowUserToAddRows = $false
     $dgv.AllowUserToDeleteRows = $false
@@ -276,6 +279,8 @@ function Show-SetClientTypesDialog {
         $row = $dgv.Rows.Add($clientName, $defaultVal)
         $dgv.Rows[$row].Tag = $c
     }
+    $panelDgv.Controls.Add($dgv)
+    $form.Controls.Add($panelDgv)
     $btnSetAll = New-Object System.Windows.Forms.Button
     $btnSetAll.Location = New-Object System.Drawing.Point(20, 285)
     $btnSetAll.Size = New-Object System.Drawing.Size(80, 26)
@@ -411,10 +416,14 @@ function Show-HostnameReviewDialog {
         $dataGridView.Columns.Add($colVulnCount) | Out-Null
 
         # Populate grid with hostnames (or IP fallback), sorted by vulnerability count descending
+        # For Windows 11 O/S: below threshold = unselected, above = selected
+        $threshold = if ($null -ne $script:UserSettings.HostnameReviewWindows11Threshold) { [int]$script:UserSettings.HostnameReviewWindows11Threshold } else { 350 }
+        $isWindows11 = $item.Product -like "*Windows 11*"
         $sortedSystems = $item.AffectedSystems | Sort-Object -Property VulnCount -Descending
         foreach ($sys in $sortedSystems) {
             $row = $dataGridView.Rows.Add()
-            $dataGridView.Rows[$row].Cells["Include"].Value = $true  # Default checked
+            $defaultInclude = if ($isWindows11) { $sys.VulnCount -ge $threshold } else { $true }
+            $dataGridView.Rows[$row].Cells["Include"].Value = $defaultInclude
             $dataGridView.Rows[$row].Cells["Hostname"].Value = if ($sys.HostName) { $sys.HostName } else { $sys.IP }
             $dataGridView.Rows[$row].Cells["IP"].Value = $sys.IP
             $dataGridView.Rows[$row].Cells["Username"].Value = $sys.Username
@@ -662,8 +671,8 @@ function Show-TimeEstimateEntryDialog {
         $dataGridView.Rows[$row].Cells["TimeEstimate"].Value = ""
         $dataGridView.Rows[$row].Cells["AfterHours"].Value = $false
         if ($IsRMITPlus) {
-            # Default 3rd party status: first-party vendors (SonicWall, Fortinet, Microsoft, HP, Duo) are never 3rd party
-            $isThirdPartyDefault = if (Test-IsFirstPartyVendor -ProductName $item.Product) { $false } else { Test-IsCoveredSoftware -ProductName $item.Product }
+            # Default 3rd party status: first-party vendors (SonicWall, Fortinet, Microsoft, HP, Duo) are covered; all others are 3rd party
+            $isThirdPartyDefault = -not (Test-IsFirstPartyVendor -ProductName $item.Product)
             $dataGridView.Rows[$row].Cells["ThirdParty"].Value = $isThirdPartyDefault
             $dataGridView.Rows[$row].Cells["TicketGenerated"].Value = $false
         }
@@ -949,6 +958,8 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - End of Support Migration Required"
             } elseif ($item.Product -like "*Windows 10*") {
                 $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
+            } elseif ($item.Product -like "*Windows 11*") {
+                $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ($item.Product -like "*Windows Server*") {
                 $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ($item.Product -like "*Windows*") {
@@ -967,12 +978,16 @@ function New-TicketInstructions {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
 
-            # Prepend "After Hours - " if after hours AND ticket generated
-            if ($null -ne $timeEstimate) {
+            # Append modifier text (3rd party, after hours, ticket generated) - same logic as Word report
+            if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
-                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
-                if ($afterHours -and $ticketGenerated) {
-                    $ticketSubject = "After Hours - " + $ticketSubject
+                $ticketGenerated = $timeEstimate.TicketGenerated
+                $thirdParty = $timeEstimate.ThirdParty
+                $autoTicketGenerated = $thirdParty -and $afterHours
+                $isTicketGenerated = $ticketGenerated -or $autoTicketGenerated
+                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
+                if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
+                    $ticketSubject += $modifierText
                 }
             }
 
@@ -1095,6 +1110,8 @@ function New-TicketInstructionsHtml {
                 $ticketSubject += "$($item.Product) - End of Support Migration Required"
             } elseif ($item.Product -like "*Windows 10*") {
                 $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
+            } elseif ($item.Product -like "*Windows 11*") {
+                $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ($item.Product -like "*Windows Server*") {
                 $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ($item.Product -like "*Windows*") {
@@ -1112,16 +1129,22 @@ function New-TicketInstructionsHtml {
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
-            if ($null -ne $timeEstimate) {
+            # Append modifier text (3rd party, after hours, ticket generated) - same logic as Word report
+            if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
-                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
-                if ($afterHours -and $ticketGenerated) {
-                    $ticketSubject = "After Hours - " + $ticketSubject
+                $ticketGenerated = $timeEstimate.TicketGenerated
+                $thirdParty = $timeEstimate.ThirdParty
+                $autoTicketGenerated = $thirdParty -and $afterHours
+                $isTicketGenerated = $ticketGenerated -or $autoTicketGenerated
+                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
+                if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
+                    $ticketSubject += $modifierText
                 }
             }
 
             $productDisplay = & $escapeHtml $item.Product
-            $isThirdParty = -not (Test-IsFirstPartyVendor -ProductName $item.Product)
+            # Only color red when 3rd party checkbox is explicitly checked (no product-based fallback)
+            $isThirdParty = ($null -ne $timeEstimate -and $IsRMITPlus -and $timeEstimate.ThirdParty)
             if ($isThirdParty) {
                 $productDisplay = "<span class=`"third-party`">$productDisplay</span>"
             }
@@ -1500,23 +1523,25 @@ function New-TicketNotes {
     } elseif ([string]::IsNullOrWhiteSpace($FilterTopN)) {
         $FilterTopN = $script:FilterTopN
     }
-    $topNLabel = if ($FilterTopN -eq "All") { "top" } elseif ($FilterTopN -eq "10") { "top ten" } elseif (-not [string]::IsNullOrWhiteSpace($FilterTopN)) { "top $FilterTopN" } else { "top ten" }
+    if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $FilterTopN = "10" }
+    $topNLabel = if ($FilterTopN -eq "All") { "Top" } elseif ($FilterTopN -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($FilterTopN)) { "Top $FilterTopN" } else { "Top Ten" }
     $reportStepLine = "Produced $topNLabel vulnerabilities docx report"
 
     if ($null -eq $script:Templates) { Load-Templates }
 
     $stepsBeforeTickets = $script:Templates.TicketNotes.StepsBeforeTickets -replace '\{ReportStepLine\}', $reportStepLine
 
-    # Collect ticket creation lines for vulnerabilities with tickets generated
+    # Collect ticket creation lines for vulnerabilities with tickets generated (incl. auto: 3rd party + after hours)
     $ticketLines = @()
     if ($null -ne $Top10Data -and $null -ne $TimeEstimates -and $TimeEstimates.Count -gt 0) {
         $timeByProduct = @{}
         foreach ($te in $TimeEstimates) { if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeByProduct[$te.Product] = $te } }
         foreach ($item in $Top10Data) {
             $timeEstimate = if ($timeByProduct.ContainsKey($item.Product)) { $timeByProduct[$item.Product] } else { $null }
-            if ($null -ne $timeEstimate) {
-                $ticketGenerated = if ($IsRMITPlus) { $timeEstimate.TicketGenerated } else { $false }
-                if ($ticketGenerated) {
+            if ($null -ne $timeEstimate -and $IsRMITPlus) {
+                $autoTicketGenerated = $timeEstimate.ThirdParty -and $timeEstimate.AfterHours
+                $isTicketGenerated = $timeEstimate.TicketGenerated -or $autoTicketGenerated
+                if ($isTicketGenerated) {
                     $ticketLines += "- Ticket created for $($item.Product)"
                 }
             }
@@ -2259,7 +2284,7 @@ function Show-FiltersDialog {
 function Show-OutputOptionsDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Output Options"
-    $dlg.Size = New-Object System.Drawing.Size(420, 250)
+    $dlg.Size = New-Object System.Drawing.Size(420, 300)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2300,8 +2325,21 @@ function Show-OutputOptionsDialog {
     $chkTime.Checked = $script:OutputTimeEstimate
     $dlg.Controls.Add($chkTime)
 
+    $lblWin11Thresh = New-Object System.Windows.Forms.Label
+    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 155)
+    $lblWin11Thresh.Size = New-Object System.Drawing.Size(280, 20)
+    $lblWin11Thresh.Text = "Hostname Review - Windows 11 O/S vuln threshold (below = unselected):"
+    $dlg.Controls.Add($lblWin11Thresh)
+    $numWin11Thresh = New-Object System.Windows.Forms.NumericUpDown
+    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 153)
+    $numWin11Thresh.Size = New-Object System.Drawing.Size(80, 22)
+    $numWin11Thresh.Minimum = 0
+    $numWin11Thresh.Maximum = 9999
+    $numWin11Thresh.Value = $script:UserSettings.HostnameReviewWindows11Threshold
+    $dlg.Controls.Add($numWin11Thresh)
+
     $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Location = New-Object System.Drawing.Point(210, 165)
+    $btnOK.Location = New-Object System.Drawing.Point(210, 210)
     $btnOK.Size = New-Object System.Drawing.Size(90, 28)
     $btnOK.Text = "OK"
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2311,10 +2349,12 @@ function Show-OutputOptionsDialog {
         $script:OutputEmailTemplate = $chkEmail.Checked
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
+        $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
+        Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(305, 165)
+    $btnCancel.Location = New-Object System.Drawing.Point(305, 210)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Text = "Cancel"
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -2328,6 +2368,8 @@ function Show-OutputOptionsDialog {
         $script:OutputEmailTemplate = $chkEmail.Checked
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
+        $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
+        Save-UserSettings | Out-Null
     }
 }
 
