@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 4.0.2
+Version: 4.0.6
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 Modular: Core, Data, Reports, Dialogs, Form loaded from VScanMagic-Modules/

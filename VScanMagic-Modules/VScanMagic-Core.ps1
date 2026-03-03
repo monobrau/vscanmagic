@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.2"
+    Version = "4.0.6"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
@@ -861,27 +861,21 @@ Recommended remediation priorities ({TopNLabel}):
 Complete report package:
 <onedrive link to folder containing reports>
 
-Schedule a discussion:
-<timezest scheduling link>
-
 The folder contains the following reports:
-
 • Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
-
 • All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
-
 • Executive Summary Report – A high-level overview of your security posture and network information.
-
 • External Scan – Detected vulnerabilities and services exposed to the internet.
-
 • Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
 
 Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
 
+Schedule time with me
+<scheduling link>
+
 {NoteText}
 
 We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
-
 
 Sincerely,
 

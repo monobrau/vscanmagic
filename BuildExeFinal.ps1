@@ -42,11 +42,11 @@ if (Test-Path $modulePath) {
         $params = @{
             inputFile = $inputScript
             outputFile = $outputExe
-            title = "VScanMagic v4.0.2"
+            title = "VScanMagic v4.0.6"
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "4.0.2"
+            version = "4.0.6"
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         
@@ -92,8 +92,8 @@ if (Test-Path $modulePath) {
             $params.iconFile = $iconPath
         }
         
-        Write-Host "Converting script to EXE..."
-        & $func.Name @params
+        Write-Host "Converting script to EXE (64-bit for Excel COM compatibility)..."
+        & $func.Name @params -x64
         
         if (Test-Path $outputExe) {
             Write-Host "SUCCESS! Created: $outputExe" -ForegroundColor Green

@@ -1002,6 +1002,7 @@ $script:CompanyReviewEndpoints = @{
     DiscoverySettings         = '/r/company/discovery_settings'
     DiscoverySettingsReport   = '/r/report_queries/discovery_settings'
     AgentDiscoveryMapping     = '/r/company/agent_discoverysettings_mapping'
+    AgentDiscoveryCredentials = '/r/company/agent_discovery_credentials'
     AssetFirewallPolicy       = '/r/asset/asset_firewall_policy'
     FirewallAssetView         = '/r/report_queries/firewall_asset_view'
     Assets                    = '/r/asset/assets'
@@ -1149,6 +1150,27 @@ function Get-ConnectSecureAgentDiscoveryMapping {
     return @(,$raw)
 }
 
+function Get-ConnectSecureProbeAgents {
+    <#
+    .SYNOPSIS
+    Returns probe agents only (agent_type='PROBE'). Portal uses /r/company/agent_discovery_credentials
+    with server-side filter - aligns with ConnectSecure portal probe view.
+    #>
+    param([int]$CompanyId)
+    switch ($CompanyId -le 0) { $true { return @() } }
+    $cond = "company_id=$CompanyId and agent_type='PROBE' and is_deprecated=FALSE and is_retired=FALSE"
+    $qp = @{ condition = $cond; skip = 0; limit = 100; order_by = 'host_name asc' }
+    try {
+        $raw = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.AgentDiscoveryCredentials -QueryParams $qp
+        if ($null -eq $raw) { return @() }
+        if ($raw -is [array]) { return @($raw) }
+        return @(,$raw)
+    } catch {
+        Write-CSApiLog "Get-ConnectSecureProbeAgents failed: $($_.Exception.Message)" -Level Warning
+        return @()
+    }
+}
+
 function Get-ConnectSecureAssetFirewallPolicy {
     param([int]$CompanyId)
     switch ($CompanyId -le 0) { $true { return @() } }
@@ -1191,6 +1213,7 @@ function Get-ConnectSecureCompanyReviewData {
         LastInternalScan = $null
         LastExternalScan = $null
         QuickWins = [System.Collections.ArrayList]::new()
+        ProbeAgentsNmapInfo = [System.Collections.ArrayList]::new()
     }
 
     switch ($CompanyId -le 0) { $true { return $result } }
@@ -1234,6 +1257,37 @@ function Get-ConnectSecureCompanyReviewData {
     $result.ProbesWithCredentials = ($agentIdsWithCreds.Keys | Measure-Object).Count
     $result.ProbesWithNetworks = ($agentIdsWithNetworks.Keys | Measure-Object).Count
     $result.ProbesWithBoth = $probesWithBoth
+
+    # 3b. Probe agents nmap interface - use portal endpoint agent_discovery_credentials with agent_type='PROBE'
+    $probeAgents = Get-ConnectSecureProbeAgents -CompanyId $CompanyId
+    if (-not $probeAgents -or $probeAgents.Count -eq 0) {
+        # Fallback: filter agents by probe_setting (only probe agents have it; lightweight do not)
+        $probeAgents = @($agents | Where-Object {
+            $ps = $_.probe_setting; if (-not $ps) { $ps = $_.probeSetting }
+            $ps -and $ps -is [System.Management.Automation.PSObject]
+        })
+    }
+    foreach ($a in $probeAgents) {
+        $hostName = $a.host_name; switch (-not $hostName) { $true { $hostName = $a.'Host Name' } }
+        switch (-not $hostName) { $true { $hostName = $a.agent_name } }
+        switch (-not $hostName) { $true { $hostName = $a.hostname } }
+        switch (-not $hostName) { $true { $hostName = $a.name } }
+        switch (-not $hostName) { $true { $hostName = "(unnamed)" } }
+        $ip = $a.ip; switch (-not $ip) { $true { $ip = $a.agent_ip } }
+        $nmapIf = $a.nmap_interface; switch (-not $nmapIf) { $true { $nmapIf = $a.nmapInterface } }
+        $port = $null
+        $ps = $a.probe_setting; switch (-not $ps) { $true { $ps = $a.probeSetting } }
+        if ($ps) {
+            $port = $ps.listen_port; switch (-not $port) { $true { $port = $ps.port } }
+            switch (-not $port) { $true { $port = $ps.nmap_port } }
+        }
+        [void]$result.ProbeAgentsNmapInfo.Add(@{
+            HostName = [string]$hostName
+            IP = if ($ip) { [string]$ip } else { "(none)" }
+            NmapInterface = if ($nmapIf) { [string]$nmapIf } else { "(not set)" }
+            Port = if ($null -ne $port -and [string]$port -ne '') { [string]$port } else { $null }
+        })
+    }
 
     # 4. External subnet config - discovery_settings with address (CIDR) and target_ip (external IPs to scan)
     $discoverySettings = Get-ConnectSecureDiscoverySettings -CompanyId $CompanyId
@@ -1411,6 +1465,8 @@ function Get-ConnectSecureCompanyReviewData {
     # 8. Quick wins
     switch ($result.AgentCount -eq 0) { $true { [void]$result.QuickWins.Add('Add lightweight agents to enable internal scanning') } }
     switch ($result.ProbesWithBoth -eq 0) { $true { [void]$result.QuickWins.Add('Map credentials and discovery networks to at least one probe agent') } }
+    $probesWithNmap = ($result.ProbeAgentsNmapInfo | Where-Object { $_.NmapInterface -and $_.NmapInterface -ne '(not set)' }).Count
+    switch ($result.ProbesWithBoth -gt 0 -and $probesWithNmap -eq 0) { $true { [void]$result.QuickWins.Add('Configure nmap interface on probe agent(s) for scanning') } }
     switch ($result.SubnetIssues.Count -gt 0) { $true { [void]$result.QuickWins.Add('Exclude network and broadcast addresses from external scan targets') } }
     switch ($result.AgentsOffline30PlusDays -gt 0) { $true { [void]$result.QuickWins.Add('Investigate agents/probes offline more than 30 days; reinstall or remove') } }
     switch (-not $result.FirewallActive) { $true { [void]$result.QuickWins.Add('Configure firewall integration for visibility') } }
