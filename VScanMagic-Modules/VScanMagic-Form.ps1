@@ -1091,6 +1091,7 @@ function Show-VScanMagicGUI {
                             $scanDate = $companyData.ScanDate
                             $outputDir = if ($companyData.OutputDir) { $companyData.OutputDir } else { $textBoxOutputDir.Text }
                             $isRMITPlus = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $script:IsRMITPlus }
+                            $companyId = if ($companyData.Company -and $companyData.Company.Id -ne $null) { $companyData.Company.Id } else { if ($companyData.Id -ne $null) { $companyData.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
@@ -1194,7 +1195,7 @@ function Show-VScanMagicGUI {
 
             if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Reviewing Hostnames..." -Show $true
-                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
+                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10 -CompanyId $companyId
                 if ($null -eq $filteredTop10) {
                     Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
                     $filteredTop10 = $top10
@@ -1346,6 +1347,7 @@ function Show-VScanMagicGUI {
                 $inputPath = $company.InputPath
                 $outputDir = if ($company.OutputDir) { $company.OutputDir } else { $textBoxOutputDir.Text }
                 $isRMITPlus = $script:IsRMITPlus
+                $companyId = if ($company.Company -and $company.Company.Id -ne $null) { $company.Company.Id } else { if ($company.Id -ne $null) { $company.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
             Write-Log "Input File: $inputPath"
@@ -1441,7 +1443,7 @@ function Show-VScanMagicGUI {
 
             if (-not $skipDialogs -and $hasTop10Data) {
                 Update-Progress -Status "Reviewing Hostnames..." -Show $true
-                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10
+                $filteredTop10 = Show-HostnameReviewDialog -Top10Data $top10 -CompanyId $companyId
                 if ($null -eq $filteredTop10) {
                     Write-Log "Hostname Review dialog cancelled by user. Using original data." -Level Warning
                     $filteredTop10 = $top10

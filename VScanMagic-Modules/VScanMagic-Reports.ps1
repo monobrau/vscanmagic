@@ -56,6 +56,16 @@ function ConvertTo-HexColor {
     return $b * 65536 + $g * 256 + $r
 }
 
+# Word COM TypeText has a 255-character limit. Use Selection.Text for longer strings.
+function Add-WordText {
+    param([object]$Selection, [string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return }
+    if ($Text.Length -le 255) {
+        $Selection.TypeText($Text)
+    } else {
+        $Selection.Text = $Text
+    }
+}
 
 function New-WordReport {
     param(
@@ -99,12 +109,15 @@ function New-WordReport {
         Write-Log "Adding new document..."
         $doc = $word.Documents.Add()
 
-        # Set document properties (optional - may fail on some systems)
+        # Set document properties (optional - may fail on some systems; Word limits each to 255 chars)
         Write-Log "Setting document properties..."
         try {
-            $doc.BuiltInDocumentProperties.Item("Title").Value = "$ReportTitle - $ClientName"
+            $titleProp = "$ReportTitle - $ClientName"
+            if ($titleProp.Length -gt 255) { $titleProp = $titleProp.Substring(0, 255) }
+            $doc.BuiltInDocumentProperties.Item("Title").Value = $titleProp
             $doc.BuiltInDocumentProperties.Item("Subject").Value = "Security Vulnerability Assessment"
-            $doc.BuiltInDocumentProperties.Item("Author").Value = $script:Config.Author
+            $authorVal = if ($null -eq $script:Config.Author) { "" } elseif ($script:Config.Author.Length -gt 255) { $script:Config.Author.Substring(0, 255) } else { $script:Config.Author }
+            $doc.BuiltInDocumentProperties.Item("Author").Value = $authorVal
             $doc.BuiltInDocumentProperties.Item("Keywords").Value = "Vulnerability, Security, Assessment, EPSS, CVSS"
             Write-Log "Document properties set successfully"
         } catch {
@@ -576,7 +589,7 @@ function New-WordReport {
                 }
             }
 
-            $selection.TypeText($title)
+            Add-WordText -Selection $selection -Text $title
             $selection.TypeParagraph()
 
             $selection.Style = "Normal"
@@ -617,7 +630,7 @@ function New-WordReport {
                 if (-not [string]::IsNullOrWhiteSpace($_.IP)) { $systemLine += " - $($_.IP)" }
                 $systemLine
             } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
-            $selection.TypeText($systemsList)
+            Add-WordText -Selection $selection -Text $systemsList
             $selection.TypeParagraph()
             $selection.ParagraphFormat.LeftIndent = 0
             $selection.TypeParagraph()
@@ -632,7 +645,7 @@ function New-WordReport {
 
             # Get remediation guidance from configurable rules
             $remediationText = Get-RemediationGuidance -ProductName $item.Product -OutputType 'Word'
-            $selection.TypeText($remediationText)
+            Add-WordText -Selection $selection -Text $remediationText
 
             # ConnectSecure Solution/Fix when available
             if ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) {
@@ -643,7 +656,7 @@ function New-WordReport {
                 $selection.TypeParagraph()
                 $selection.Font.Bold = $false
                 $selection.ParagraphFormat.LeftIndent = 36
-                $selection.TypeText((ConvertTo-ReadableFixText -RawFix $item.Fix))
+                Add-WordText -Selection $selection -Text (ConvertTo-ReadableFixText -RawFix $item.Fix)
                 $selection.ParagraphFormat.LeftIndent = 0
                 $selection.TypeParagraph()
             }
@@ -659,7 +672,7 @@ function New-WordReport {
                 $selection.Font.Bold = $false
 
                 $selection.ParagraphFormat.LeftIndent = 36
-                $selection.TypeText($matchingRec.Recommendations)
+                Add-WordText -Selection $selection -Text $matchingRec.Recommendations
                 $selection.ParagraphFormat.LeftIndent = 0  # Reset indent
                 $selection.TypeParagraph()
             }
@@ -675,17 +688,42 @@ function New-WordReport {
         # Save document
         Write-Log "Saving document to: $OutputPath"
 
+        # Workaround: Word SaveAs fails with "String is longer than 255 characters" when path exceeds ~255 chars,
+        # or on OneDrive/sync folders. Save to temp first, then copy to final destination.
+        $pathToSave = $OutputPath
+        $wordSaveTempPath = $null
+        if ($OutputPath.Length -gt 255 -or $OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
+            $tempDir = [System.IO.Path]::GetTempPath()
+            $baseName = [System.IO.Path]::GetFileName($OutputPath)
+            if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_Word_Report.docx" }
+            $wordSaveTempPath = Join-Path $tempDir ("VScanMagic_Word_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $pathToSave = [System.IO.Path]::GetFullPath($wordSaveTempPath)
+            Write-Log "Saving to temp first (path length or cloud sync workaround): $pathToSave" -Level Info
+        }
+
         # Delete existing file if present (Word SaveAs can be finicky with overwriting)
-        if (Test-Path $OutputPath) {
+        if (Test-Path -LiteralPath $pathToSave) {
             try {
-                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Remove-Item -LiteralPath $pathToSave -Force -ErrorAction Stop
                 Write-Log "Removed existing Word report file"
             } catch {
                 Write-Log "Warning: Could not delete existing file, attempting SaveAs anyway: $($_.Exception.Message)" -Level Warning
             }
         }
 
-        $doc.SaveAs([ref]$OutputPath, [ref]16)  # 16 = wdFormatDocumentDefault (.docx)
+        $doc.SaveAs([ref]$pathToSave, [ref]16)  # 16 = wdFormatDocumentDefault (.docx)
+
+        # Copy from temp to final destination if workaround was used
+        if ($wordSaveTempPath -and (Test-Path -LiteralPath $wordSaveTempPath)) {
+            try {
+                if (Test-Path -LiteralPath $OutputPath) { Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue }
+                Copy-Item -LiteralPath $wordSaveTempPath -Destination $OutputPath -Force
+                Remove-Item -LiteralPath $wordSaveTempPath -Force -ErrorAction SilentlyContinue
+                Write-Log "Copied Word report to final destination" -Level Info
+            } catch {
+                Write-Log "Warning: Could not copy Word report to final destination: $($_.Exception.Message)" -Level Warning
+            }
+        }
 
         Write-Log "Word document generated successfully" -Level Success
 
@@ -765,7 +803,8 @@ function New-ExcelReport {
         # Excel COM can fail with "Unable to get the Open property" on cloud-synced paths
         # or when exe bitness (32/64) doesn't match Excel. Build with -x64 to match Office.
         $pathToOpen = $InputPath
-        $tempPath = $null  # Used by OneDrive workaround and finally cleanup
+        $tempPath = $null  # Used by OneDrive workaround (input) and finally cleanup
+        $saveTempPath = $null  # Used by OneDrive workaround (output save) and finally cleanup
         if ($InputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
             $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($InputPath)
@@ -1306,18 +1345,43 @@ function New-ExcelReport {
         # --- 4. Save and Close ---
         Write-Log "Saving workbook to: $OutputPath" -Level Info
 
+        # Workaround: Excel COM SaveAs fails on OneDrive/sync folders ("Unable to get the SaveAs property").
+        # Save to temp first, then copy to final destination.
+        $pathToSave = $OutputPath
+        if ($OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
+            $tempDir = [System.IO.Path]::GetTempPath()
+            $baseName = [System.IO.Path]::GetFileName($OutputPath)
+            if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_report.xlsx" }
+            $saveTempPath = Join-Path $tempDir ("VScanMagic_Save_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $pathToSave = [System.IO.Path]::GetFullPath($saveTempPath)
+            Write-Log "Saving to temp first (OneDrive workaround): $pathToSave" -Level Info
+        }
+
         # Delete existing file if present (Excel SaveAs can be finicky with overwriting)
-        if (Test-Path $OutputPath) {
+        if (Test-Path -LiteralPath $pathToSave) {
             try {
-                Remove-Item -Path $OutputPath -Force -ErrorAction Stop
+                Remove-Item -LiteralPath $pathToSave -Force -ErrorAction Stop
                 Write-Log "Removed existing Excel report file"
             } catch {
                 Write-Log "Warning: Could not delete existing file, attempting SaveAs anyway: $($_.Exception.Message)" -Level Warning
             }
         }
 
-        $workbook.SaveAs($OutputPath)
+        $workbook.SaveAs($pathToSave)
         $workbook.Close($false)
+
+        # Copy from temp to final destination if OneDrive workaround was used
+        if ($saveTempPath -and (Test-Path -LiteralPath $saveTempPath)) {
+            try {
+                if (Test-Path $OutputPath) { Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue }
+                Copy-Item -LiteralPath $saveTempPath -Destination $OutputPath -Force
+                Remove-Item -LiteralPath $saveTempPath -Force -ErrorAction SilentlyContinue
+                Write-Log "Copied Excel report to final destination" -Level Info
+            } catch {
+                Write-Log "Failed to copy Excel report to final destination: $($_.Exception.Message)" -Level Error
+                throw
+            }
+        }
 
         Write-Log "Excel report generation complete" -Level Success
 
@@ -1325,9 +1389,12 @@ function New-ExcelReport {
         Write-Log "Excel report generation failed: $($_.Exception.Message)" -Level Error
         throw $_
     } finally {
-        # Cleanup temp copy if created for OneDrive workaround
+        # Cleanup temp copies if created for OneDrive workaround (input open + output save)
         if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
             try { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        if ($saveTempPath -and (Test-Path -LiteralPath $saveTempPath)) {
+            try { Remove-Item -LiteralPath $saveTempPath -Force -ErrorAction SilentlyContinue } catch {}
         }
         # Cleanup COM objects
         Clear-ComObject $pivotSheet

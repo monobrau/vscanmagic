@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.6"
+    Version = "4.0.7"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
@@ -129,6 +129,7 @@ $script:UserSettings = @{
     LastOutputDirectory = ""  # Last-used output directory for reports
     ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
     HostnameReviewWindows11Threshold = 350  # VulnCount threshold: below = unselected, above = selected for Windows 11 O/S tabs
+    HostnameReviewAutoLookupConnectSecure = $true  # When true, automatically lookup usernames from ConnectSecure when Hostname Review opens (CompanyId > 0)
     # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
     AIApiKeyCopilot = ""
     AIApiKeyChatGPT = ""
@@ -290,6 +291,7 @@ function Load-UserSettings {
         if ($json.LastOutputDirectory -and (Test-Path $json.LastOutputDirectory)) { $script:UserSettings.LastOutputDirectory = $json.LastOutputDirectory }
         if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
         if ($null -ne $json.HostnameReviewWindows11Threshold -and $json.HostnameReviewWindows11Threshold -ge 0) { $script:UserSettings.HostnameReviewWindows11Threshold = [int]$json.HostnameReviewWindows11Threshold } else { $script:UserSettings.HostnameReviewWindows11Threshold = 350 }
+        if ($null -ne $json.HostnameReviewAutoLookupConnectSecure) { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = [bool]$json.HostnameReviewAutoLookupConnectSecure } else { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $true }
         if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
         if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
         if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }
@@ -980,7 +982,8 @@ $script:FirstPartyVendorPatterns = @(
     '*Fortinet*', '*FortiGate*', '*Forti*',
     '*Microsoft*',
     '*HP *', '* HP *', '*HP Pro*', '*HP LaserJet*', '*HP OfficeJet*', '*Hewlett-Packard*',
-    '*Duo Security*', '*Duo *'
+    '*Duo Security*', '*Duo *',
+    '*VMware*', '*vSphere*', '*VMware Tools*'
 )
 
 function Test-IsFirstPartyVendor {

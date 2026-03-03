@@ -1006,6 +1006,7 @@ $script:CompanyReviewEndpoints = @{
     AssetFirewallPolicy       = '/r/asset/asset_firewall_policy'
     FirewallAssetView         = '/r/report_queries/firewall_asset_view'
     Assets                    = '/r/asset/assets'
+    AssetView                 = '/r/asset/asset_view'
 }
 
 function Get-NetworkBroadcastFromCidr {
@@ -1090,6 +1091,56 @@ function Get-ConnectSecureCompanyAgents {
     if ($null -eq $raw) { return @() }
     if ($raw -is [array]) { return @($raw) }
     return @(,$raw)
+}
+
+function Get-ConnectSecureUsernamesByHostname {
+    <#
+    .SYNOPSIS
+    Returns hostname -> logged_in_user map from ConnectSecure asset_view. Use for Hostname Review username lookup.
+    #>
+    param(
+        [int]$CompanyId,
+        [string[]]$Hostnames
+    )
+    if ($CompanyId -le 0 -or -not $Hostnames -or $Hostnames.Count -eq 0) { return @{} }
+    $result = @{}
+    foreach ($h in $Hostnames) { if (-not [string]::IsNullOrWhiteSpace($h)) { $result[$h.Trim()] = "" } }
+    if ($result.Count -eq 0) { return @{} }
+    try {
+        $assetToUser = @{}
+        $skip = 0
+        $limit = 500
+        do {
+            $qp = @{ condition = "company_id=$CompanyId"; limit = $limit; skip = $skip; order_by = "host_name asc" }
+            $data = Invoke-ConnectSecureCompanyReviewRequest -Endpoint $script:CompanyReviewEndpoints.AssetView -QueryParams $qp
+            if (-not $data -or ($data -is [array] -and $data.Count -eq 0)) { break }
+            $rows = if ($data -is [array]) { $data } else { @(,$data) }
+            foreach ($r in $rows) {
+                $hn = $r.host_name; if (-not $hn) { $hn = $r.hostname }; if (-not $hn) { $hn = $r.name }; if (-not $hn) { $hn = $r.'Host Name' }
+                $user = $r.logged_in_user; if (-not $user) { $user = $r.logged_in_user_name }; if (-not $user) { $user = $r.'Logged In User' }
+                if ([string]::IsNullOrWhiteSpace($user)) { continue }
+                $userStr = [string]$user.Trim()
+                $hnStr = [string]$hn
+                if (-not $hnStr) { continue }
+                $hnNorm = $hnStr.Trim().ToLowerInvariant()
+                $shortName = if ($hnNorm -match '^([^.]+)\.') { $Matches[1] } else { $hnNorm }
+                $assetToUser[$hnNorm] = $userStr
+                $assetToUser[$shortName] = $userStr
+                $nameVal = $r.name; if ($nameVal) { $assetToUser[[string]$nameVal.Trim().ToLowerInvariant()] = $userStr }
+            }
+            $skip += $rows.Count
+            if ($rows.Count -lt $limit) { break }
+        } while ($true)
+        foreach ($key in @($result.Keys)) {
+            $keyNorm = $key.Trim().ToLowerInvariant()
+            $shortKey = if ($keyNorm -match '^([^.]+)\.') { $Matches[1] } else { $keyNorm }
+            if ($assetToUser.ContainsKey($keyNorm)) { $result[$key] = $assetToUser[$keyNorm] }
+            elseif ($assetToUser.ContainsKey($shortKey)) { $result[$key] = $assetToUser[$shortKey] }
+        }
+    } catch {
+        Write-CSApiLog "Get-ConnectSecureUsernamesByHostname failed: $($_.Exception.Message)" -Level Warning
+    }
+    return $result
 }
 
 function Get-ConnectSecureAgentCredentialsMapping {

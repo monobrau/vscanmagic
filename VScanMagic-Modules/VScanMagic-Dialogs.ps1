@@ -324,7 +324,8 @@ function Show-SetClientTypesDialog {
 
 function Show-HostnameReviewDialog {
     param(
-        [array]$Top10Data
+        [array]$Top10Data,
+        [int]$CompanyId = 0
     )
 
     # Create dialog
@@ -498,8 +499,63 @@ function Show-HostnameReviewDialog {
     })
     $hostDialog.Controls.Add($btnDeselectAll)
 
+    $btnLookupConnectSecure = New-Object System.Windows.Forms.Button
+    $btnLookupConnectSecure.Location = New-Object System.Drawing.Point(240, $y)
+    $btnLookupConnectSecure.Size = New-Object System.Drawing.Size(170, 30)
+    $btnLookupConnectSecure.Text = "Lookup from ConnectSecure"
+    $btnLookupConnectSecure.Enabled = ($CompanyId -gt 0)
+    $btnLookupConnectSecure.Add_Click({
+        if ($CompanyId -le 0) { return }
+        $creds = Load-ConnectSecureCredentials
+        if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+            [System.Windows.Forms.MessageBox]::Show("Configure ConnectSecure API in Settings first (Settings > API Settings...).", "Not Configured", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+        if (-not $connected) {
+            [System.Windows.Forms.MessageBox]::Show("Failed to connect to ConnectSecure. Check API Settings.", "Connection Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+        $allHostnames = @()
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $hn = [string]$row.Cells["Hostname"].Value
+                if (-not [string]::IsNullOrWhiteSpace($hn)) { $allHostnames += $hn }
+            }
+        }
+        $allHostnames = $allHostnames | Select-Object -Unique
+        if ($allHostnames.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("No hostnames to look up.", "Lookup", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+        $hostDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            $userMap = Get-ConnectSecureUsernamesByHostname -CompanyId $CompanyId -Hostnames $allHostnames
+            $filled = 0
+            foreach ($dgv in $tabDataGridViews) {
+                foreach ($row in $dgv.Rows) {
+                    if ($row.IsNewRow) { continue }
+                    $hn = [string]$row.Cells["Hostname"].Value
+                    $hnKey = $hn.Trim()
+                    $currentUser = [string]$row.Cells["Username"].Value
+                    if ($hnKey -and $userMap.ContainsKey($hnKey) -and -not [string]::IsNullOrWhiteSpace($userMap[$hnKey])) {
+                        if ([string]::IsNullOrWhiteSpace($currentUser)) {
+                            $row.Cells["Username"].Value = $userMap[$hnKey]
+                            $filled++
+                        }
+                    }
+                }
+            }
+            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } finally {
+            $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
+    $hostDialog.Controls.Add($btnLookupConnectSecure)
+
     $btnLookupConnectWise = New-Object System.Windows.Forms.Button
-    $btnLookupConnectWise.Location = New-Object System.Drawing.Point(240, $y)
+    $btnLookupConnectWise.Location = New-Object System.Drawing.Point(420, $y)
     $btnLookupConnectWise.Size = New-Object System.Drawing.Size(160, 30)
     $btnLookupConnectWise.Text = "Lookup from ConnectWise"
     $btnLookupConnectWise.Add_Click({
@@ -562,6 +618,50 @@ function Show-HostnameReviewDialog {
     # Set default button
     $hostDialog.AcceptButton = $btnOK
     $hostDialog.CancelButton = $btnCancel
+
+    # Auto-lookup usernames from ConnectSecure when setting is enabled
+    $hostDialog.Add_Shown({
+        if ($CompanyId -le 0) { return }
+        if (-not $script:UserSettings.HostnameReviewAutoLookupConnectSecure) { return }
+        $creds = Load-ConnectSecureCredentials
+        if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl)) { return }
+        $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+        if (-not $connected) { return }
+        $allHostnames = @()
+        foreach ($dgv in $tabDataGridViews) {
+            foreach ($row in $dgv.Rows) {
+                if ($row.IsNewRow) { continue }
+                $hn = [string]$row.Cells["Hostname"].Value
+                if (-not [string]::IsNullOrWhiteSpace($hn)) { $allHostnames += $hn }
+            }
+        }
+        $allHostnames = $allHostnames | Select-Object -Unique
+        if ($allHostnames.Count -eq 0) { return }
+        $hostDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try {
+            $userMap = Get-ConnectSecureUsernamesByHostname -CompanyId $CompanyId -Hostnames $allHostnames
+            $filled = 0
+            foreach ($dgv in $tabDataGridViews) {
+                foreach ($row in $dgv.Rows) {
+                    if ($row.IsNewRow) { continue }
+                    $hn = [string]$row.Cells["Hostname"].Value
+                    $hnKey = $hn.Trim()
+                    $currentUser = [string]$row.Cells["Username"].Value
+                    if ($hnKey -and $userMap.ContainsKey($hnKey) -and -not [string]::IsNullOrWhiteSpace($userMap[$hnKey])) {
+                        if ([string]::IsNullOrWhiteSpace($currentUser)) {
+                            $row.Cells["Username"].Value = $userMap[$hnKey]
+                            $filled++
+                        }
+                    }
+                }
+            }
+            if ($filled -gt 0) {
+                [System.Windows.Forms.MessageBox]::Show("Auto-lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
+        } finally {
+            $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+    })
 
     if ($hostDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         # Filter AffectedSystems based on selections
@@ -2325,13 +2425,20 @@ function Show-OutputOptionsDialog {
     $chkTime.Checked = $script:OutputTimeEstimate
     $dlg.Controls.Add($chkTime)
 
+    $chkAutoLookup = New-Object System.Windows.Forms.CheckBox
+    $chkAutoLookup.Location = New-Object System.Drawing.Point(20, 155)
+    $chkAutoLookup.Size = New-Object System.Drawing.Size(360, 20)
+    $chkAutoLookup.Text = "Hostname Review - Look up usernames from ConnectSecure by default"
+    $chkAutoLookup.Checked = if ($script:UserSettings.HostnameReviewAutoLookupConnectSecure) { $true } else { $false }
+    $dlg.Controls.Add($chkAutoLookup)
+
     $lblWin11Thresh = New-Object System.Windows.Forms.Label
-    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 155)
+    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 180)
     $lblWin11Thresh.Size = New-Object System.Drawing.Size(280, 20)
     $lblWin11Thresh.Text = "Hostname Review - Windows 11 O/S vuln threshold (below = unselected):"
     $dlg.Controls.Add($lblWin11Thresh)
     $numWin11Thresh = New-Object System.Windows.Forms.NumericUpDown
-    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 153)
+    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 178)
     $numWin11Thresh.Size = New-Object System.Drawing.Size(80, 22)
     $numWin11Thresh.Minimum = 0
     $numWin11Thresh.Maximum = 9999
@@ -2339,7 +2446,7 @@ function Show-OutputOptionsDialog {
     $dlg.Controls.Add($numWin11Thresh)
 
     $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Location = New-Object System.Drawing.Point(210, 210)
+    $btnOK.Location = New-Object System.Drawing.Point(210, 235)
     $btnOK.Size = New-Object System.Drawing.Size(90, 28)
     $btnOK.Text = "OK"
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2349,12 +2456,13 @@ function Show-OutputOptionsDialog {
         $script:OutputEmailTemplate = $chkEmail.Checked
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
+        $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(305, 210)
+    $btnCancel.Location = New-Object System.Drawing.Point(305, 235)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Text = "Cancel"
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -2368,6 +2476,7 @@ function Show-OutputOptionsDialog {
         $script:OutputEmailTemplate = $chkEmail.Checked
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
+        $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     }
