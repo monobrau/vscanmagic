@@ -2384,7 +2384,7 @@ function Show-FiltersDialog {
 function Show-OutputOptionsDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Output Options"
-    $dlg.Size = New-Object System.Drawing.Size(420, 300)
+    $dlg.Size = New-Object System.Drawing.Size(420, 290)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2432,13 +2432,20 @@ function Show-OutputOptionsDialog {
     $chkAutoLookup.Checked = if ($script:UserSettings.HostnameReviewAutoLookupConnectSecure) { $true } else { $false }
     $dlg.Controls.Add($chkAutoLookup)
 
+    $chkAutoResize = New-Object System.Windows.Forms.CheckBox
+    $chkAutoResize.Location = New-Object System.Drawing.Point(20, 178)
+    $chkAutoResize.Size = New-Object System.Drawing.Size(360, 20)
+    $chkAutoResize.Text = "Downloaded reports - Auto-resize Excel columns (excludes Company, Proposed Remediations)"
+    $chkAutoResize.Checked = if ($script:UserSettings.DownloadAutoResizeColumns) { $true } else { $false }
+    $dlg.Controls.Add($chkAutoResize)
+
     $lblWin11Thresh = New-Object System.Windows.Forms.Label
-    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 180)
+    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 203)
     $lblWin11Thresh.Size = New-Object System.Drawing.Size(280, 20)
     $lblWin11Thresh.Text = "Hostname Review - Windows 11 O/S vuln threshold (below = unselected):"
     $dlg.Controls.Add($lblWin11Thresh)
     $numWin11Thresh = New-Object System.Windows.Forms.NumericUpDown
-    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 178)
+    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 201)
     $numWin11Thresh.Size = New-Object System.Drawing.Size(80, 22)
     $numWin11Thresh.Minimum = 0
     $numWin11Thresh.Maximum = 9999
@@ -2446,7 +2453,7 @@ function Show-OutputOptionsDialog {
     $dlg.Controls.Add($numWin11Thresh)
 
     $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Location = New-Object System.Drawing.Point(210, 235)
+    $btnOK.Location = New-Object System.Drawing.Point(210, 232)
     $btnOK.Size = New-Object System.Drawing.Size(90, 28)
     $btnOK.Text = "OK"
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2457,12 +2464,13 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(305, 235)
+    $btnCancel.Location = New-Object System.Drawing.Point(305, 232)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Text = "Cancel"
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -2477,6 +2485,7 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     }

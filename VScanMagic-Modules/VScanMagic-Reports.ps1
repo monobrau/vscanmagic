@@ -744,6 +744,57 @@ function New-WordReport {
     }
 }
 
+# Auto-resize columns on Excel workbook. Excludes Company and Proposed Remediations (all) sheets.
+function Invoke-AutoResizeExcelColumns {
+    param([string]$ExcelPath)
+    if (-not $ExcelPath -or -not (Test-Path -LiteralPath $ExcelPath)) { return }
+    $excel = $null
+    $workbook = $null
+    $pathToOpen = $ExcelPath
+    $tempCopyPath = $null
+    try {
+        # Workaround: copy to temp when path is in OneDrive/sync folder (Excel COM can fail to open)
+        if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
+            $tempDir = [System.IO.Path]::GetTempPath()
+            $baseName = [System.IO.Path]::GetFileName($ExcelPath)
+            $tempCopyPath = Join-Path $tempDir ("VScanMagic_Resize_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            Copy-Item -LiteralPath $ExcelPath -Destination $tempCopyPath -Force
+            $pathToOpen = [System.IO.Path]::GetFullPath($tempCopyPath)
+        }
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+        $excel.ScreenUpdating = $false
+        $workbook = $excel.Workbooks.Open($pathToOpen)
+        $excludeSheets = @('Company', 'Proposed Remediations (all)')
+        foreach ($ws in $workbook.Worksheets) {
+            $name = [string]$ws.Name
+            if ($name -notin $excludeSheets) {
+                try {
+                    $ws.UsedRange.Columns.AutoFit() | Out-Null
+                } catch {
+                    Write-Log "Auto-resize skipped sheet '$name': $($_.Exception.Message)" -Level Warning
+                }
+            }
+        }
+        $workbook.Save()
+        $workbook.Close($false)
+        if ($tempCopyPath -and (Test-Path -LiteralPath $tempCopyPath)) {
+            Copy-Item -LiteralPath $tempCopyPath -Destination $ExcelPath -Force
+            Remove-Item -LiteralPath $tempCopyPath -Force -ErrorAction SilentlyContinue
+        }
+        Write-Log "Auto-resized columns in $([System.IO.Path]::GetFileName($ExcelPath))" -Level Info
+    } catch {
+        Write-Log "Auto-resize failed for $ExcelPath : $($_.Exception.Message)" -Level Warning
+    } finally {
+        if ($workbook) { try { $workbook.Close($false) } catch {}; Clear-ComObject $workbook }
+        if ($excel) { try { $excel.Quit() } catch {}; Clear-ComObject $excel }
+        if ($tempCopyPath -and (Test-Path -LiteralPath $tempCopyPath)) { Remove-Item -LiteralPath $tempCopyPath -Force -ErrorAction SilentlyContinue }
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+    }
+}
+
 # Helper: convert any value to string for Excel text cells (avoids Double-to-String COM cast errors)
 function ConvertTo-SafeExcelString {
     param([object]$Value)

@@ -130,6 +130,7 @@ $script:UserSettings = @{
     ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
     HostnameReviewWindows11Threshold = 350  # VulnCount threshold: below = unselected, above = selected for Windows 11 O/S tabs
     HostnameReviewAutoLookupConnectSecure = $true  # When true, automatically lookup usernames from ConnectSecure when Hostname Review opens (CompanyId > 0)
+    DownloadAutoResizeColumns = $true  # When true, auto-resize columns on downloaded Excel reports (excludes Company and Proposed Remediations (all) sheets)
     # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
     AIApiKeyCopilot = ""
     AIApiKeyChatGPT = ""
@@ -292,6 +293,7 @@ function Load-UserSettings {
         if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
         if ($null -ne $json.HostnameReviewWindows11Threshold -and $json.HostnameReviewWindows11Threshold -ge 0) { $script:UserSettings.HostnameReviewWindows11Threshold = [int]$json.HostnameReviewWindows11Threshold } else { $script:UserSettings.HostnameReviewWindows11Threshold = 350 }
         if ($null -ne $json.HostnameReviewAutoLookupConnectSecure) { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = [bool]$json.HostnameReviewAutoLookupConnectSecure } else { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $true }
+        if ($null -ne $json.DownloadAutoResizeColumns) { $script:UserSettings.DownloadAutoResizeColumns = [bool]$json.DownloadAutoResizeColumns } else { $script:UserSettings.DownloadAutoResizeColumns = $true }
         if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
         if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
         if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }
@@ -981,6 +983,7 @@ $script:FirstPartyVendorPatterns = @(
     '*Sonicwall*', '*SonicWall*',
     '*Fortinet*', '*FortiGate*', '*Forti*',
     '*Microsoft*',
+    '*Windows 11*', '*Windows 10*', '*Windows Server*', '*Windows 8*', '*Windows 7*',
     '*HP *', '* HP *', '*HP Pro*', '*HP LaserJet*', '*HP OfficeJet*', '*Hewlett-Packard*',
     '*Duo Security*', '*Duo *',
     '*VMware*', '*vSphere*', '*VMware Tools*'
@@ -1025,6 +1028,49 @@ function Test-IsCoveredSoftware {
     }
 
     return $false
+}
+
+# Build download path with truncated client name when path would exceed Windows MAX_PATH (~260 chars)
+function Get-SafeDownloadPath {
+    param(
+        [string]$TargetDir,
+        [string]$ClientName,
+        [string]$ReportName,
+        [string]$Ext,
+        [string]$Timestamp
+    )
+    $suffix = " - $ReportName - $Timestamp.$Ext"
+    $maxPathLen = 250
+    $availableForName = $maxPathLen - $TargetDir.Length - 1 - $suffix.Length
+    $safeClient = if ($availableForName -lt $ClientName.Length) {
+        if ($availableForName -gt 5) { $ClientName.Substring(0, $availableForName) } else { $ClientName.Substring(0, [Math]::Min(5, $ClientName.Length)) }
+    } else {
+        $ClientName
+    }
+    $filename = "$safeClient$suffix"
+    return Join-Path $TargetDir $filename
+}
+
+# Build report output path with truncated company name when path would exceed Windows MAX_PATH (~260 chars)
+function Get-SafeReportOutputPath {
+    param(
+        [string]$TargetDir,
+        [string]$CompanyName,
+        [string]$ReportSuffix,
+        [string]$Ext
+    )
+    $filename = "$CompanyName$ReportSuffix.$Ext"
+    $fullPath = Join-Path $TargetDir $filename
+    $maxPathLen = 250
+    if ($fullPath.Length -le $maxPathLen) { return $fullPath }
+    $suffixPart = "$ReportSuffix.$Ext"
+    $availableForName = $maxPathLen - $TargetDir.Length - 1 - $suffixPart.Length
+    $safeName = if ($availableForName -lt $CompanyName.Length) {
+        if ($availableForName -gt 5) { $CompanyName.Substring(0, $availableForName) } else { $CompanyName.Substring(0, [Math]::Min(5, $CompanyName.Length)) }
+    } else {
+        $CompanyName
+    }
+    return Join-Path $TargetDir "$safeName$suffixPart"
 }
 
 # --- Helper Functions ---

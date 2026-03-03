@@ -354,7 +354,7 @@ function Show-VScanMagicGUI {
             }
             $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
             $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
-            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Get-SafeDownloadPath -TargetDir $targetDir -ClientName $clientName -ReportName $r.Name -Ext $r.Ext -Timestamp $timestamp }
 
             $batchResult = $null
             $lastErr = $null
@@ -366,6 +366,9 @@ function Show-VScanMagicGUI {
                     [System.Windows.Forms.Application]::DoEvents()
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $standardReports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -SkipPostDownloadTopX -OnProgress $onProgress
+                    if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
+                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                    }
                     break
                 } catch {
                     $lastErr = $_
@@ -447,7 +450,7 @@ function Show-VScanMagicGUI {
             }
             $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
             $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
-            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+            $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Get-SafeDownloadPath -TargetDir $targetDir -ClientName $clientName -ReportName $r.Name -Ext $r.Ext -Timestamp $timestamp }
 
             $batchResult = $null
             for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
@@ -458,6 +461,9 @@ function Show-VScanMagicGUI {
                     [System.Windows.Forms.Application]::DoEvents()
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
+                    if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
+                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                    }
                     break
                 } catch {
                     $isRetryable = $_.Exception.Message -match 'timeout|timed out|connection|404|Unable to connect|reset'
@@ -511,7 +517,7 @@ function Show-VScanMagicGUI {
         }
         $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
         $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
-        $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "Global - $($r.Name) - $timestamp.$($r.Ext)" }
+        $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Get-SafeDownloadPath -TargetDir $targetDir -ClientName "Global" -ReportName $r.Name -Ext $r.Ext -Timestamp $timestamp }
         $btnDownloadGlobal.Enabled = $false
         $lblDownloadProgress.Text = "Connecting..."
         $form.Refresh()
@@ -529,6 +535,9 @@ function Show-VScanMagicGUI {
             $lblDownloadProgress.Text = "Downloading global reports..."
             $form.Refresh()
             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId 0 -ClientName "Global" -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
+            if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
+                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+            }
             $successCount = if ($batchResult.Succeeded) { $batchResult.Succeeded.Count } else { 0 }
             $failCount = if ($batchResult.Failed) { $batchResult.Failed.Count } else { 0 }
             [System.Windows.Forms.MessageBox]::Show("Download complete.`nSucceeded: $successCount | Failed: $failCount", "Download Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -1025,7 +1034,7 @@ function Show-VScanMagicGUI {
                     }
                     $useMiscForEpss = -not [string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath)
                     $miscDir = if ($useMiscForEpss) { Join-Path $downloadFolder "Misc" } else { $downloadFolder }
-                    $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Join-Path $targetDir "$clientName - $($r.Name) - $timestamp.$($r.Ext)" }
+                    $outputPathScript = { param($r) $targetDir = if ($useMiscForEpss -and $r.Type -eq 'pending-epss') { $miscDir } else { $downloadFolder }; Get-SafeDownloadPath -TargetDir $targetDir -ClientName $clientName -ReportName $r.Name -Ext $r.Ext -Timestamp $timestamp }
 
                     $batchResult = $null
                     $lastErr = $null
@@ -1037,6 +1046,9 @@ function Show-VScanMagicGUI {
                             [System.Windows.Forms.Application]::DoEvents()
                             $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -TopCount $topCount -MinEPSS $script:FilterMinEPSS -IncludeCritical $script:FilterIncludeCritical -IncludeHigh $script:FilterIncludeHigh -IncludeMedium $script:FilterIncludeMedium -IncludeLow $script:FilterIncludeLow -SkipPostDownloadTopX -OnProgress $onProgress
+                            if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
+                                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                            }
                             break
                         } catch {
                             $lastErr = $_
@@ -1047,7 +1059,7 @@ function Show-VScanMagicGUI {
                     }
                     if (-not $batchResult) { continue }
                     $inputReport = $batchResult.Succeeded | Where-Object { $_.Type -eq "all-vulnerabilities" } | Select-Object -First 1
-                    $inputPath = if ($inputReport) { Join-Path $downloadFolder "$clientName - $($inputReport.Name) - $timestamp.$($inputReport.Ext)" } else { $null }
+                    $inputPath = if ($inputReport) { & $outputPathScript $inputReport } else { $null }
                     if ($inputPath -and (Test-Path $inputPath)) {
                         $null = $companiesData.Add(@{ Company = $company; InputPath = $inputPath; ClientName = $clientName; ScanDate = $scanDate; OutputDir = $downloadFolder })
                     }
@@ -1133,7 +1145,7 @@ function Show-VScanMagicGUI {
             # Generate Excel report
             if ($script:OutputExcel) {
                 Update-Progress -Status "Generating Excel Report..." -Show $true
-                $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
+                $excelOutputPath = Get-SafeReportOutputPath -TargetDir $outputDir -CompanyName $companyName -ReportSuffix " Vulnerability Report_$reportTimestamp" -Ext "xlsx"
 
                 # Allow previous Excel instance (from Get-VulnerabilityData) to fully release before starting report generation
                 [System.GC]::Collect()
@@ -1150,7 +1162,7 @@ function Show-VScanMagicGUI {
             # Generate Email Template
             if ($script:OutputEmailTemplate) {
                 Update-Progress -Status "Generating Email Template..." -Show $true
-                $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
+                $emailOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Email Template_$reportTimestamp" -Ext "txt"
 
                 New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
 
@@ -1229,7 +1241,7 @@ function Show-VScanMagicGUI {
                 }
                 
                 if ($null -ne $timeEstimates -and $timeEstimates.Count -gt 0) {
-                    $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
+                    $timeEstimateOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Time Estimate_$reportTimestamp" -Ext "txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
@@ -1253,7 +1265,7 @@ function Show-VScanMagicGUI {
                 # (if time estimate was requested but cancelled, skip Word report)
                 if (-not $script:OutputTimeEstimate -or $null -ne $timeEstimates) {
                     Update-Progress -Status "Generating $reportTitle (Word)..." -Show $true
-                    $wordOutputPath = Join-Path $outputDir "$companyName $reportTitle _$reportTimestamp.docx"
+                    $wordOutputPath = Get-SafeReportOutputPath -TargetDir $outputDir -CompanyName $companyName -ReportSuffix " $reportTitle _$reportTimestamp" -Ext "docx"
 
                     Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
                         New-WordReport -OutputPath $wordOutputPath `
@@ -1276,7 +1288,7 @@ function Show-VScanMagicGUI {
             # Generate combined report (Ticket Instructions + Email Template + Time Estimate in tabs)
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
-                $reportHtmlPath = Join-Path $textOutputDir "$companyName Report_$reportTimestamp.html"
+                $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
@@ -1292,7 +1304,7 @@ function Show-VScanMagicGUI {
 
             # Auto-generate ticket notes file if we have data
             if ($null -ne $script:CurrentTop10Data) {
-                $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
+                $ticketNotesOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Ticket Notes_$reportTimestamp" -Ext "txt"
                 
                 New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
                 
@@ -1384,7 +1396,7 @@ function Show-VScanMagicGUI {
 
             if ($script:OutputExcel) {
                 Update-Progress -Status "Generating Excel Report..." -Show $true
-                $excelOutputPath = Join-Path $outputDir "$companyName Vulnerability Report_$reportTimestamp.xlsx"
+                $excelOutputPath = Get-SafeReportOutputPath -TargetDir $outputDir -CompanyName $companyName -ReportSuffix " Vulnerability Report_$reportTimestamp" -Ext "xlsx"
 
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
@@ -1399,7 +1411,7 @@ function Show-VScanMagicGUI {
 
             if ($script:OutputEmailTemplate) {
                 Update-Progress -Status "Generating Email Template..." -Show $true
-                $emailOutputPath = Join-Path $textOutputDir "$companyName Email Template_$reportTimestamp.txt"
+                $emailOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Email Template_$reportTimestamp" -Ext "txt"
 
                 New-EmailTemplate -OutputPath $emailOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
 
@@ -1477,7 +1489,7 @@ function Show-VScanMagicGUI {
                 }
                 
                 if ($null -ne $timeEstimates -and $timeEstimates.Count -gt 0) {
-                    $timeEstimateOutputPath = Join-Path $textOutputDir "$companyName Time Estimate_$reportTimestamp.txt"
+                    $timeEstimateOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Time Estimate_$reportTimestamp" -Ext "txt"
 
                     New-TimeEstimate -OutputPath $timeEstimateOutputPath -Top10Data $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations
 
@@ -1497,7 +1509,7 @@ function Show-VScanMagicGUI {
             if ($script:OutputWord) {
                 if (-not $script:OutputTimeEstimate -or $null -ne $timeEstimates) {
                     Update-Progress -Status "Generating $reportTitle (Word)..." -Show $true
-                    $wordOutputPath = Join-Path $outputDir "$companyName $reportTitle _$reportTimestamp.docx"
+                    $wordOutputPath = Get-SafeReportOutputPath -TargetDir $outputDir -CompanyName $companyName -ReportSuffix " $reportTitle _$reportTimestamp" -Ext "docx"
 
                     Invoke-OperationWithRetry -OperationName "Word Report Generation" -Operation {
                         New-WordReport -OutputPath $wordOutputPath `
@@ -1519,7 +1531,7 @@ function Show-VScanMagicGUI {
 
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
-                $reportHtmlPath = Join-Path $textOutputDir "$companyName Report_$reportTimestamp.html"
+                $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
@@ -1534,7 +1546,7 @@ function Show-VScanMagicGUI {
             }
 
             if ($null -ne $script:CurrentTop10Data) {
-                $ticketNotesOutputPath = Join-Path $textOutputDir "$companyName Ticket Notes_$reportTimestamp.txt"
+                $ticketNotesOutputPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Ticket Notes_$reportTimestamp" -Ext "txt"
                 
                 New-TicketNotes -Top10Data $script:CurrentTop10Data -TimeEstimates $script:CurrentTimeEstimates -OutputPath $ticketNotesOutputPath -IsRMITPlus $isRMITPlus -FilterTopN $script:FilterTopN
                 
