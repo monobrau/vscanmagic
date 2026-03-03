@@ -550,7 +550,7 @@ function New-WordReport {
 
             $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
 
-            # Add modifier text or product-type suffix (same logic as Ticket Instructions)
+            # Add modifier text or product-type suffix (Top N report uses full modifier for client benefit: ticket generated, approval needed)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
                 $ticketGenerated = $timeEstimate.TicketGenerated
@@ -561,6 +561,9 @@ function New-WordReport {
                 $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
                 if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
                     $title += $modifierText
+                }
+                if ($afterHours) {
+                    $title = "After Hours - $title"
                 }
             } else {
                 # Product-type suffix when no modifier (same chain as ticket subject)
@@ -579,9 +582,9 @@ function New-WordReport {
                 } elseif ($item.Product -like "*Microsoft Teams*") {
                     $title += " - Application Update Required"
                 } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - RMIT+ ticketed"
+                    $title += " - Updates Required"
                 } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - RMIT+ after-hours ticket created if we maintain this"
+                    $title += " - Update Required"
                 } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
                     $title += " - This software updates automatically"
                 } else {

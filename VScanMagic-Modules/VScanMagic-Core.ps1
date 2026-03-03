@@ -978,6 +978,34 @@ function Get-ModifierText {
     return ""
 }
 
+# Modifier text for ticket/report subject lines only: no "ticket generated" text (subject IS the ticket).
+# When AfterHours, caller prepends "After Hours - " to the subject (no "ticket generated" or "after-hours work required").
+function Get-ModifierTextForSubject {
+    param(
+        [bool]$AfterHours,
+        [bool]$TicketGenerated,
+        [bool]$ThirdParty
+    )
+
+    # Ticket generated: no modifier (subject IS the ticket; redundant to say "ticket generated")
+    if ($TicketGenerated) {
+        return ""
+    }
+    # After hours: caller prepends "After Hours - "; don't add "after-hours work required" (redundant)
+    if ($AfterHours -and $ThirdParty) {
+        return " - 3rd party application"
+    }
+    if ($AfterHours) {
+        return ""
+    }
+    # Third party only (no "approval needed" - ticket creation implies approval from quoting process)
+    if ($ThirdParty) {
+        return " - 3rd party application"
+    }
+
+    return ""
+}
+
 # First-party vendors: always treated as first party (not 3rd party) in time estimate dialog
 $script:FirstPartyVendorPatterns = @(
     '*Sonicwall*', '*SonicWall*',

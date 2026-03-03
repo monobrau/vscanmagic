@@ -1069,25 +1069,28 @@ function New-TicketInstructions {
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 $ticketSubject += "$($item.Product) - Application Update Required"
             } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - RMIT+ ticketed"
+                $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
+                $ticketSubject += "$($item.Product) - Update Required"
             } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
                 $ticketSubject += "$($item.Product) - This software updates automatically"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
 
-            # Append modifier text (3rd party, after hours, ticket generated) - same logic as Word report
+            # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
                 $ticketGenerated = $timeEstimate.TicketGenerated
                 $thirdParty = $timeEstimate.ThirdParty
                 $autoTicketGenerated = $thirdParty -and $afterHours
                 $isTicketGenerated = $ticketGenerated -or $autoTicketGenerated
-                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
+                $modifierText = Get-ModifierTextForSubject -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
                 if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
                     $ticketSubject += $modifierText
+                }
+                if ($afterHours) {
+                    $ticketSubject = "After Hours - $ticketSubject"
                 }
             }
 
@@ -1221,24 +1224,27 @@ function New-TicketInstructionsHtml {
             } elseif ($item.Product -like "*Microsoft Teams*") {
                 $ticketSubject += "$($item.Product) - Application Update Required"
             } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - RMIT+ ticketed"
+                $ticketSubject += "$($item.Product) - Updates Required"
             } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - RMIT+ after-hours ticket created if we maintain this"
+                $ticketSubject += "$($item.Product) - Update Required"
             } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
                 $ticketSubject += "$($item.Product) - This software updates automatically"
             } else {
                 $ticketSubject += "$($item.Product) - Update Required"
             }
-            # Append modifier text (3rd party, after hours, ticket generated) - same logic as Word report
+            # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
                 $ticketGenerated = $timeEstimate.TicketGenerated
                 $thirdParty = $timeEstimate.ThirdParty
                 $autoTicketGenerated = $thirdParty -and $afterHours
                 $isTicketGenerated = $ticketGenerated -or $autoTicketGenerated
-                $modifierText = Get-ModifierText -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
+                $modifierText = Get-ModifierTextForSubject -AfterHours $afterHours -TicketGenerated $isTicketGenerated -ThirdParty $thirdParty
                 if (-not [string]::IsNullOrWhiteSpace($modifierText)) {
                     $ticketSubject += $modifierText
+                }
+                if ($afterHours) {
+                    $ticketSubject = "After Hours - $ticketSubject"
                 }
             }
 
