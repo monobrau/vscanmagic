@@ -3422,7 +3422,7 @@ function Show-CompanyFolderMappingDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(500, 550)
+    $settingsForm.Size = New-Object System.Drawing.Size(620, 580)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -3562,7 +3562,7 @@ function Show-SettingsDialog {
 
     $txtSettingsDirectory = New-Object System.Windows.Forms.TextBox
     $txtSettingsDirectory.Location = New-Object System.Drawing.Point(180, $y)
-    $txtSettingsDirectory.Size = New-Object System.Drawing.Size(200, 20)
+    $txtSettingsDirectory.Size = New-Object System.Drawing.Size(280, 20)
     $txtSettingsDirectory.ReadOnly = $true
     $displayDir = if ([string]::IsNullOrEmpty($script:UserSettings.SettingsDirectory)) {
         Join-Path $env:LOCALAPPDATA "VScanMagic"
@@ -3573,7 +3573,7 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($txtSettingsDirectory)
 
     $btnBrowseSettingsDir = New-Object System.Windows.Forms.Button
-    $btnBrowseSettingsDir.Location = New-Object System.Drawing.Point(390, ($y - 2))
+    $btnBrowseSettingsDir.Location = New-Object System.Drawing.Point(470, ($y - 2))
     $btnBrowseSettingsDir.Size = New-Object System.Drawing.Size(70, 25)
     $btnBrowseSettingsDir.Text = "Browse..."
     $btnBrowseSettingsDir.Add_Click({
@@ -3589,7 +3589,7 @@ function Show-SettingsDialog {
     })
     $settingsForm.Controls.Add($btnBrowseSettingsDir)
 
-    # Quick paths for cloud folders (show only if path exists)
+    # Quick paths for cloud folders (show only if path exists) - on second row to avoid cutoff
     $oneDriveOrg = Get-ChildItem -Path $env:USERPROFILE -Filter "OneDrive - *" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     $cloudPaths = @(
         @{ Name = "OneDrive"; Path = (Join-Path $env:USERPROFILE "OneDrive") },
@@ -3598,11 +3598,12 @@ function Show-SettingsDialog {
         @{ Name = "My Drive"; Path = (Join-Path $env:USERPROFILE "My Drive") },
         @{ Name = "Dropbox"; Path = (Join-Path $env:USERPROFILE "Dropbox") }
     )
-    $cloudX = 470
+    $cloudY = $y + 22
+    $cloudX = 180
     foreach ($cp in $cloudPaths) {
         if ($cp.Path -and (Test-Path $cp.Path)) {
             $btn = New-Object System.Windows.Forms.Button
-            $btn.Location = New-Object System.Drawing.Point($cloudX, ($y - 2))
+            $btn.Location = New-Object System.Drawing.Point($cloudX, $cloudY)
             $btn.Size = New-Object System.Drawing.Size(75, 25)
             $btn.Text = $cp.Name
             $btn.Font = New-Object System.Drawing.Font($btn.Font.FontFamily, 8)
@@ -3612,12 +3613,12 @@ function Show-SettingsDialog {
             $cloudX += 80
         }
     }
-    $y += 35
+    $y += 52
 
     # Help text for cloud storage
     $lblCloudHint = New-Object System.Windows.Forms.Label
     $lblCloudHint.Location = New-Object System.Drawing.Point(180, $y)
-    $lblCloudHint.Size = New-Object System.Drawing.Size(400, 16)
+    $lblCloudHint.Size = New-Object System.Drawing.Size(420, 16)
     $lblCloudHint.Text = "You can use a cloud folder (OneDrive, Google Drive) or network share."
     $lblCloudHint.ForeColor = [System.Drawing.Color]::Gray
     $lblCloudHint.Font = New-Object System.Drawing.Font($lblCloudHint.Font.FontFamily, 8)
@@ -3660,13 +3661,13 @@ function Show-SettingsDialog {
 
     # Backup / Restore Settings (All, Shared, or User scope)
     $lblBackupScope = New-Object System.Windows.Forms.Label
-    $lblBackupScope.Location = New-Object System.Drawing.Point(20, $y + 6)
+    $lblBackupScope.Location = [System.Drawing.Point]::new(20, $y + 6)
     $lblBackupScope.Size = New-Object System.Drawing.Size(50, 18)
     $lblBackupScope.Text = "Scope:"
     $settingsForm.Controls.Add($lblBackupScope)
 
     $cmbBackupScope = New-Object System.Windows.Forms.ComboBox
-    $cmbBackupScope.Location = New-Object System.Drawing.Point(70, ($y + 2))
+    $cmbBackupScope.Location = [System.Drawing.Point]::new(70, $y + 2)
     $cmbBackupScope.Size = New-Object System.Drawing.Size(90, 21)
     $cmbBackupScope.DropDownStyle = "DropDownList"
     [void]$cmbBackupScope.Items.AddRange(@("All", "Shared only", "User only"))
