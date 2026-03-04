@@ -191,25 +191,45 @@ function Update-SettingsPaths {
     if (Ensure-SettingsDirectory -Path $script:SettingsDirectory) { Write-Host "Created settings directory: $script:SettingsDirectory" }
 }
 
+# Shared files: remediation rules, templates, etc. - safe to share between users
+$script:BackupSharedFiles = @(
+    "VScanMagic_RemediationRules.json",
+    "VScanMagic_Templates.json",
+    "VScanMagic_GeneralRecommendations.json",
+    "VScanMagic_CoveredSoftware.json",
+    "VScanMagic_CompanyFolderMap.json"
+)
+# User-specific files: credentials, paths, API keys - personal, not for sharing
+$script:BackupUserFiles = @(
+    "VScanMagic_Settings.json",
+    "VScanMagic_ReportFolderHistory.json",
+    "ConnectSecure-Credentials.json",
+    "ConnectSecure-Companies-Cache.json",
+    "ConnectWise-Automate-Credentials.json"
+)
+
 function Backup-Settings {
-    param([string]$OutputPath = $null)
-    $settingsFiles = @(
-        "VScanMagic_Settings.json",
-        "VScanMagic_RemediationRules.json",
-        "VScanMagic_CoveredSoftware.json",
-        "VScanMagic_GeneralRecommendations.json",
-        "VScanMagic_CompanyFolderMap.json",
-        "VScanMagic_ReportFolderHistory.json",
-        "VScanMagic_Templates.json",
-        "ConnectSecure-Credentials.json",
-        "ConnectSecure-Companies-Cache.json",
-        "ConnectWise-Automate-Credentials.json"
+    param(
+        [string]$OutputPath = $null,
+        [ValidateSet("All", "Shared", "User")]
+        [string]$Scope = "All"
     )
     if (-not (Test-Path $script:SettingsDirectory)) {
         return $null
     }
+    # Ensure remediation rules are on disk before backup (defaults may be in-memory only)
+    Load-RemediationRules | Out-Null
+    Save-RemediationRules | Out-Null
+
+    $settingsFiles = switch ($Scope) {
+        "Shared" { $script:BackupSharedFiles }
+        "User"   { $script:BackupUserFiles }
+        default  { $script:BackupSharedFiles + $script:BackupUserFiles }
+    }
+
     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-    $defaultName = "VScanMagic_Settings_Backup_$timestamp.zip"
+    $scopeSuffix = if ($Scope -eq "All") { "" } else { "_$Scope" }
+    $defaultName = "VScanMagic_Settings_Backup$scopeSuffix`_$timestamp.zip"
     if ([string]::IsNullOrWhiteSpace($OutputPath)) {
         $OutputPath = Join-Path ([Environment]::GetFolderPath("Desktop")) $defaultName
     } elseif ([System.IO.Directory]::Exists($OutputPath)) {
@@ -219,17 +239,28 @@ function Backup-Settings {
     try {
         New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
         $copied = 0
+        $copiedList = @()
         foreach ($f in $settingsFiles) {
             $src = Join-Path $script:SettingsDirectory $f
             if (Test-Path $src) {
                 Copy-Item -Path $src -Destination (Join-Path $tempDir $f) -Force
                 $copied++
+                $copiedList += $f
             }
         }
         if ($copied -eq 0) {
             Write-Warning "No settings files found to backup."
             return $null
         }
+        # Write manifest
+        $manifest = @"
+VScanMagic Settings Backup
+Scope: $Scope
+Timestamp: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Files included:
+$($copiedList -join "`r`n")
+"@
+        $manifest | Set-Content -Path (Join-Path $tempDir "backup-manifest.txt") -Encoding UTF8
         if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
         Compress-Archive -Path (Join-Path $tempDir "*") -DestinationPath $OutputPath -Force
         return $OutputPath
@@ -239,7 +270,11 @@ function Backup-Settings {
 }
 
 function Restore-Settings {
-    param([string]$BackupPath)
+    param(
+        [string]$BackupPath,
+        [ValidateSet("All", "Shared", "User")]
+        [string]$Scope = "All"
+    )
     if (-not $BackupPath -or -not (Test-Path $BackupPath)) { return $false }
     $ext = [System.IO.Path]::GetExtension($BackupPath)
     if ($ext -ne ".zip") {
@@ -250,21 +285,32 @@ function Restore-Settings {
         Ensure-SettingsDirectory -Path $script:SettingsDirectory | Out-Null
         $tempDir = Join-Path $env:TEMP "VScanMagic_Restore_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
         Expand-Archive -Path $BackupPath -DestinationPath $tempDir -Force
+        $allowedFiles = switch ($Scope) {
+            "Shared" { $script:BackupSharedFiles }
+            "User"   { $script:BackupUserFiles }
+            default  { $null }  # All = no filter
+        }
         $restored = 0
         Get-ChildItem -Path $tempDir -Filter "*.json" | ForEach-Object {
-            $dest = Join-Path $script:SettingsDirectory $_.Name
-            Copy-Item -Path $_.FullName -Destination $dest -Force
-            $restored++
+            if ($null -eq $allowedFiles -or $allowedFiles -contains $_.Name) {
+                $dest = Join-Path $script:SettingsDirectory $_.Name
+                Copy-Item -Path $_.FullName -Destination $dest -Force
+                $restored++
+            }
         }
         Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         if ($restored -gt 0) {
-            Load-UserSettings | Out-Null
-            Update-SettingsPaths
-            Load-RemediationRules
-            Load-CoveredSoftware
-            Load-GeneralRecommendations
-            Load-CompanyFolderMap
-            Load-Templates
+            if ($Scope -eq "All" -or $Scope -eq "User") {
+                Load-UserSettings | Out-Null
+                Update-SettingsPaths
+            }
+            if ($Scope -eq "All" -or $Scope -eq "Shared") {
+                Load-RemediationRules
+                Load-CoveredSoftware
+                Load-GeneralRecommendations
+                Load-CompanyFolderMap
+                Load-Templates
+            }
             return $true
         }
         return $false

@@ -1917,6 +1917,14 @@ function Show-RemediationRulesDialog {
         $editForm.ShowDialog() | Out-Null
     }
 
+    # Double-click to edit
+    $dataGridView.Add_CellDoubleClick({
+        param($sender, $e)
+        if ($e.RowIndex -ge 0) {
+            Show-EditRuleDialog -RuleIndex $e.RowIndex
+        }
+    })
+
     # Populate grid
     Refresh-RulesGrid
 
@@ -1982,6 +1990,79 @@ function Show-RemediationRulesDialog {
         }
     })
     $rulesForm.Controls.Add($btnDelete)
+
+    $btnReset = New-Object System.Windows.Forms.Button
+    $btnReset.Location = New-Object System.Drawing.Point(320, $y)
+    $btnReset.Size = New-Object System.Drawing.Size(100, 30)
+    $btnReset.Text = "Reset to Defaults"
+    $btnReset.Add_Click({
+        $result = [System.Windows.Forms.MessageBox]::Show("Replace all rules with app defaults? Unsaved changes will be lost.", "Reset to Defaults",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $script:RemediationRules = Get-DefaultRemediationRules
+            Refresh-RulesGrid
+        }
+    })
+    $rulesForm.Controls.Add($btnReset)
+
+    $btnExport = New-Object System.Windows.Forms.Button
+    $btnExport.Location = New-Object System.Drawing.Point(430, $y)
+    $btnExport.Size = New-Object System.Drawing.Size(75, 30)
+    $btnExport.Text = "Export..."
+    $btnExport.Add_Click({
+        $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDlg.Filter = "JSON (*.json)|*.json|All Files (*.*)|*.*"
+        $saveDlg.Title = "Export Remediation Rules"
+        $saveDlg.FileName = "VScanMagic_RemediationRules.json"
+        if ($saveDlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            try {
+                $script:RemediationRules | ConvertTo-Json -Depth 10 | Set-Content -Path $saveDlg.FileName -Encoding UTF8
+                [System.Windows.Forms.MessageBox]::Show("Rules exported to:`n$($saveDlg.FileName)", "Export Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", "Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+    $rulesForm.Controls.Add($btnExport)
+
+    $btnImport = New-Object System.Windows.Forms.Button
+    $btnImport.Location = New-Object System.Drawing.Point(515, $y)
+    $btnImport.Size = New-Object System.Drawing.Size(75, 30)
+    $btnImport.Text = "Import..."
+    $btnImport.Add_Click({
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Filter = "JSON (*.json)|*.json|All Files (*.*)|*.*"
+        $dlg.Title = "Import Remediation Rules"
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            try {
+                $json = Get-Content $dlg.FileName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $arr = if ($json -is [Array]) { @($json) } else { @($json) }
+                $imported = @()
+                foreach ($r in $arr) {
+                    $imported += @{ Pattern = $r.Pattern; WordText = $r.WordText; TicketText = $r.TicketText; IsDefault = $r.IsDefault }
+                }
+                if ($imported.Count -gt 0) {
+                    $result = [System.Windows.Forms.MessageBox]::Show("Replace current rules with imported rules ($($imported.Count) rules)?", "Import",
+                        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+                    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+                        $script:RemediationRules = $imported
+                        Refresh-RulesGrid
+                        [System.Windows.Forms.MessageBox]::Show("Imported $($imported.Count) rules. Click Save to persist.", "Import Complete",
+                            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                    }
+                } else {
+                    [System.Windows.Forms.MessageBox]::Show("No valid rules found in file.", "Import",
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                }
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Import failed: $($_.Exception.Message)", "Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+    $rulesForm.Controls.Add($btnImport)
 
     $btnSave = New-Object System.Windows.Forms.Button
     $btnSave.Location = New-Object System.Drawing.Point(680, $y)
@@ -3497,7 +3578,7 @@ function Show-SettingsDialog {
     $btnBrowseSettingsDir.Text = "Browse..."
     $btnBrowseSettingsDir.Add_Click({
         $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-        $folderBrowser.Description = "Select directory for settings and rules configuration files"
+        $folderBrowser.Description = "Select directory for settings and rules configuration files. You can use a cloud folder (OneDrive, Google Drive) or network share."
         $folderBrowser.ShowNewFolderButton = $true
         if (-not [string]::IsNullOrEmpty($txtSettingsDirectory.Text)) {
             $folderBrowser.SelectedPath = $txtSettingsDirectory.Text
@@ -3507,7 +3588,41 @@ function Show-SettingsDialog {
         }
     })
     $settingsForm.Controls.Add($btnBrowseSettingsDir)
+
+    # Quick paths for cloud folders (show only if path exists)
+    $oneDriveOrg = Get-ChildItem -Path $env:USERPROFILE -Filter "OneDrive - *" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cloudPaths = @(
+        @{ Name = "OneDrive"; Path = (Join-Path $env:USERPROFILE "OneDrive") },
+        @{ Name = "OneDrive (org)"; Path = $(if ($oneDriveOrg) { $oneDriveOrg.FullName } else { $null }) },
+        @{ Name = "Google Drive"; Path = (Join-Path $env:USERPROFILE "Google Drive") },
+        @{ Name = "My Drive"; Path = (Join-Path $env:USERPROFILE "My Drive") },
+        @{ Name = "Dropbox"; Path = (Join-Path $env:USERPROFILE "Dropbox") }
+    )
+    $cloudX = 470
+    foreach ($cp in $cloudPaths) {
+        if ($cp.Path -and (Test-Path $cp.Path)) {
+            $btn = New-Object System.Windows.Forms.Button
+            $btn.Location = New-Object System.Drawing.Point($cloudX, ($y - 2))
+            $btn.Size = New-Object System.Drawing.Size(75, 25)
+            $btn.Text = $cp.Name
+            $btn.Font = New-Object System.Drawing.Font($btn.Font.FontFamily, 8)
+            $path = $cp.Path
+            $btn.Add_Click({ $txtSettingsDirectory.Text = $path })
+            $settingsForm.Controls.Add($btn)
+            $cloudX += 80
+        }
+    }
     $y += 35
+
+    # Help text for cloud storage
+    $lblCloudHint = New-Object System.Windows.Forms.Label
+    $lblCloudHint.Location = New-Object System.Drawing.Point(180, $y)
+    $lblCloudHint.Size = New-Object System.Drawing.Size(400, 16)
+    $lblCloudHint.Text = "You can use a cloud folder (OneDrive, Google Drive) or network share."
+    $lblCloudHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblCloudHint.Font = New-Object System.Drawing.Font($lblCloudHint.Font.FontFamily, 8)
+    $settingsForm.Controls.Add($lblCloudHint)
+    $y += 22
 
     # Reset to Default button
     $btnResetDir = New-Object System.Windows.Forms.Button
@@ -3543,23 +3658,37 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($lblAIApiHint)
     $y += 40
 
-    # Backup / Restore Settings
+    # Backup / Restore Settings (All, Shared, or User scope)
+    $lblBackupScope = New-Object System.Windows.Forms.Label
+    $lblBackupScope.Location = New-Object System.Drawing.Point(20, $y + 6)
+    $lblBackupScope.Size = New-Object System.Drawing.Size(50, 18)
+    $lblBackupScope.Text = "Scope:"
+    $settingsForm.Controls.Add($lblBackupScope)
+
+    $cmbBackupScope = New-Object System.Windows.Forms.ComboBox
+    $cmbBackupScope.Location = New-Object System.Drawing.Point(70, ($y + 2))
+    $cmbBackupScope.Size = New-Object System.Drawing.Size(90, 21)
+    $cmbBackupScope.DropDownStyle = "DropDownList"
+    [void]$cmbBackupScope.Items.AddRange(@("All", "Shared only", "User only"))
+    $cmbBackupScope.SelectedIndex = 0
+    $settingsForm.Controls.Add($cmbBackupScope)
+
     $btnBackup = New-Object System.Windows.Forms.Button
-    $btnBackup.Location = New-Object System.Drawing.Point(20, $y)
-    $btnBackup.Size = New-Object System.Drawing.Size(100, 30)
-    $btnBackup.Text = "Backup Settings"
+    $btnBackup.Location = New-Object System.Drawing.Point(170, $y)
+    $btnBackup.Size = New-Object System.Drawing.Size(90, 28)
+    $btnBackup.Text = "Backup..."
     $btnBackup.Add_Click({
-        $defaultName = "VScanMagic_Settings_Backup_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').zip"
+        $scope = switch ($cmbBackupScope.SelectedIndex) { 0 { "All" } 1 { "Shared" } default { "User" } }
+        $defaultName = "VScanMagic_Settings_Backup$(if($scope -ne 'All'){"_$scope"})_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').zip"
         $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
         $saveDlg.Filter = "ZIP Archive (*.zip)|*.zip|All Files (*.*)|*.*"
-        $saveDlg.Title = "Save Settings Backup"
+        $saveDlg.Title = "Save Settings Backup ($scope)"
         $saveDlg.FileName = $defaultName
-        $saveDlg.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+        $initDir = if ($script:UserSettings.SettingsDirectory -and (Test-Path $script:UserSettings.SettingsDirectory)) { $script:UserSettings.SettingsDirectory } else { [Environment]::GetFolderPath("Desktop") }
+        $saveDlg.InitialDirectory = $initDir
         if ($saveDlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $outPath = Backup-Settings -OutputPath $saveDlg.FileName
-        } else {
-            $outPath = $null
-        }
+            $outPath = Backup-Settings -OutputPath $saveDlg.FileName -Scope $scope
+        } else { $outPath = $null }
         if ($outPath) {
             [System.Windows.Forms.MessageBox]::Show("Settings backed up to:`n$outPath", "Backup Complete",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -3571,22 +3700,23 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($btnBackup)
 
     $btnRestore = New-Object System.Windows.Forms.Button
-    $btnRestore.Location = New-Object System.Drawing.Point(130, $y)
-    $btnRestore.Size = New-Object System.Drawing.Size(100, 30)
-    $btnRestore.Text = "Restore Settings"
+    $btnRestore.Location = New-Object System.Drawing.Point(270, $y)
+    $btnRestore.Size = New-Object System.Drawing.Size(90, 28)
+    $btnRestore.Text = "Restore..."
     $btnRestore.Add_Click({
+        $scope = switch ($cmbBackupScope.SelectedIndex) { 0 { "All" } 1 { "Shared" } default { "User" } }
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
         $dlg.Filter = "Backup ZIP (*.zip)|*.zip|All Files (*.*)|*.*"
-        $dlg.Title = "Select VScanMagic Settings Backup"
+        $dlg.Title = "Select VScanMagic Settings Backup (will restore $scope)"
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $result = Restore-Settings -BackupPath $dlg.FileName
+            $result = Restore-Settings -BackupPath $dlg.FileName -Scope $scope
             if ($result) {
                 [System.Windows.Forms.MessageBox]::Show("Settings restored successfully. Restart the application for full effect.", "Restore Complete",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
                 $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
                 $settingsForm.Close()
             } else {
-                [System.Windows.Forms.MessageBox]::Show("Restore failed or backup contained no valid files.", "Restore Failed",
+                [System.Windows.Forms.MessageBox]::Show("Restore failed or backup contained no valid files for scope '$scope'.", "Restore Failed",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
             }
         }
