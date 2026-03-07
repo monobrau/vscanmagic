@@ -565,6 +565,34 @@ function Resolve-VulnerabilityScansSubpath {
     return Join-Path $FolderName "Network Documentation\Vulnerability Scans"
 }
 
+function Get-ReportsPathPartial {
+    <#
+    .SYNOPSIS
+    Returns a partial path for ticket instructions: company name (if provided) + Network Documentation onwards.
+    Technicians use this to locate the reports folder (e.g. ClientName\Network Documentation\Vulnerability Scans\2026 - Q1).
+    #>
+    param(
+        [string]$FullOutputPath,
+        [string]$CompanyName = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($FullOutputPath)) { return $null }
+    $path = [System.IO.Path]::GetFullPath($FullOutputPath.Trim())
+    $ndIdx = $path.IndexOf("Network Documentation", [StringComparison]::OrdinalIgnoreCase)
+    $partial = $null
+    if ($ndIdx -ge 0) {
+        $partial = $path.Substring($ndIdx).Replace([System.IO.Path]::DirectorySeparatorChar, '\')
+    } else {
+        # Fallback: use last path segment (year-quarter folder, e.g. 2026 - Q1)
+        $parts = $path.Split([System.IO.Path]::DirectorySeparatorChar, [StringSplitOptions]::RemoveEmptyEntries)
+        if ($parts.Count -ge 1) { $partial = $parts[-1] }
+    }
+    if ([string]::IsNullOrWhiteSpace($partial)) { return $null }
+    if (-not [string]::IsNullOrWhiteSpace($CompanyName)) {
+        $partial = "$($CompanyName.Trim())\$partial"
+    }
+    return $partial
+}
+
 function Resolve-QuarterFolderName {
     param(
         [string]$ClientPath,

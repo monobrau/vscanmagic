@@ -1302,13 +1302,15 @@ function Show-VScanMagicGUI {
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
                 $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
+                $reportsPathPartial = Get-ReportsPathPartial -FullOutputPath $outputDir -CompanyName $companyName
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
                     -IncludeEmailTemplate $script:OutputEmailTemplate `
                     -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
                     -FilterTopN $script:FilterTopN `
-                    -CompanyName $companyName
+                    -CompanyName $companyName `
+                    -ReportsPathPartial $reportsPathPartial
 
                 $script:TicketInstructionsPath = $reportHtmlPath
                 $script:TicketInstructionsHtmlPath = $reportHtmlPath
@@ -1545,13 +1547,15 @@ function Show-VScanMagicGUI {
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
                 $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
+                $reportsPathPartial = Get-ReportsPathPartial -FullOutputPath $outputDir -CompanyName $companyName
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
                     -IncludeEmailTemplate $script:OutputEmailTemplate `
                     -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
                     -FilterTopN $script:FilterTopN `
-                    -CompanyName $companyName
+                    -CompanyName $companyName `
+                    -ReportsPathPartial $reportsPathPartial
 
                 $script:TicketInstructionsPath = $reportHtmlPath
                 $script:TicketInstructionsHtmlPath = $reportHtmlPath

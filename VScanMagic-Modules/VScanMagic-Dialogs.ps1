@@ -1018,7 +1018,8 @@ function New-TicketInstructions {
         [array]$TopTenData,
         [array]$TimeEstimates = $null,
         [bool]$IsRMITPlus = $false,
-        [array]$GeneralRecommendations = $null
+        [array]$GeneralRecommendations = $null,
+        [string]$ReportsPathPartial = $null
     )
 
     try {
@@ -1110,6 +1111,10 @@ function New-TicketInstructions {
             [void]$sb.AppendLine(("Affected Systems Count:".PadRight(25)) + $item.AffectedSystems.Count)
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("NOTE: This remediation can go to any available technician.")
+            if (-not [string]::IsNullOrWhiteSpace($ReportsPathPartial)) {
+                [void]$sb.AppendLine()
+                [void]$sb.AppendLine("Reports location: ...\$ReportsPathPartial")
+            }
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Affected Systems:")
             # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP" or "hostname - IP"
@@ -1177,6 +1182,7 @@ function New-TicketInstructionsHtml {
         [array]$TimeEstimates = $null,
         [bool]$IsRMITPlus = $false,
         [array]$GeneralRecommendations = $null,
+        [string]$ReportsPathPartial = $null,
         [switch]$PassThru
     )
 
@@ -1266,9 +1272,11 @@ Total Vulnerabilities:   $($item.VulnCount)
 Affected Systems Count:  $($item.AffectedSystems.Count)
 
 NOTE: This remediation can go to any available technician.
-
-Affected Systems:
 "@
+            if (-not [string]::IsNullOrWhiteSpace($ReportsPathPartial)) {
+                $sectionBody += "`n`nReports location: ...\$ReportsPathPartial`n"
+            }
+            $sectionBody += "`nAffected Systems:`n"
             $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
@@ -1417,7 +1425,8 @@ function New-CombinedReportHtml {
         [bool]$IncludeEmailTemplate = $false,
         [bool]$IncludeTimeEstimate = $false,
         [string]$FilterTopN = $null,
-        [string]$CompanyName = $null
+        [string]$CompanyName = $null,
+        [string]$ReportsPathPartial = $null
     )
 
     try {
@@ -1429,7 +1438,7 @@ function New-CombinedReportHtml {
 
         # Tab 1: Ticket Instructions
         if ($IncludeTicketInstructions -and $TopTenData -and $TopTenData.Count -gt 0) {
-            $ticketHtml = New-TicketInstructionsHtml -OutputPath $null -TopTenData $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -PassThru
+            $ticketHtml = New-TicketInstructionsHtml -OutputPath $null -TopTenData $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -ReportsPathPartial $ReportsPathPartial -PassThru
             if ($ticketHtml -match '(?s)<body[^>]*>(.*)</body>') {
                 $ticketBody = $matches[1].Trim()
             } else {
