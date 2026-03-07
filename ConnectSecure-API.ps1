@@ -990,7 +990,7 @@ function Get-ConnectSecureAssets {
 
 # --- Company Review (agents, probes, credentials, firewall, scan dates) ---
 # NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first
-# (see archive/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
+# (see api/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
 # Endpoints from swagger.yaml
 $script:CompanyReviewEndpoints = @{
     JobsView                  = '/r/company/jobs_view'
@@ -1139,6 +1139,65 @@ function Get-ConnectSecureUsernamesByHostname {
         }
     } catch {
         Write-CSApiLog "Get-ConnectSecureUsernamesByHostname failed: $($_.Exception.Message)" -Level Warning
+    }
+    return $result
+}
+
+function Get-ConnectSecureLastPingByHostname {
+    <#
+    .SYNOPSIS
+    Returns hostname/IP -> last_ping_time map from ConnectSecure agents. Use for Top N report and ticket instructions.
+    Same last_ping_time used for company review "agent last online" display.
+    #>
+    param(
+        [int]$CompanyId,
+        [string[]]$Hostnames,
+        [string[]]$IPs = @()
+    )
+    if ($CompanyId -le 0) { return @{} }
+    $result = @{}
+    foreach ($h in $Hostnames) { if (-not [string]::IsNullOrWhiteSpace($h)) { $result[$h.Trim()] = "" } }
+    foreach ($ip in $IPs) { if (-not [string]::IsNullOrWhiteSpace($ip)) { $result[$ip.Trim()] = "" } }
+    if ($result.Count -eq 0) { return @{} }
+    try {
+        $agents = Get-ConnectSecureCompanyAgents -CompanyId $CompanyId
+        if (-not $agents -or $agents.Count -eq 0) { return $result }
+        $hostToPing = @{}
+        $ipToPing = @{}
+        foreach ($a in $agents) {
+            $lp = $a.last_ping_time; switch (-not $lp) { $true { $lp = $a.lastPingTime } }
+            switch (-not $lp) { $true { $lp = $a.'Last Ping Time' } }
+            switch (-not $lp) { $true { continue } }
+            try {
+                $dt = [DateTime]::Parse($lp)
+                $formatted = $dt.ToLocalTime().ToString('yyyy-MM-dd HH:mm')
+            } catch { continue }
+            $hn = $a.host_name; switch (-not $hn) { $true { $hn = $a.'Host Name' } }
+            switch (-not $hn) { $true { $hn = $a.hostname } }; switch (-not $hn) { $true { $hn = $a.name } }
+            $ip = $a.ip; switch (-not $ip) { $true { $ip = $a.IP } }
+            if (-not [string]::IsNullOrWhiteSpace($hn)) {
+                $hnNorm = [string]$hn.Trim().ToLowerInvariant()
+                $shortName = if ($hnNorm -match '^([^.]+)\.') { $Matches[1] } else { $hnNorm }
+                if (-not $hostToPing.ContainsKey($hnNorm) -or [string]::Compare($formatted, $hostToPing[$hnNorm]) -gt 0) { $hostToPing[$hnNorm] = $formatted }
+                if (-not $hostToPing.ContainsKey($shortName) -or [string]::Compare($formatted, $hostToPing[$shortName]) -gt 0) { $hostToPing[$shortName] = $formatted }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                $ipStr = [string]$ip.Trim()
+                if (-not $ipToPing.ContainsKey($ipStr) -or [string]::Compare($formatted, $ipToPing[$ipStr]) -gt 0) { $ipToPing[$ipStr] = $formatted }
+            }
+        }
+        foreach ($key in @($result.Keys)) {
+            $keyNorm = $key.Trim().ToLowerInvariant()
+            $shortKey = if ($keyNorm -match '^([^.]+)\.') { $Matches[1] } else { $keyNorm }
+            $pingStr = ""
+            if ($hostToPing.ContainsKey($keyNorm)) { $pingStr = $hostToPing[$keyNorm] }
+            elseif ($hostToPing.ContainsKey($shortKey)) { $pingStr = $hostToPing[$shortKey] }
+            elseif ($ipToPing.ContainsKey($key)) { $pingStr = $ipToPing[$key] }
+            elseif ($ipToPing.ContainsKey($key.Trim())) { $pingStr = $ipToPing[$key.Trim()] }
+            $result[$key] = $pingStr
+        }
+    } catch {
+        Write-CSApiLog "Get-ConnectSecureLastPingByHostname failed: $($_.Exception.Message)" -Level Warning
     }
     return $result
 }
