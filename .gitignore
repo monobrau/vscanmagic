@@ -81,6 +81,9 @@ VScanMagic-4.0.2.zip
 portal-probe-nmap-capture.json
 portal-company-review-capture.json
 
+# Archive (test scripts, one-off utilities - local use, not in repo)
+archive/
+
 # API capture scripts and guides (local use, not in repo)
 api/
 
