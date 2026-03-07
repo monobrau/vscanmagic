@@ -989,8 +989,8 @@ function Get-ConnectSecureAssets {
 }
 
 # --- Company Review (agents, probes, credentials, firewall, scan dates) ---
-# NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first
-# (see archive/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
+# NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first.
+# The portal may use server-side params we can adopt.
 # Endpoints from swagger.yaml
 $script:CompanyReviewEndpoints = @{
     JobsView                  = '/r/company/jobs_view'

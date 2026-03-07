@@ -1349,7 +1349,7 @@ Affected Systems:
     .section-actions .toggle-btn:hover { background: #5a6268; }
     .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
     .vuln-section.collapsed .section-content { display: none; }
-    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
     .third-party { color: #c00; font-weight: bold; }
     .header { margin-bottom: 20px; }
     .header h1 { margin: 0; font-size: 20px; }
@@ -1506,7 +1506,8 @@ function New-CombinedReportHtml {
     .tab-actions { margin-bottom: 12px; }
     .tab-actions .copy-btn { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
     .tab-actions .copy-btn:hover { background: #0052a3; }
-    .tab-pre { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; padding: 20px; background: #fff; border-radius: 8px; }
+    .tab-pre, .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; min-width: 80ch; }
+    .tab-pre { padding: 20px; background: #fff; border-radius: 8px; }
     .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
     .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
     .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
@@ -1517,7 +1518,7 @@ function New-CombinedReportHtml {
     .section-actions .toggle-btn:hover { background: #5a6268; }
     .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
     .vuln-section.collapsed .section-content { display: none; }
-    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
     .third-party { color: #c00; font-weight: bold; }
     .header { margin-bottom: 20px; }
     .header h1 { margin: 0; font-size: 20px; }
@@ -1783,11 +1784,12 @@ function Show-RemediationRulesDialog {
 
         $editForm = New-Object System.Windows.Forms.Form
         $editForm.Text = if ($isNew) { "Add New Rule" } else { "Edit Rule" }
-        $editForm.Size = New-Object System.Drawing.Size(700, 500)
+        $editForm.Size = New-Object System.Drawing.Size(700, 580)
         $editForm.StartPosition = "CenterParent"
         $editForm.FormBorderStyle = "FixedDialog"
         $editForm.MaximizeBox = $false
         $editForm.MinimizeBox = $false
+        $editForm.AutoScroll = $true
 
         $y = 20
 
@@ -1819,6 +1821,24 @@ function Show-RemediationRulesDialog {
         $txtWordText.Multiline = $true
         $txtWordText.ScrollBars = "Vertical"
         $txtWordText.Text = $rule.WordText
+        # Custom paste: preserve line breaks (normalize \n to \r\n for Windows)
+        $txtWordText.Add_KeyDown({
+            param($s, $e)
+            if ($e.Modifiers -eq [System.Windows.Forms.Keys]::Control -and $e.KeyCode -eq 'V') {
+                $e.Handled = $true
+                $e.SuppressKeyPress = $true
+                if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                    $text = [System.Windows.Forms.Clipboard]::GetText()
+                    $text = $text -replace "`r?`n", "`r`n"
+                    $txt = $s
+                    $selStart = $txt.SelectionStart
+                    $before = $txt.Text.Substring(0, [Math]::Min($selStart, $txt.Text.Length))
+                    $after = if ($selStart -lt $txt.Text.Length) { $txt.Text.Substring($selStart) } else { "" }
+                    $txt.Text = $before + $text + $after
+                    $txt.SelectionStart = $selStart + $text.Length
+                }
+            }
+        })
         $editForm.Controls.Add($txtWordText)
         $y += 160
 
@@ -1835,8 +1855,44 @@ function Show-RemediationRulesDialog {
         $txtTicketText.Multiline = $true
         $txtTicketText.ScrollBars = "Vertical"
         $txtTicketText.Text = $rule.TicketText
+        # Custom paste: preserve line breaks (normalize \n to \r\n for Windows)
+        $txtTicketText.Add_KeyDown({
+            param($s, $e)
+            if ($e.Modifiers -eq [System.Windows.Forms.Keys]::Control -and $e.KeyCode -eq 'V') {
+                $e.Handled = $true
+                $e.SuppressKeyPress = $true
+                if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                    $text = [System.Windows.Forms.Clipboard]::GetText()
+                    $text = $text -replace "`r?`n", "`r`n"
+                    $txt = $s
+                    $selStart = $txt.SelectionStart
+                    $before = $txt.Text.Substring(0, [Math]::Min($selStart, $txt.Text.Length))
+                    $after = if ($selStart -lt $txt.Text.Length) { $txt.Text.Substring($selStart) } else { "" }
+                    $txt.Text = $before + $text + $after
+                    $txt.SelectionStart = $selStart + $text.Length
+                }
+            }
+        })
+        # Format buttons: convert delimiters to line breaks (for pasted text that lost line breaks)
+        $btnFormatTicket = New-Object System.Windows.Forms.Button
+        $btnFormatTicket.Location = New-Object System.Drawing.Point(20, ($y + 148))
+        $btnFormatTicket.Size = New-Object System.Drawing.Size(130, 23)
+        $btnFormatTicket.Text = "Format | as newline"
+        $btnFormatTicket.Add_Click({
+            $txtTicketText.Text = $txtTicketText.Text -replace ' \| ', "`r`n"
+        })
+        $btnFormatTicketBullets = New-Object System.Windows.Forms.Button
+        $btnFormatTicketBullets.Location = New-Object System.Drawing.Point(155, ($y + 148))
+        $btnFormatTicketBullets.Size = New-Object System.Drawing.Size(130, 23)
+        $btnFormatTicketBullets.Text = "Format - as newline"
+        $btnFormatTicketBullets.Add_Click({
+            # Split "text- next bullet" into "text`r`n- next bullet" (when - is preceded by text)
+            $txtTicketText.Text = $txtTicketText.Text -replace '(?<=.)- ', "`r`n- "
+        })
         $editForm.Controls.Add($txtTicketText)
-        $y += 160
+        $editForm.Controls.Add($btnFormatTicket)
+        $editForm.Controls.Add($btnFormatTicketBullets)
+        $y += 180
 
         # IsDefault checkbox (only for new rules or if editing default)
         $chkIsDefault = New-Object System.Windows.Forms.CheckBox
@@ -2471,7 +2527,7 @@ function Show-FiltersDialog {
 function Show-OutputOptionsDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Output Options"
-    $dlg.Size = New-Object System.Drawing.Size(420, 290)
+    $dlg.Size = New-Object System.Drawing.Size(420, 330)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2755,22 +2811,12 @@ function Show-TemplatesDialog {
 function Show-AIApiKeysDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "AI API Keys"
-    $dlg.Size = New-Object System.Drawing.Size(480, 220)
+    $dlg.Size = New-Object System.Drawing.Size(480, 180)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
 
     $y = 20
-    $lblHint = New-Object System.Windows.Forms.Label
-    $lblHint.Location = New-Object System.Drawing.Point(20, $y)
-    $lblHint.Size = New-Object System.Drawing.Size(420, 48)
-    $lblHint.Text = "Store API keys for AI-assisted report generation. Future use: email templates, ticket notes, remediation instructions, remediation guidance, and time estimate guidance (factors + human input). Keys are saved locally."
-    $lblHint.ForeColor = [System.Drawing.Color]::Gray
-    $lblHint.AutoSize = $false
-    $lblHint.Font = New-Object System.Drawing.Font($lblHint.Font.FontFamily, 8.5)
-    $dlg.Controls.Add($lblHint)
-    $y += 52
-
     $providers = @(
         @{ Name = "Microsoft Copilot"; Key = "AIApiKeyCopilot" }
         @{ Name = "OpenAI (ChatGPT)"; Key = "AIApiKeyChatGPT" }
@@ -3422,7 +3468,7 @@ function Show-CompanyFolderMappingDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(620, 580)
+    $settingsForm.Size = New-Object System.Drawing.Size(480, 485)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -3439,7 +3485,7 @@ function Show-SettingsDialog {
 
     $txtPreparedBy = New-Object System.Windows.Forms.TextBox
     $txtPreparedBy.Location = New-Object System.Drawing.Point(180, $y)
-    $txtPreparedBy.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPreparedBy.Size = New-Object System.Drawing.Size(250, 20)
     $txtPreparedBy.Text = $script:UserSettings.PreparedBy
     $settingsForm.Controls.Add($txtPreparedBy)
     $y += 35
@@ -3453,7 +3499,7 @@ function Show-SettingsDialog {
 
     $txtCompanyName = New-Object System.Windows.Forms.TextBox
     $txtCompanyName.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyName.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyName.Size = New-Object System.Drawing.Size(250, 20)
     $txtCompanyName.Text = $script:UserSettings.CompanyName
     $settingsForm.Controls.Add($txtCompanyName)
     $y += 35
@@ -3467,7 +3513,7 @@ function Show-SettingsDialog {
 
     $txtCompanyAddress = New-Object System.Windows.Forms.TextBox
     $txtCompanyAddress.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyAddress.Size = New-Object System.Drawing.Size(280, 40)
+    $txtCompanyAddress.Size = New-Object System.Drawing.Size(250, 40)
     $txtCompanyAddress.Multiline = $true
     $txtCompanyAddress.Text = $script:UserSettings.CompanyAddress
     $settingsForm.Controls.Add($txtCompanyAddress)
@@ -3482,7 +3528,7 @@ function Show-SettingsDialog {
 
     $txtEmail = New-Object System.Windows.Forms.TextBox
     $txtEmail.Location = New-Object System.Drawing.Point(180, $y)
-    $txtEmail.Size = New-Object System.Drawing.Size(280, 20)
+    $txtEmail.Size = New-Object System.Drawing.Size(250, 20)
     $txtEmail.Text = $script:UserSettings.Email
     $settingsForm.Controls.Add($txtEmail)
     $y += 35
@@ -3496,7 +3542,7 @@ function Show-SettingsDialog {
 
     $txtPhoneNumber = New-Object System.Windows.Forms.TextBox
     $txtPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
-    $txtPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPhoneNumber.Size = New-Object System.Drawing.Size(250, 20)
     $txtPhoneNumber.Text = $script:UserSettings.PhoneNumber
     $settingsForm.Controls.Add($txtPhoneNumber)
     $y += 35
@@ -3510,7 +3556,7 @@ function Show-SettingsDialog {
 
     $txtCompanyPhoneNumber = New-Object System.Windows.Forms.TextBox
     $txtCompanyPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(250, 20)
     $txtCompanyPhoneNumber.Text = $script:UserSettings.CompanyPhoneNumber
     $settingsForm.Controls.Add($txtCompanyPhoneNumber)
     $y += 35
@@ -3562,8 +3608,7 @@ function Show-SettingsDialog {
 
     $txtSettingsDirectory = New-Object System.Windows.Forms.TextBox
     $txtSettingsDirectory.Location = New-Object System.Drawing.Point(180, $y)
-    $txtSettingsDirectory.Size = New-Object System.Drawing.Size(280, 20)
-    $txtSettingsDirectory.ReadOnly = $true
+    $txtSettingsDirectory.Size = New-Object System.Drawing.Size(200, 20)
     $displayDir = if ([string]::IsNullOrEmpty($script:UserSettings.SettingsDirectory)) {
         Join-Path $env:LOCALAPPDATA "VScanMagic"
     } else {
@@ -3573,7 +3618,7 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($txtSettingsDirectory)
 
     $btnBrowseSettingsDir = New-Object System.Windows.Forms.Button
-    $btnBrowseSettingsDir.Location = New-Object System.Drawing.Point(470, ($y - 2))
+    $btnBrowseSettingsDir.Location = New-Object System.Drawing.Point(390, ($y - 2))
     $btnBrowseSettingsDir.Size = New-Object System.Drawing.Size(70, 25)
     $btnBrowseSettingsDir.Text = "Browse..."
     $btnBrowseSettingsDir.Add_Click({
@@ -3588,59 +3633,17 @@ function Show-SettingsDialog {
         }
     })
     $settingsForm.Controls.Add($btnBrowseSettingsDir)
+    $y += 35
 
-    # Quick paths for cloud folders (show only if path exists) - on second row to avoid cutoff
-    $oneDriveOrg = Get-ChildItem -Path $env:USERPROFILE -Filter "OneDrive - *" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-    $cloudPaths = @(
-        @{ Name = "OneDrive"; Path = (Join-Path $env:USERPROFILE "OneDrive") },
-        @{ Name = "OneDrive (org)"; Path = $(if ($oneDriveOrg) { $oneDriveOrg.FullName } else { $null }) },
-        @{ Name = "Google Drive"; Path = (Join-Path $env:USERPROFILE "Google Drive") },
-        @{ Name = "My Drive"; Path = (Join-Path $env:USERPROFILE "My Drive") },
-        @{ Name = "Dropbox"; Path = (Join-Path $env:USERPROFILE "Dropbox") }
-    )
-    $cloudY = $y + 22
-    $cloudX = 180
-    foreach ($cp in $cloudPaths) {
-        if ($cp.Path -and (Test-Path $cp.Path)) {
-            $btn = New-Object System.Windows.Forms.Button
-            $btn.Location = New-Object System.Drawing.Point($cloudX, $cloudY)
-            $btn.Size = New-Object System.Drawing.Size(75, 25)
-            $btn.Text = $cp.Name
-            $btn.Font = New-Object System.Drawing.Font($btn.Font.FontFamily, 8)
-            $path = $cp.Path
-            $btn.Add_Click({ $txtSettingsDirectory.Text = $path })
-            $settingsForm.Controls.Add($btn)
-            $cloudX += 80
-        }
-    }
-    $y += 52
-
-    # Help text for cloud storage
-    $lblCloudHint = New-Object System.Windows.Forms.Label
-    $lblCloudHint.Location = New-Object System.Drawing.Point(180, $y)
-    $lblCloudHint.Size = New-Object System.Drawing.Size(420, 16)
-    $lblCloudHint.Text = "You can use a cloud folder (OneDrive, Google Drive) or network share."
-    $lblCloudHint.ForeColor = [System.Drawing.Color]::Gray
-    $lblCloudHint.Font = New-Object System.Drawing.Font($lblCloudHint.Font.FontFamily, 8)
-    $settingsForm.Controls.Add($lblCloudHint)
-    $y += 22
-
-    # Reset to Default button
-    $btnResetDir = New-Object System.Windows.Forms.Button
-    $btnResetDir.Location = New-Object System.Drawing.Point(180, $y)
-    $btnResetDir.Size = New-Object System.Drawing.Size(150, 25)
-    $btnResetDir.Text = "Reset to Default"
-    $btnResetDir.Add_Click({
-        $txtSettingsDirectory.Text = Join-Path $env:LOCALAPPDATA "VScanMagic"
-    })
-    $settingsForm.Controls.Add($btnResetDir)
-    $y += 40
-
-    # AI API Keys (for future expansion)
+    # AI API Keys
     $btnAIApiKeys = New-Object System.Windows.Forms.Button
     $btnAIApiKeys.Location = New-Object System.Drawing.Point(20, $y)
     $btnAIApiKeys.Size = New-Object System.Drawing.Size(120, 25)
     $btnAIApiKeys.Text = "AI API Keys..."
+    $btnAIApiKeys.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $btnAIApiKeys.ForeColor = [System.Drawing.Color]::White
+    $btnAIApiKeys.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnAIApiKeys.FlatAppearance.BorderSize = 0
     $btnAIApiKeys.Add_Click({ Show-AIApiKeysDialog })
     $settingsForm.Controls.Add($btnAIApiKeys)
 
@@ -3648,16 +3651,13 @@ function Show-SettingsDialog {
     $btnConnectWise.Location = New-Object System.Drawing.Point(150, $y)
     $btnConnectWise.Size = New-Object System.Drawing.Size(160, 25)
     $btnConnectWise.Text = "ConnectWise Automate..."
+    $btnConnectWise.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $btnConnectWise.ForeColor = [System.Drawing.Color]::White
+    $btnConnectWise.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnConnectWise.FlatAppearance.BorderSize = 0
     $btnConnectWise.Add_Click({ Show-ConnectWiseAutomateSettingsDialog })
     $settingsForm.Controls.Add($btnConnectWise)
-    $lblAIApiHint = New-Object System.Windows.Forms.Label
-    $lblAIApiHint.Location = New-Object System.Drawing.Point(150, ($y + 4))
-    $lblAIApiHint.Size = New-Object System.Drawing.Size(320, 18)
-    $lblAIApiHint.Text = "Copilot, ChatGPT, Claude - for future AI features"
-    $lblAIApiHint.ForeColor = [System.Drawing.Color]::Gray
-    $lblAIApiHint.Font = New-Object System.Drawing.Font($lblAIApiHint.Font.FontFamily, 8.5)
-    $settingsForm.Controls.Add($lblAIApiHint)
-    $y += 40
+    $y += 35
 
     # Backup / Restore Settings (All, Shared, or User scope)
     $lblBackupScope = New-Object System.Windows.Forms.Label
@@ -3723,11 +3723,11 @@ function Show-SettingsDialog {
         }
     })
     $settingsForm.Controls.Add($btnRestore)
-    $y += 40
+    $y += 50
 
     # Save Button
     $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Location = New-Object System.Drawing.Point(280, $y)
+    $btnSave.Location = New-Object System.Drawing.Point(250, $y)
     $btnSave.Size = New-Object System.Drawing.Size(90, 30)
     $btnSave.Text = "Save"
     $btnSave.Add_Click({
@@ -3807,7 +3807,7 @@ function Show-SettingsDialog {
 
     # Cancel Button
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(380, $y)
+    $btnCancel.Location = New-Object System.Drawing.Point(350, $y)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
     $btnCancel.Text = "Cancel"
     $btnCancel.Add_Click({

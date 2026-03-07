@@ -75,7 +75,7 @@ function Show-VScanMagicGUI {
     $btnOutputOptions.Location = New-Object System.Drawing.Point(20, 52)
     $btnOutputOptions.Size = New-Object System.Drawing.Size(110, 24)
     $btnOutputOptions.Text = "Output Options"
-    $btnOutputOptions.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnOutputOptions.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnOutputOptions.ForeColor = [System.Drawing.Color]::White
     $btnOutputOptions.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnOutputOptions.FlatAppearance.BorderSize = 0
@@ -86,7 +86,7 @@ function Show-VScanMagicGUI {
     $btnTemplates.Location = New-Object System.Drawing.Point(330, 52)
     $btnTemplates.Size = New-Object System.Drawing.Size(90, 24)
     $btnTemplates.Text = "Templates"
-    $btnTemplates.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnTemplates.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnTemplates.ForeColor = [System.Drawing.Color]::White
     $btnTemplates.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTemplates.FlatAppearance.BorderSize = 0
@@ -126,7 +126,7 @@ function Show-VScanMagicGUI {
     $btnApiSettings.Location = New-Object System.Drawing.Point(20, $dlgY)
     $btnApiSettings.Size = New-Object System.Drawing.Size(100, 24)
     $btnApiSettings.Text = "API Settings"
-    $btnApiSettings.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnApiSettings.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnApiSettings.ForeColor = [System.Drawing.Color]::White
     $btnApiSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnApiSettings.FlatAppearance.BorderSize = 0
@@ -136,7 +136,7 @@ function Show-VScanMagicGUI {
     $btnApiHelp.Location = New-Object System.Drawing.Point(128, $dlgY)
     $btnApiHelp.Size = New-Object System.Drawing.Size(80, 24)
     $btnApiHelp.Text = "API Help"
-    $btnApiHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnApiHelp.BackColor = [System.Drawing.Color]::FromArgb(255, 167, 38)
     $btnApiHelp.ForeColor = [System.Drawing.Color]::White
     $btnApiHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnApiHelp.FlatAppearance.BorderSize = 0
@@ -202,7 +202,7 @@ function Show-VScanMagicGUI {
     $btnCompanyReview.Location = New-Object System.Drawing.Point(348, ($dlgY + 52))
     $btnCompanyReview.Size = New-Object System.Drawing.Size(124, 22)
     $btnCompanyReview.Text = "Company Review"
-    $btnCompanyReview.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnCompanyReview.BackColor = [System.Drawing.Color]::FromArgb(103, 58, 183)
     $btnCompanyReview.ForeColor = [System.Drawing.Color]::White
     $btnCompanyReview.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCompanyReview.FlatAppearance.BorderSize = 0
@@ -302,7 +302,10 @@ function Show-VScanMagicGUI {
     $btnDownloadStandardOnly.Location = New-Object System.Drawing.Point(20, $dlgY)
     $btnDownloadStandardOnly.Size = New-Object System.Drawing.Size(240, 28)
     $btnDownloadStandardOnly.Text = "Download Standard Reports Only"
+    $btnDownloadStandardOnly.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadStandardOnly.ForeColor = [System.Drawing.Color]::White
     $btnDownloadStandardOnly.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadStandardOnly.FlatAppearance.BorderSize = 0
     $btnDownloadStandardOnly.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -402,7 +405,10 @@ function Show-VScanMagicGUI {
     $btnDownloadCustom.Location = New-Object System.Drawing.Point(270, $dlgY)
     $btnDownloadCustom.Size = New-Object System.Drawing.Size(150, 28)
     $btnDownloadCustom.Text = "Download Custom..."
+    $btnDownloadCustom.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadCustom.ForeColor = [System.Drawing.Color]::White
     $btnDownloadCustom.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadCustom.FlatAppearance.BorderSize = 0
     $btnDownloadCustom.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -494,7 +500,10 @@ function Show-VScanMagicGUI {
     $btnDownloadGlobal.Location = New-Object System.Drawing.Point(430, $dlgY)
     $btnDownloadGlobal.Size = New-Object System.Drawing.Size(140, 28)
     $btnDownloadGlobal.Text = "Download Global..."
+    $btnDownloadGlobal.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadGlobal.ForeColor = [System.Drawing.Color]::White
     $btnDownloadGlobal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadGlobal.FlatAppearance.BorderSize = 0
     $btnDownloadGlobal.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -918,6 +927,10 @@ function Show-VScanMagicGUI {
     $buttonSettings.Location = New-Object System.Drawing.Point(380, 0)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
+    $buttonSettings.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $buttonSettings.ForeColor = [System.Drawing.Color]::White
+    $buttonSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $buttonSettings.FlatAppearance.BorderSize = 0
     $buttonSettings.Add_Click({
         Show-SettingsDialog
         if ($script:UpdateOutputDirUI) { & $script:UpdateOutputDirUI }
@@ -928,7 +941,7 @@ function Show-VScanMagicGUI {
     $buttonHelp.Location = New-Object System.Drawing.Point(490, 0)
     $buttonHelp.Size = New-Object System.Drawing.Size(80, 30)
     $buttonHelp.Text = "Help"
-    $buttonHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $buttonHelp.BackColor = [System.Drawing.Color]::FromArgb(255, 167, 38)
     $buttonHelp.ForeColor = [System.Drawing.Color]::White
     $buttonHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $buttonHelp.FlatAppearance.BorderSize = 0
@@ -1600,6 +1613,6 @@ function Show-VScanMagicGUI {
     $panelBottomButtons.Controls.Add($buttonClose)
 
     # Show form
-    Write-Log "VScanMagic v3 initialized" -Level Info
+    Write-Log "VScanMagic $($script:Config.Version) initialized" -Level Info
     $form.ShowDialog() | Out-Null
 }

@@ -1532,11 +1532,15 @@ function Open-EmailDraftInOutlook {
 }
 
 function Format-EmailTemplateSpacing {
-    <# Collapse multiple spaces to single; preserve paragraph breaks and signature. #>
+    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks; preserve paragraph breaks (double newline). #>
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
-    $lines = $Text -split "`r?`n"
-    $result = ($lines | ForEach-Object { ($_ -replace '[ \t]+', ' ') }) -join "`r`n"
+    $paragraphs = $Text -split "`r?`n`r?`n"
+    $result = ($paragraphs | ForEach-Object {
+        $para = ($_ -split "`r?`n") -join " "
+        $para = $para -replace '[ \t]+', ' '
+        $para.Trim()
+    }) -join "`r`n`r`n"
     return $result.Trim()
 }
 
