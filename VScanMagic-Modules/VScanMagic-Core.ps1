@@ -869,8 +869,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*"
-            WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
-            TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
+            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If available via ConnectWise Automate/RMM, deploy updates via patch management or scripts; otherwise, manual updates may be required."
+            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via ConnectWise Automate/RMM if available; otherwise manual updates"
             IsDefault = $true
         }
     )
@@ -1457,7 +1457,7 @@ function Invoke-AIImproveRemediationText {
     $cveOnlyHint = ""
     $trimmed = $cleaned.Trim()
     if ($trimmed -match '^CVE-\d{4}-\d+' -and $trimmed.Length -lt 120) {
-        $cveOnlyHint = "IMPORTANT: The input is only a CVE ID (or minimal text). Use the Product/OS and Affected hosts context above to provide platform-appropriate remediation (e.g. Windows Update KB for Windows hosts, firmware update for printers/IoT, vendor patch for specific software). Match the fix to the host/OS type.`n`n"
+        $cveOnlyHint = "IMPORTANT: The input is only a CVE ID (or minimal text). First determine what the device or software is (use Product/OS and Affected hosts). Remediation often requires reviewing the manufacturer's security advisories and vulnerability data, checking for firmware updates, and considering configuration changes (e.g. mitigating controls, network segmentation). Provide platform-appropriate guidance: Windows Update KB for Windows hosts, firmware updates for printers/IoT/embedded devices, vendor patches for specific software. Match the fix to the host/OS type.`n`n"
     }
 
     $prompt = @"
@@ -1471,7 +1471,7 @@ RULES:
 - If the input is already specific (e.g. "Apply KB5077181"), just make it slightly more readable - do not expand into generic guidance.
 - Output ONLY the rephrased text. No preamble, no explanation, no bullet lists of general practices.
 - NEVER respond with "I don't have specific information" or similar. If CVE IDs are provided or the vulnerability is known (e.g. Ripple20/rippl20, CVE-2020-11898, CVE-2020-11910), provide the best available remediation guidance for that specific vulnerability.
-- When CVE IDs are given, use them to provide CVE-specific remediation (patches, KB numbers, version updates, workarounds from NVD/CERT advisories). When input is only a CVE, use Product/OS and host context to tailor the fix (Windows vs Linux vs firmware).
+- When CVE IDs are given: determine the device/software identity, review manufacturer vulnerability data and security advisories, check for firmware updates, consider configuration mitigations. Provide CVE-specific remediation (patches, KB numbers, version updates, workarounds). When input is only a CVE, use Product/OS and host context to tailor the fix (Windows vs Linux vs firmware vs IoT).
 - CRITICAL: The remediation MUST match the Product/OS above. If Product is Windows 11 or Windows Server, output ONLY Windows Update KB numbers or build numbers - NEVER Chrome, Firefox, or other software version numbers. If Product is Google Chrome, output ONLY Chrome version numbers. Do NOT mix product types.
 - Common vulnerabilities: rippl20-icmp = Ripple20 Treck TCP/IP ICMP flaws; remediate via firmware updates from manufacturer, network segmentation where patching not possible.
 
@@ -1627,9 +1627,9 @@ RULES (apply to EACH item):
 - Output ONLY a clear, professional rewrite of the SPECIFIC fix. One short paragraph or a few sentences max.
 - If the input is already specific (e.g. 'Apply KB5077181'), just make it slightly more readable.
 - NEVER respond with 'I don't have specific information'. Use CVE IDs to provide CVE-specific remediation when given.
-- When input is only a CVE ID, use Product/OS and Affected hosts to provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT, vendor patch for software).
+- When investigating CVEs: determine what the device/software is (Product/OS, Affected hosts), review manufacturer security advisories and vulnerability data, check for firmware updates, consider configuration mitigations. Provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT/embedded, vendor patch for software).
 - CRITICAL: Remediation MUST match the Product/OS. Windows 11/Server = Windows KB numbers only, never Chrome/Firefox versions. Google Chrome = Chrome versions only. Do NOT mix product types.
-- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates, network segmentation.
+- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates from manufacturer, network segmentation.
 
 OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 2', or numbering), then a line with exactly: $delim
 
