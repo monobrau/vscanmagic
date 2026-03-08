@@ -852,7 +852,7 @@ function New-TimeEstimate {
         [void]$sb.AppendLine("=".PadRight(100, '='))
         [void]$sb.AppendLine()
 
-        [void]$sb.AppendLine("Vulnerability Time Estimates:")
+        [void]$sb.AppendLine("Remediation Time Estimates:")
         [void]$sb.AppendLine()
 
         $totalCovered = 0.0
@@ -1285,7 +1285,7 @@ NOTE: This remediation can go to any available technician.
     <div class="section-actions">
       <button type="button" onclick="copySubject(this)" data-subject="$subjectEscaped">Copy Subject</button>
       <button type="button" onclick="copySection('$sectionId')">Copy Section</button>
-      <button type="button" class="toggle-btn" onclick="toggleSection('$sectionId')">▸ Show details</button>
+      <button type="button" class="toggle-btn" onclick="toggleSection('$sectionId')">+ Show details</button>
     </div>
   </div>
   <div class="section-content">
@@ -1352,10 +1352,10 @@ NOTE: This remediation can go to any available technician.
       if (!el || !btn) return;
       if (el.classList.contains('collapsed')) {
         el.classList.remove('collapsed');
-        btn.textContent = '▾ Hide details';
+        btn.textContent = '- Hide details';
       } else {
         el.classList.add('collapsed');
-        btn.textContent = '▸ Show details';
+        btn.textContent = '+ Show details';
       }
     }
   </script>
@@ -1534,10 +1534,10 @@ function New-CombinedReportHtml {
       if (!el || !btn) return;
       if (el.classList.contains('collapsed')) {
         el.classList.remove('collapsed');
-        btn.textContent = '▾ Hide details';
+        btn.textContent = '- Hide details';
       } else {
         el.classList.add('collapsed');
-        btn.textContent = '▸ Show details';
+        btn.textContent = '+ Show details';
       }
     }
     function copyEmailSubject(btn) {
