@@ -606,30 +606,7 @@ function New-WordReport {
                     $title = "After Hours - $title"
                 }
             } else {
-                # Product-type suffix when no modifier (same chain as ticket subject)
-                if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                    $title += " - End of Support Migration Required"
-                } elseif ($item.Product -like "*Windows 10*") {
-                    $title += " - Windows 10 is End of Life"
-                } elseif ($item.Product -like "*Windows 11*") {
-                    $title += " - Updates Required"
-                } elseif ($item.Product -like "*Windows Server*") {
-                    $title += " - Updates Required"
-                } elseif ($item.Product -like "*Windows*") {
-                    $title += " - Patch Management Required"
-                } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                    $title += " - Firmware Update Required"
-                } elseif ($item.Product -like "*Microsoft Teams*") {
-                    $title += " - Application Update Required"
-                } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - Updates Required"
-                } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - Update Required"
-                } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                    $title += " - This software updates automatically"
-                } else {
-                    $title += " - Update Required"
-                }
+                $title += Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus
             }
 
             Add-WordText -Selection $selection -Text $title

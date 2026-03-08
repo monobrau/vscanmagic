@@ -15,8 +15,7 @@ if (-not (Test-Path $modulePath)) {
     Save-Module -Name ps2exe -Path $modulesDir -Repository PSGallery -Force
 }
 
-# Import the module properly
-$modulePath = Join-Path $modulesDir "ps2exe\1.0.17\ps2exe.psm1"
+# Import the module
 if (Test-Path $modulePath) {
     Write-Host "Loading module from: $modulePath"
     Import-Module $modulePath -Force

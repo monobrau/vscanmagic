@@ -1035,6 +1035,32 @@ function Test-IsAutoUpdatingSoftware {
     return $false
 }
 
+function Get-ProductTypeSuffix {
+    <#
+    .SYNOPSIS
+    Returns the product-type suffix for ticket subjects and report titles (e.g. " - Updates Required").
+    Used by New-TicketInstructions, New-TicketInstructionsHtml, and New-WordReport.
+    #>
+    param(
+        [string]$ProductName,
+        [bool]$IsRMITPlus = $false
+    )
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return " - Update Required" }
+    if ($ProductName -like "*Windows Server 2012*" -or $ProductName -like "*end-of-life*" -or $ProductName -like "*out of support*") {
+        return " - End of Support Migration Required"
+    }
+    if ($ProductName -like "*Windows 10*") { return " - Windows 10 is End of Life" }
+    if ($ProductName -like "*Windows 11*") { return " - Updates Required" }
+    if ($ProductName -like "*Windows Server*") { return " - Updates Required" }
+    if ($ProductName -like "*Windows*") { return " - Patch Management Required" }
+    if ($ProductName -like "*printer*" -or $ProductName -like "*Ripple20*") { return " - Firmware Update Required" }
+    if ($ProductName -like "*Microsoft Teams*") { return " - Application Update Required" }
+    if ((Test-IsMicrosoftApplication -ProductName $ProductName) -and $IsRMITPlus) { return " - Updates Required" }
+    if ((Test-IsVMwareProduct -ProductName $ProductName) -and $IsRMITPlus) { return " - Update Required" }
+    if (Test-IsAutoUpdatingSoftware -ProductName $ProductName) { return " - This software updates automatically" }
+    return " - Update Required"
+}
+
 function Get-AverageCVSS {
     param(
         [int]$Critical,

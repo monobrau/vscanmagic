@@ -1206,35 +1206,6 @@ function Test-IsFirstPartyVendor {
     return $false
 }
 
-function Test-IsCoveredSoftware {
-    param(
-        [string]$ProductName
-    )
-    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
-
-    if ($null -eq $script:CoveredSoftware -or $script:CoveredSoftware.Count -eq 0) {
-        Load-CoveredSoftware
-    }
-
-    foreach ($item in $script:CoveredSoftware) {
-        if ($item.Override) {
-            continue  # Skip overridden items
-        }
-
-        if ($item.IsPattern) {
-            if ($ProductName -like $item.Pattern) {
-                return $true
-            }
-        } else {
-            if ($ProductName -eq $item.Pattern) {
-                return $true
-            }
-        }
-    }
-
-    return $false
-}
-
 # Build download path with truncated client name when path would exceed Windows MAX_PATH (~260 chars)
 function Get-SafeDownloadPath {
     param(

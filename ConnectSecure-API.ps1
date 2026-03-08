@@ -77,8 +77,7 @@ function Test-RateLimit {
     
     # Remove old entries outside the time window
     $script:ConnectSecureConfig.RequestHistory = $script:ConnectSecureConfig.RequestHistory | Where-Object { $_ -gt $windowStart }
-    
-    $recentRequests = ($script:ConnectSecureConfig.RequestHistory | Where-Object { $_ -gt $windowStart }).Count
+    $recentRequests = $script:ConnectSecureConfig.RequestHistory.Count
     
     if ($recentRequests -ge $MaxRequests) {
         return $false
@@ -3357,7 +3356,8 @@ function Invoke-ConnectSecureReportsBatch {
     if ($null -ne $vulnReport -and $vulnReport.Ext -eq 'xlsx') {
         $avPath = & $OutputPathTemplate $vulnReport
         if (Test-Path -LiteralPath $avPath) {
-            Update-Prog ('Generating Top ' + $TopCount + ' Vulnerabilities Report from ' + $vulnReport.Name + '...')
+            $topTitle = if ($TopCount -le 0) { 'Top Vulnerabilities Report' } elseif ($TopCount -eq 10) { 'Top Ten Vulnerabilities Report' } else { "Top $TopCount Vulnerabilities Report" }
+            Update-Prog ("Generating $topTitle from $($vulnReport.Name)...")
             try {
                 if ((Get-Command -Name 'Get-VulnerabilityData' -ErrorAction SilentlyContinue) -and
                     (Get-Command -Name 'Get-Top10Vulnerabilities' -ErrorAction SilentlyContinue) -and
@@ -3370,11 +3370,11 @@ function Invoke-ConnectSecureReportsBatch {
                         $outputDir = Split-Path -Path $avPath -Parent
                         $stem = [System.IO.Path]::GetFileNameWithoutExtension($avPath)
                         $reportNamePart = [regex]::Escape($vulnReport.Name)
-                        $topXStem = $stem -replace (' - ' + $reportNamePart + ' - '), (' - Top ' + $TopCount + ' Vulnerabilities Report - ')
+                        $topXStem = $stem -replace (' - ' + $reportNamePart + ' - '), (" - $topTitle - ")
                         $topXPath = Join-Path $outputDir ($topXStem + '.docx')
-                        New-WordReport -OutputPath $topXPath -ClientName $ClientName -ScanDate $ScanDate -Top10Data $top10 -TimeEstimates $null -IsRMITPlus $false -GeneralRecommendations @() -ReportTitle ('Top ' + $TopCount + ' Vulnerabilities Report')
+                        New-WordReport -OutputPath $topXPath -ClientName $ClientName -ScanDate $ScanDate -Top10Data $top10 -TimeEstimates $null -IsRMITPlus $false -GeneralRecommendations @() -ReportTitle $topTitle
                         Write-CSApiLog ('Generated: ' + $topXPath) -Level Success
-                        $null = $succeeded.Add([PSCustomObject]@{ Type = 'top-vulnerabilities'; Name = ('Top ' + $TopCount + ' Vulnerabilities Report'); Ext = 'docx' })
+                        $null = $succeeded.Add([PSCustomObject]@{ Type = 'top-vulnerabilities'; Name = $topTitle; Ext = 'docx' })
                     } else {
                         Write-CSApiLog ('No vulnerability data found in ' + $avPath + ' - skipping Top X generation') -Level Warning
                     }

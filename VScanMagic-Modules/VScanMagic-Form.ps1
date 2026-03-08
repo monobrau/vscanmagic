@@ -1019,7 +1019,7 @@ function Show-VScanMagicGUI {
             if ($chkNetworkVulnerabilities.Checked) { $reports += @{ Type = "network-vulnerabilities"; Name = "Network Vulnerabilities"; Ext = "xlsx" } }
             if ($chkExecutiveSummary.Checked) { $reports += @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" } }
             if ($chkPendingEPSS.Checked) { $reports += @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" } }
-            $topCount = if ($script:FilterTopN -eq "All") { 500 } else { [int]$script:FilterTopN }
+            $topCount = if ($script:FilterTopN -eq "All") { 0 } else { [int]$script:FilterTopN }
 
             if (-not $hasFile) {
                 if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -and -not (Test-Path $downloadFolder)) {

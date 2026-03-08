@@ -1054,30 +1054,7 @@ function New-TicketInstructions {
             $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
 
             # Generate ticket subject based on product type
-            $ticketSubject = "Vulnerability Remediation - "
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                $ticketSubject += "$($item.Product) - End of Support Migration Required"
-            } elseif ($item.Product -like "*Windows 10*") {
-                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
-            } elseif ($item.Product -like "*Windows 11*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows Server*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows*") {
-                $ticketSubject += "$($item.Product) - Patch Management Required"
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                $ticketSubject += "$($item.Product) - Firmware Update Required"
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Update Required"
-            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - This software updates automatically"
-            } else {
-                $ticketSubject += "$($item.Product) - Update Required"
-            }
+            $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
 
             # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
@@ -1218,30 +1195,7 @@ function New-TicketInstructionsHtml {
             $sectionId = "vuln-$num"
             $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
 
-            $ticketSubject = "Vulnerability Remediation - "
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                $ticketSubject += "$($item.Product) - End of Support Migration Required"
-            } elseif ($item.Product -like "*Windows 10*") {
-                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
-            } elseif ($item.Product -like "*Windows 11*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows Server*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows*") {
-                $ticketSubject += "$($item.Product) - Patch Management Required"
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                $ticketSubject += "$($item.Product) - Firmware Update Required"
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Update Required"
-            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - This software updates automatically"
-            } else {
-                $ticketSubject += "$($item.Product) - Update Required"
-            }
+            $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
             # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours

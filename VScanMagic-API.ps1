@@ -522,7 +522,6 @@ function Handle-ReportRequest {
     )
 
     $request = $Context.Request
-    $response = $Context.Response
 
     try {
         # Parse request body
