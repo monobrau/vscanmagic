@@ -288,7 +288,13 @@ function Show-VScanMagicGUI {
     $chkExternalVulnerabilities.Text = "External Scan (XLSX)"
     $chkExternalVulnerabilities.Checked = $true
     $groupBoxDownload.Controls.Add($chkExternalVulnerabilities)
-    $dlgY += 26
+    $chkNetworkVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkNetworkVulnerabilities.Location = New-Object System.Drawing.Point(350, $dlgY)
+    $chkNetworkVulnerabilities.Size = New-Object System.Drawing.Size(310, 18)
+    $chkNetworkVulnerabilities.Text = "Network Vulnerabilities (XLSX)"
+    $chkNetworkVulnerabilities.Checked = $true
+    $groupBoxDownload.Controls.Add($chkNetworkVulnerabilities)
+    $dlgY += 20
 
     $lblDownloadProgress = New-Object System.Windows.Forms.Label
     $lblDownloadProgress.Location = New-Object System.Drawing.Point(20, $dlgY)
@@ -296,7 +302,7 @@ function Show-VScanMagicGUI {
     $lblDownloadProgress.Text = ""
     $lblDownloadProgress.ForeColor = [System.Drawing.Color]::Blue
     $groupBoxDownload.Controls.Add($lblDownloadProgress)
-    $dlgY += 28
+    $dlgY += 20
 
     $btnDownloadStandardOnly = New-Object System.Windows.Forms.Button
     $btnDownloadStandardOnly.Location = New-Object System.Drawing.Point(20, $dlgY)
@@ -340,6 +346,7 @@ function Show-VScanMagicGUI {
             @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" }
             @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" }
             @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" }
+            @{ Type = "network-vulnerabilities"; Name = "Network Vulnerabilities"; Ext = "xlsx" }
             @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" }
             @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" }
         )
@@ -996,6 +1003,7 @@ function Show-VScanMagicGUI {
             if ($chkAllVulnerabilities.Checked) { $reports += @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" } }
             if ($chkSuppressedVulnerabilities.Checked) { $reports += @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" } }
             if ($chkExternalVulnerabilities.Checked) { $reports += @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" } }
+            if ($chkNetworkVulnerabilities.Checked) { $reports += @{ Type = "network-vulnerabilities"; Name = "Network Vulnerabilities"; Ext = "xlsx" } }
             if ($chkExecutiveSummary.Checked) { $reports += @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" } }
             if ($chkPendingEPSS.Checked) { $reports += @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" } }
             $topCount = if ($script:FilterTopN -eq "All") { 500 } else { [int]$script:FilterTopN }
@@ -1150,6 +1158,7 @@ function Show-VScanMagicGUI {
                 # Allow previous Excel instance (from Get-VulnerabilityData) to fully release before starting report generation
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
+                [System.Windows.Forms.Application]::DoEvents()
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
@@ -1219,6 +1228,40 @@ function Show-VScanMagicGUI {
             }
             
             $script:CurrentTop10Data = $top10
+
+            # Enrich AffectedSystems with last ping time from ConnectSecure when enabled
+            if ($companyId -gt 0 -and $script:UserSettings.HostnameReviewAutoLookupLastPing -and $top10 -and $top10.Count -gt 0) {
+                $creds = Load-ConnectSecureCredentials
+                if ($creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+                    $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+                    if ($connected) {
+                        Update-Progress -Status "Looking up last ping time from ConnectSecure..." -Show $true
+                        $allHostnames = @()
+                        $allIPs = @()
+                        foreach ($item in $top10) {
+                            if (-not $item.AffectedSystems) { continue }
+                            foreach ($sys in $item.AffectedSystems) {
+                                if (-not [string]::IsNullOrWhiteSpace($sys.HostName)) { $allHostnames += $sys.HostName }
+                                if (-not [string]::IsNullOrWhiteSpace($sys.IP)) { $allIPs += $sys.IP }
+                            }
+                        }
+                        $allHostnames = $allHostnames | Select-Object -Unique
+                        $allIPs = $allIPs | Select-Object -Unique
+                        if ($allHostnames.Count -gt 0 -or $allIPs.Count -gt 0) {
+                            $pingMap = Get-ConnectSecureLastPingByHostname -CompanyId $companyId -Hostnames $allHostnames -IPs $allIPs
+                            foreach ($item in $top10) {
+                                if (-not $item.AffectedSystems) { continue }
+                                foreach ($sys in $item.AffectedSystems) {
+                                    $pingStr = ""
+                                    if (-not [string]::IsNullOrWhiteSpace($sys.HostName) -and $pingMap.ContainsKey($sys.HostName.Trim())) { $pingStr = $pingMap[$sys.HostName.Trim()] }
+                                    if ([string]::IsNullOrWhiteSpace($pingStr) -and -not [string]::IsNullOrWhiteSpace($sys.IP) -and $pingMap.ContainsKey($sys.IP.Trim())) { $pingStr = $pingMap[$sys.IP.Trim()] }
+                                    if (-not [string]::IsNullOrWhiteSpace($pingStr)) { $sys | Add-Member -NotePropertyName 'LastPingTime' -NotePropertyValue $pingStr -Force }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs -and $hasTop10Data) {
@@ -1332,11 +1375,6 @@ function Show-VScanMagicGUI {
 
             Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputs)
 
-            if (-not $skipDialogsForBulk) {
-                [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
-                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            }
-
                 } catch {
                         Update-Progress -Status "Error" -Show $false
                         Write-Log "Processing failed: $($_.Exception.Message)" -Level Error
@@ -1400,6 +1438,7 @@ function Show-VScanMagicGUI {
 
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
+                [System.Windows.Forms.Application]::DoEvents()
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
@@ -1467,6 +1506,40 @@ function Show-VScanMagicGUI {
             }
             
             $script:CurrentTop10Data = $top10
+
+            # Enrich AffectedSystems with last ping time from ConnectSecure when enabled
+            if ($companyId -gt 0 -and $script:UserSettings.HostnameReviewAutoLookupLastPing -and $top10 -and $top10.Count -gt 0) {
+                $creds = Load-ConnectSecureCredentials
+                if ($creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+                    $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+                    if ($connected) {
+                        Update-Progress -Status "Looking up last ping time from ConnectSecure..." -Show $true
+                        $allHostnames = @()
+                        $allIPs = @()
+                        foreach ($item in $top10) {
+                            if (-not $item.AffectedSystems) { continue }
+                            foreach ($sys in $item.AffectedSystems) {
+                                if (-not [string]::IsNullOrWhiteSpace($sys.HostName)) { $allHostnames += $sys.HostName }
+                                if (-not [string]::IsNullOrWhiteSpace($sys.IP)) { $allIPs += $sys.IP }
+                            }
+                        }
+                        $allHostnames = $allHostnames | Select-Object -Unique
+                        $allIPs = $allIPs | Select-Object -Unique
+                        if ($allHostnames.Count -gt 0 -or $allIPs.Count -gt 0) {
+                            $pingMap = Get-ConnectSecureLastPingByHostname -CompanyId $companyId -Hostnames $allHostnames -IPs $allIPs
+                            foreach ($item in $top10) {
+                                if (-not $item.AffectedSystems) { continue }
+                                foreach ($sys in $item.AffectedSystems) {
+                                    $pingStr = ""
+                                    if (-not [string]::IsNullOrWhiteSpace($sys.HostName) -and $pingMap.ContainsKey($sys.HostName.Trim())) { $pingStr = $pingMap[$sys.HostName.Trim()] }
+                                    if ([string]::IsNullOrWhiteSpace($pingStr) -and -not [string]::IsNullOrWhiteSpace($sys.IP) -and $pingMap.ContainsKey($sys.IP.Trim())) { $pingStr = $pingMap[$sys.IP.Trim()] }
+                                    if (-not [string]::IsNullOrWhiteSpace($pingStr)) { $sys | Add-Member -NotePropertyName 'LastPingTime' -NotePropertyValue $pingStr -Force }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs -and $hasTop10Data) {
@@ -1573,9 +1646,6 @@ function Show-VScanMagicGUI {
 
             Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputsSync)
 
-            [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
-                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-
         } catch {
             # Hide progress bar on error
             Update-Progress -Status "Error" -Show $false
@@ -1600,6 +1670,6 @@ function Show-VScanMagicGUI {
     $panelBottomButtons.Controls.Add($buttonClose)
 
     # Show form
-    Write-Log "VScanMagic v3 initialized" -Level Info
+    Write-Log "$($script:Config.AppName) initialized" -Level Info
     $form.ShowDialog() | Out-Null
 }

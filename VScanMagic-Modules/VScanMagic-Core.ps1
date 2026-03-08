@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.8"
+    Version = "4.0.9"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
@@ -66,6 +66,16 @@ $script:Config = @{
     # Excel Formatting Configuration
     ConditionalFormatThreshold = 0.075
     ExcelPathLimit = 200
+
+    # Synthetic EPSS for items without EPSS (e.g. Network vulns) - used for ranking and MinEPSS filter
+    SyntheticEPSSForNoEPSS = 0.1
+
+    # Top N report: always include at least this many Network vulns regardless of score (ensures network findings are visible)
+    MinNetworkVulnsInTopN = 2
+
+    # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
+    AIBatchChunkSize = 4
+    AIBatchChunkDelaySeconds = 8
 }
 
 # --- User Settings Persistence ---
@@ -92,8 +102,8 @@ $script:Templates = $null
 $script:FilterMinEPSS = 0
 $script:FilterIncludeCritical = $true
 $script:FilterIncludeHigh = $true
-$script:FilterIncludeMedium = $true
-$script:FilterIncludeLow = $true
+$script:FilterIncludeMedium = $false
+$script:FilterIncludeLow = $false
 $script:FilterTopN = "10"
 $script:OutputExcel = $true
 $script:OutputWord = $true
@@ -130,11 +140,19 @@ $script:UserSettings = @{
     ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
     HostnameReviewWindows11Threshold = 350  # VulnCount threshold: below = unselected, above = selected for Windows 11 O/S tabs
     HostnameReviewAutoLookupConnectSecure = $true  # When true, automatically lookup usernames from ConnectSecure when Hostname Review opens (CompanyId > 0)
+    HostnameReviewAutoLookupLastPing = $true  # When true, lookup last ping time from ConnectSecure for Top N report and ticket instructions (CompanyId > 0)
     DownloadAutoResizeColumns = $true  # When true, auto-resize columns on downloaded Excel reports (excludes Company and Proposed Remediations (all) sheets)
     # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
     AIApiKeyCopilot = ""
     AIApiKeyChatGPT = ""
     AIApiKeyClaude = ""
+    # Report Filters (persisted so Top N selection is remembered)
+    FilterTopN = "10"
+    FilterMinEPSS = 0
+    FilterIncludeCritical = $true
+    FilterIncludeHigh = $true
+    FilterIncludeMedium = $false
+    FilterIncludeLow = $false
 }
 
 function Ensure-SettingsDirectory {
@@ -293,12 +311,26 @@ function Load-UserSettings {
         if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
         if ($null -ne $json.HostnameReviewWindows11Threshold -and $json.HostnameReviewWindows11Threshold -ge 0) { $script:UserSettings.HostnameReviewWindows11Threshold = [int]$json.HostnameReviewWindows11Threshold } else { $script:UserSettings.HostnameReviewWindows11Threshold = 350 }
         if ($null -ne $json.HostnameReviewAutoLookupConnectSecure) { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = [bool]$json.HostnameReviewAutoLookupConnectSecure } else { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $true }
+        if ($null -ne $json.HostnameReviewAutoLookupLastPing) { $script:UserSettings.HostnameReviewAutoLookupLastPing = [bool]$json.HostnameReviewAutoLookupLastPing } else { $script:UserSettings.HostnameReviewAutoLookupLastPing = $true }
         if ($null -ne $json.DownloadAutoResizeColumns) { $script:UserSettings.DownloadAutoResizeColumns = [bool]$json.DownloadAutoResizeColumns } else { $script:UserSettings.DownloadAutoResizeColumns = $true }
         if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
         if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
         if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }
+        if ($null -ne $json.FilterTopN -and $json.FilterTopN -in @('10','20','50','100','All')) { $script:UserSettings.FilterTopN = $json.FilterTopN } else { $script:UserSettings.FilterTopN = "10" }
+        if ($null -ne $json.FilterMinEPSS) { $script:UserSettings.FilterMinEPSS = [double]$json.FilterMinEPSS } else { $script:UserSettings.FilterMinEPSS = 0 }
+        if ($null -ne $json.FilterIncludeCritical) { $script:UserSettings.FilterIncludeCritical = [bool]$json.FilterIncludeCritical } else { $script:UserSettings.FilterIncludeCritical = $true }
+        if ($null -ne $json.FilterIncludeHigh) { $script:UserSettings.FilterIncludeHigh = [bool]$json.FilterIncludeHigh } else { $script:UserSettings.FilterIncludeHigh = $true }
+        if ($null -ne $json.FilterIncludeMedium) { $script:UserSettings.FilterIncludeMedium = [bool]$json.FilterIncludeMedium } else { $script:UserSettings.FilterIncludeMedium = $false }
+        if ($null -ne $json.FilterIncludeLow) { $script:UserSettings.FilterIncludeLow = [bool]$json.FilterIncludeLow } else { $script:UserSettings.FilterIncludeLow = $false }
         Write-Host "User settings loaded from $script:SettingsPath"
     }
+    # Sync filter script variables from UserSettings (used by Get-Top10Vulnerabilities etc.)
+    $script:FilterTopN = $script:UserSettings.FilterTopN
+    $script:FilterMinEPSS = $script:UserSettings.FilterMinEPSS
+    $script:FilterIncludeCritical = $script:UserSettings.FilterIncludeCritical
+    $script:FilterIncludeHigh = $script:UserSettings.FilterIncludeHigh
+    $script:FilterIncludeMedium = $script:UserSettings.FilterIncludeMedium
+    $script:FilterIncludeLow = $script:UserSettings.FilterIncludeLow
 }
 
 function Save-UserSettings {
@@ -320,11 +352,16 @@ function Load-ConnectSecureCredentials {
     if ([string]::IsNullOrEmpty($script:ConnectSecureCredentialsPath)) { return $null }
     $json = Get-JsonFile -Path $script:ConnectSecureCredentialsPath
     if (-not $json) { return $null }
+    # Trim all values - JSON/save can introduce trailing spaces, newlines, or BOM
+    $baseUrl = if ($json.BaseUrl) { [string]$json.BaseUrl.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $tenantName = if ($json.TenantName) { [string]$json.TenantName.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $clientId = if ($json.ClientId) { [string]$json.ClientId.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $clientSecret = if ($json.ClientSecret) { [string]$json.ClientSecret.Trim() -replace "`r`n|`r|`n", "" } else { "" }
     return @{
-        BaseUrl = if ($json.BaseUrl) { $json.BaseUrl } else { "" }
-        TenantName = if ($json.TenantName) { $json.TenantName } else { "" }
-        ClientId = if ($json.ClientId) { $json.ClientId } else { "" }
-        ClientSecret = if ($json.ClientSecret) { $json.ClientSecret } else { "" }
+        BaseUrl = $baseUrl
+        TenantName = $tenantName
+        ClientId = $clientId
+        ClientSecret = $clientSecret
         CompanyId = if ($json.CompanyId) { [int]$json.CompanyId } else { 0 }
     }
 }
@@ -689,6 +726,12 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*ripple20*"
+            WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
+            TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*rippl20*"
             WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
             TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
@@ -707,6 +750,48 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*VMware*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*vSphere*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*ESXi*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*vCenter*"
+            WordText = "VMware vCenter Server updates are released by Broadcom. Remediation requires downloading the patch ISO from the Broadcom Support Portal and applying via the vCenter Lifecycle Manager plug-in, GUI installer, or Virtual Appliance Management Interface (VAMI). Plan for maintenance; vCenter services restart during patching."
+            TicketText = "- Download patch ISO from Broadcom Support Portal`r`n  - Apply via vCenter Lifecycle Manager, GUI installer, or VAMI`r`n  - Plan for maintenance; vCenter services restart during patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*FortiGate*"
+            WordText = "FortiGate firewall firmware updates are available from the Fortinet Support Portal. For managed devices, use FortiCloud Fabric Manager (Management > Firmware) to download, backup, and install firmware. If automatic upgrade fails, apply manually via the web interface (System > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from Fortinet Support Portal`r`n  - Prefer FortiCloud Fabric Manager (Management > Firmware) for managed devices`r`n  - If automatic upgrade fails, apply manually via web interface (System > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Fortinet*"
+            WordText = "FortiGate firewall firmware updates are available from the Fortinet Support Portal. For managed devices, use FortiCloud Fabric Manager (Management > Firmware) to download, backup, and install firmware. If automatic upgrade fails, apply manually via the web interface (System > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from Fortinet Support Portal`r`n  - Prefer FortiCloud Fabric Manager (Management > Firmware) for managed devices`r`n  - If automatic upgrade fails, apply manually via web interface (System > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*SonicWall*"
+            WordText = "SonicWall firewall firmware updates are available from the MySonicWall portal. Download the firmware for your appliance model, then apply via the management interface (System > Settings > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from MySonicWall portal`r`n  - Apply via management interface (System > Settings > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*"
             WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
             TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
@@ -722,6 +807,22 @@ function Load-RemediationRules {
         $script:RemediationRules = @()
         foreach ($rule in $json) {
             $script:RemediationRules += @{ Pattern = $rule.Pattern; WordText = $rule.WordText; TicketText = $rule.TicketText; IsDefault = $rule.IsDefault }
+        }
+        # Merge in any new default rules not already in user's file (e.g. VMware, vCenter added in newer versions)
+        $defaults = Get-DefaultRemediationRules
+        $existingPatterns = @{}
+        foreach ($r in $script:RemediationRules) { $existingPatterns[$r.Pattern] = $true }
+        $added = 0
+        foreach ($d in $defaults) {
+            if (-not $existingPatterns.ContainsKey($d.Pattern)) {
+                $script:RemediationRules += @{ Pattern = $d.Pattern; WordText = $d.WordText; TicketText = $d.TicketText; IsDefault = $d.IsDefault }
+                $existingPatterns[$d.Pattern] = $true
+                $added++
+            }
+        }
+        if ($added -gt 0 -and -not [string]::IsNullOrEmpty($script:RemediationRulesPath)) {
+            Save-RemediationRules | Out-Null
+            Write-Host "Added $added new default remediation rule(s)"
         }
         Write-Host "Remediation rules loaded from $script:RemediationRulesPath"
     } else {
@@ -1201,6 +1302,17 @@ function Test-FileLocked {
     }
 }
 
+function Test-IsPlaceholderFixText {
+    <#
+    .SYNOPSIS
+    Returns $true if the Fix/Solution text is a placeholder (None, [None], N/A) with no real remediation.
+    #>
+    param([string]$RawFix)
+    if ([string]::IsNullOrWhiteSpace($RawFix)) { return $true }
+    $t = $RawFix.Trim()
+    return $t -match '^\s*(\[?\s*)?(None|N/A|nil)\s*(\]?\s*)?$' -or $t -eq "['None']" -or $t -eq '["None"]'
+}
+
 function ConvertTo-ReadableFixText {
     <#
     .SYNOPSIS
@@ -1209,6 +1321,7 @@ function ConvertTo-ReadableFixText {
     #>
     param([string]$RawFix)
     if ([string]::IsNullOrWhiteSpace($RawFix)) { return $RawFix }
+    if (Test-IsPlaceholderFixText -RawFix $RawFix) { return '' }
     $parts = [System.Collections.ArrayList]::new()
     $matches = [regex]::Matches($RawFix, "'([^']*)'")
     foreach ($m in $matches) {
@@ -1250,7 +1363,8 @@ function Invoke-AIImproveRemediationText {
     param(
         [string]$Text,
         [string]$ProductName = "",
-        [string]$CveIdList = ""
+        [string]$CveIdList = "",
+        [string]$HostContext = ""
     )
 
     if ([string]::IsNullOrWhiteSpace($Text)) {
@@ -1259,15 +1373,22 @@ function Invoke-AIImproveRemediationText {
 
     $cleaned = ConvertTo-ReadableFixText -RawFix $Text
     $vulnContext = ""
-    if (-not [string]::IsNullOrWhiteSpace($ProductName) -or -not [string]::IsNullOrWhiteSpace($CveIdList)) {
-        $parts = @()
-        if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
-        if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product: $ProductName" }
-        $vulnContext = ($parts -join "`n") + "`n`n"
+    $parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
+    if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product/OS: $ProductName" }
+    if (-not [string]::IsNullOrWhiteSpace($HostContext)) { $parts += "Affected hosts: $HostContext" }
+    if ($parts.Count -gt 0) { $vulnContext = ($parts -join "`n") + "`n`n" }
+
+    $cveOnlyHint = ""
+    $trimmed = $cleaned.Trim()
+    if ($trimmed -match '^CVE-\d{4}-\d+' -and $trimmed.Length -lt 120) {
+        $cveOnlyHint = "IMPORTANT: The input is only a CVE ID (or minimal text). Use the Product/OS and Affected hosts context above to provide platform-appropriate remediation (e.g. Windows Update KB for Windows hosts, firmware update for printers/IoT, vendor patch for specific software). Match the fix to the host/OS type.`n`n"
     }
+
     $prompt = @"
 You are rephrasing SPECIFIC remediation steps for ONE vulnerability. The text below contains the exact fix (e.g. KB numbers, version updates) for a particular CVE or product.
 
+$cveOnlyHint
 RULES:
 - Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
 - Do NOT output things like "Prioritize remediation", "Patch management", "Vulnerability scanning", "Documentation" - those are generic.
@@ -1275,7 +1396,8 @@ RULES:
 - If the input is already specific (e.g. "Apply KB5077181"), just make it slightly more readable - do not expand into generic guidance.
 - Output ONLY the rephrased text. No preamble, no explanation, no bullet lists of general practices.
 - NEVER respond with "I don't have specific information" or similar. If CVE IDs are provided or the vulnerability is known (e.g. Ripple20/rippl20, CVE-2020-11898, CVE-2020-11910), provide the best available remediation guidance for that specific vulnerability.
-- When CVE IDs are given, use them to provide CVE-specific remediation (patches, KB numbers, version updates, workarounds from NVD/CERT advisories).
+- When CVE IDs are given, use them to provide CVE-specific remediation (patches, KB numbers, version updates, workarounds from NVD/CERT advisories). When input is only a CVE, use Product/OS and host context to tailor the fix (Windows vs Linux vs firmware).
+- CRITICAL: The remediation MUST match the Product/OS above. If Product is Windows 11 or Windows Server, output ONLY Windows Update KB numbers or build numbers - NEVER Chrome, Firefox, or other software version numbers. If Product is Google Chrome, output ONLY Chrome version numbers. Do NOT mix product types.
 - Common vulnerabilities: rippl20-icmp = Ripple20 Treck TCP/IP ICMP flaws; remediate via firmware updates from manufacturer, network segmentation where patching not possible.
 
 $vulnContext
@@ -1317,7 +1439,7 @@ Input to rephrase:
         for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
             try {
                 $reqBody = @{
-                    model = "claude-3-haiku-20240307"
+                    model = "claude-haiku-4-5-20251001"
                     max_tokens = 1024
                     messages = @(
                         @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
@@ -1329,7 +1451,17 @@ Input to rephrase:
                     "Content-Type" = "application/json"
                 }
                 $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
-                $improved = $resp.content[0].text.Trim()
+                $content = @($resp.content)
+                $improved = ''
+                foreach ($block in $content) {
+                    if ($block -and $block.type -eq 'text' -and $null -ne $block.text) {
+                        $improved += [string]$block.text
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($improved) -and $content.Count -gt 0 -and $content[0] -and $null -ne $content[0].text) {
+                    $improved = [string]$content[0].text
+                }
+                $improved = if ($improved) { $improved.Trim() } else { '' }
                 if (-not [string]::IsNullOrWhiteSpace($improved)) {
                     if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
                         $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
@@ -1366,7 +1498,7 @@ Input to rephrase:
                 "Authorization" = "Bearer $key"
                 "Content-Type" = "application/json"
             }
-            $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+                $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
             $improved = $resp.choices[0].message.content.Trim()
             if (-not [string]::IsNullOrWhiteSpace($improved)) {
                 if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
@@ -1382,4 +1514,160 @@ Input to rephrase:
 
     Write-Log "No AI API key configured or all attempts failed. Configure AI keys in Settings." -Level Warning
     return $Text
+}
+
+function Invoke-AIImproveRemediationTextBatch {
+    <#
+    .SYNOPSIS
+    Rephrases multiple vulnerability remediation texts via AI API calls.
+    Processes in chunks to avoid rate limits; retries on 429.
+    .PARAMETER Items
+    Array of hashtables: @{ Text, ProductName, CveIdList }
+    .OUTPUTS
+    Array of improved strings (same order as input). Falls back to original text on parse/API failure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Items
+    )
+
+    if ($null -eq $Items -or $Items.Count -eq 0) {
+        return @()
+    }
+    if ($Items.Count -eq 1) {
+        $i = $Items[0]
+        $hostCtx = if ($i.HostContext) { $i.HostContext } else { "" }
+        return @(Invoke-AIImproveRemediationText -Text $i.Text -ProductName $i.ProductName -CveIdList $i.CveIdList -HostContext $hostCtx)
+    }
+
+    $delim = "###RESULT###"
+    $chunkSize = $script:Config.AIBatchChunkSize
+    $chunkDelay = $script:Config.AIBatchChunkDelaySeconds
+    $rulesHeader = @"
+You are rephrasing SPECIFIC remediation steps for MULTIPLE vulnerabilities. Below are N items. For EACH item, output the improved text, then the exact delimiter '$delim' (including the delimiter line).
+
+RULES (apply to EACH item):
+- Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
+- Do NOT output things like 'Prioritize remediation', 'Patch management', 'Vulnerability scanning' - those are generic.
+- Output ONLY a clear, professional rewrite of the SPECIFIC fix. One short paragraph or a few sentences max.
+- If the input is already specific (e.g. 'Apply KB5077181'), just make it slightly more readable.
+- NEVER respond with 'I don't have specific information'. Use CVE IDs to provide CVE-specific remediation when given.
+- When input is only a CVE ID, use Product/OS and Affected hosts to provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT, vendor patch for software).
+- CRITICAL: Remediation MUST match the Product/OS. Windows 11/Server = Windows KB numbers only, never Chrome/Firefox versions. Google Chrome = Chrome versions only. Do NOT mix product types.
+- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates, network segmentation.
+
+OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 2', or numbering), then a line with exactly: $delim
+
+--- INPUT ITEMS ---
+"@
+
+    $tryApiChunk = {
+        param($key, $provider, $prompt, $maxTokens)
+        if ([string]::IsNullOrWhiteSpace($key)) { return $null }
+        try {
+            if ($provider -eq 'ChatGPT' -or $provider -eq 'Copilot') {
+                $reqBody = @{ model = "gpt-4o-mini"; messages = @( @{ role = "user"; content = $prompt } ); max_tokens = $maxTokens } | ConvertTo-Json -Depth 5
+                $headers = @{ "Authorization" = "Bearer $key"; "Content-Type" = "application/json" }
+                $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
+                return $resp.choices[0].message.content.Trim()
+            }
+            if ($provider -eq 'Claude') {
+                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, $maxTokens); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
+                $headers = @{ "x-api-key" = $key; "anthropic-version" = "2023-06-01"; "Content-Type" = "application/json" }
+                $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
+                $content = @($resp.content)
+                $rawText = ''
+                foreach ($block in $content) {
+                    if ($block -and $block.type -eq 'text' -and $null -ne $block.text) { $rawText += [string]$block.text }
+                }
+                if ([string]::IsNullOrWhiteSpace($rawText) -and $content.Count -gt 0 -and $content[0] -and $null -ne $content[0].text) {
+                    $rawText = [string]$content[0].text
+                }
+                if ($rawText) { return $rawText.Trim() }
+                return ''
+            }
+        } catch {
+            $errDetail = $_.Exception.Message
+            if ($_.ErrorDetails.Message) { $errDetail += " | " + $_.ErrorDetails.Message }
+            Write-Log "$provider batch AI failed: $errDetail" -Level Warning
+            throw
+        }
+        return $null
+    }
+
+    $allResults = @()
+    $chunks = @()
+    for ($i = 0; $i -lt $Items.Count; $i += $chunkSize) {
+        $end = [Math]::Min($i + $chunkSize, $Items.Count)
+        $chunks += ,@($Items[$i..($end - 1)])
+    }
+
+    for ($c = 0; $c -lt $chunks.Count; $c++) {
+        $chunk = $chunks[$c]
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine($rulesHeader)
+        for ($idx = 0; $idx -lt $chunk.Count; $idx++) {
+            $i = $chunk[$idx]
+            $textToUse = $i.Text
+            if ($textToUse.Length -le 2 -and -not [string]::IsNullOrWhiteSpace($i.ProductName)) {
+                $fallback = Get-RemediationGuidance -ProductName $i.ProductName -OutputType 'Word'
+                if (-not [string]::IsNullOrWhiteSpace($fallback)) { $textToUse = $fallback }
+            }
+            $cleaned = ConvertTo-ReadableFixText -RawFix $textToUse
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("--- ITEM $($idx + 1) ---")
+            if (-not [string]::IsNullOrWhiteSpace($i.CveIdList)) { [void]$sb.AppendLine("CVE ID(s): $($i.CveIdList)") }
+            if (-not [string]::IsNullOrWhiteSpace($i.ProductName)) { [void]$sb.AppendLine("Product/OS: $($i.ProductName)") }
+            if (-not [string]::IsNullOrWhiteSpace($i.HostContext)) { [void]$sb.AppendLine("Affected hosts: $($i.HostContext)") }
+            [void]$sb.AppendLine("Text to rephrase: $cleaned")
+        }
+        $chunkPrompt = $sb.ToString()
+        $chunkMaxTokens = [Math]::Min(8192, 1024 + ($chunk.Count * 400))
+
+        $raw = $null
+        $claudeRetries = 2
+        foreach ($provider in @('ChatGPT','Claude','Copilot')) {
+            $key = if ($provider -eq 'ChatGPT') { $script:UserSettings.AIApiKeyChatGPT } elseif ($provider -eq 'Claude') { $script:UserSettings.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyCopilot }
+            if ([string]::IsNullOrWhiteSpace($key)) { continue }
+            for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
+                try {
+                    $raw = & $tryApiChunk $key $provider $chunkPrompt $chunkMaxTokens
+                    break
+                } catch {
+                    $is429 = $_.Exception.Message -match '429|Too Many Requests'
+                    if ($is429 -and $attempt -lt $claudeRetries) {
+                        $waitSec = 15 + ($attempt * 10)
+                        Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry..." -Level Warning
+                        Start-Sleep -Seconds $waitSec
+                    } else {
+                        $raw = $null
+                        break
+                    }
+                }
+            }
+            if ($raw) { break }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-Log "Batch AI chunk $($c + 1)/$($chunks.Count): all providers failed. Using original text for chunk." -Level Warning
+            $allResults += @($chunk | ForEach-Object { $_.Text })
+        } else {
+            $parts = $raw -split [regex]::Escape($delim)
+            $itemPrefix = '^\s*(?:\*\*)?\s*ITEM\s+\d+\s*:?\s*\r?\n?\s*'
+            for ($idx = 0; $idx -lt $chunk.Count; $idx++) {
+                $improved = if ($idx -lt $parts.Count) { $parts[$idx].Trim() } else { $null }
+                if ($improved -and $improved -match $itemPrefix) { $improved = $improved -replace $itemPrefix, '' }
+                if ([string]::IsNullOrWhiteSpace($improved) -or $improved -match "don't have specific information|do not have specific information") {
+                    $fallback = Get-RemediationGuidance -ProductName $chunk[$idx].ProductName -OutputType 'Word'
+                    $improved = if (-not [string]::IsNullOrWhiteSpace($fallback)) { $fallback } else { $chunk[$idx].Text }
+                }
+                $allResults += $improved
+            }
+        }
+
+        if ($c -lt $chunks.Count - 1 -and $chunkDelay -gt 0) {
+            Start-Sleep -Seconds $chunkDelay
+        }
+    }
+    return $allResults
 }

@@ -76,7 +76,8 @@ function Show-GeneralRecommendationsDialog {
         }
         
         try {
-            $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $productName -OutputType 'Word' }
+            $fixIsPlaceholder = Test-IsPlaceholderFixText -RawFix $item.Fix
+            $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix) -and -not $fixIsPlaceholder) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $productName -OutputType 'Word' }
         } catch {
             $recommendationsText = "Unable to load recommendation: $($_.Exception.Message)"
         }
@@ -126,20 +127,17 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $idx = 0
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
-                if (-not [string]::IsNullOrWhiteSpace($currentText)) {
-                    $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
-                    $row.Cells["Recommendations"].Value = $improved
-                    $idx++
-                    if ($idx -lt $rowsToImprove.Count) {
-                        Start-Sleep -Seconds 2
-                        [System.Windows.Forms.Application]::DoEvents()
-                    }
+                $hostContext = ""
+                if ($row.Tag -and $row.Tag.AffectedSystems -and $row.Tag.AffectedSystems.Count -gt 0) {
+                    $hosts = $row.Tag.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { $_ } | Select-Object -First 10 -Unique
+                    $hostContext = ($hosts -join ", ").Trim()
                 }
+                $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds -HostContext $hostContext
+                $row.Cells["Recommendations"].Value = $improved
             }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -166,18 +164,21 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $idx = 0
+            $batchItems = @()
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
-                $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
-                $row.Cells["Recommendations"].Value = $improved
-                $idx++
-                if ($idx -lt $rowsToImprove.Count) {
-                    Start-Sleep -Seconds 2
-                    [System.Windows.Forms.Application]::DoEvents()
+                $hostContext = ""
+                if ($row.Tag -and $row.Tag.AffectedSystems -and $row.Tag.AffectedSystems.Count -gt 0) {
+                    $hosts = $row.Tag.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { $_ } | Select-Object -First 10 -Unique
+                    $hostContext = ($hosts -join ", ").Trim()
                 }
+                $batchItems += @{ Text = $currentText; ProductName = $productName; CveIdList = $cveIds; HostContext = $hostContext; Row = $row }
+            }
+            $improvedList = Invoke-AIImproveRemediationTextBatch -Items $batchItems
+            for ($i = 0; $i -lt [Math]::Min($batchItems.Count, $improvedList.Count); $i++) {
+                $batchItems[$i].Row.Cells["Recommendations"].Value = $improvedList[$i]
             }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -547,7 +548,6 @@ function Show-HostnameReviewDialog {
                     }
                 }
             }
-            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
@@ -594,7 +594,6 @@ function Show-HostnameReviewDialog {
                     }
                 }
             }
-            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectWise Automate.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
@@ -654,9 +653,6 @@ function Show-HostnameReviewDialog {
                         }
                     }
                 }
-            }
-            if ($filled -gt 0) {
-                [System.Windows.Forms.MessageBox]::Show("Auto-lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -880,11 +876,15 @@ function New-TimeEstimate {
 
             [void]$sb.AppendLine("$($i + 1). $($item.Product)")
             
-            # Add hostnames/hosts CSV list (use hostname or IP so we include all systems)
+            # Add hostnames/hosts CSV list (use hostname or IP so we include all systems; append last ping when available)
             if ($item.AffectedSystems -and $item.AffectedSystems.Count -gt 0) {
-                $identifiers = $item.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-                if ($identifiers.Count -gt 0) {
-                    $identifiersList = $identifiers -join ", "
+                $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
+                $identifiersList = ($uniqueSystems | ForEach-Object {
+                    $line = if ($_.HostName) { $_.HostName } else { $_.IP }
+                    if (-not [string]::IsNullOrWhiteSpace($_.LastPingTime)) { $line += " (last seen $($_.LastPingTime))" }
+                    $line
+                } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
+                if (-not [string]::IsNullOrWhiteSpace($identifiersList)) {
                     [void]$sb.AppendLine("   Affected Hostnames: $identifiersList")
                 }
             }
@@ -1109,12 +1109,13 @@ function New-TicketInstructions {
             [void]$sb.AppendLine("NOTE: This remediation can go to any available technician.")
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Affected Systems:")
-            # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP" or "hostname - IP"
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP (last seen ...)" or "hostname - IP"
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
                 $username = $sys.Username
+                $lastPing = $sys.LastPingTime
                 # Use hostname or IP as primary identifier so we list all systems
                 $systemLine = if ($hostname) { $hostname } else { $ip }
                 if (-not [string]::IsNullOrWhiteSpace($username)) {
@@ -1122,6 +1123,9 @@ function New-TicketInstructions {
                 }
                 if (-not [string]::IsNullOrWhiteSpace($ip)) {
                     $systemLine += " - $ip"
+                }
+                if (-not [string]::IsNullOrWhiteSpace($lastPing)) {
+                    $systemLine += " (last seen $lastPing)"
                 }
                 [void]$sb.AppendLine("  - $systemLine")
             }
@@ -1263,14 +1267,16 @@ NOTE: This remediation can go to any available technician.
 
 Affected Systems:
 "@
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
                 $username = $sys.Username
+                $lastPing = $sys.LastPingTime
                 $systemLine = if ($hostname) { $hostname } else { $ip }
                 if (-not [string]::IsNullOrWhiteSpace($username)) { $systemLine += " ($username)" }
                 if (-not [string]::IsNullOrWhiteSpace($ip)) { $systemLine += " - $ip" }
+                if (-not [string]::IsNullOrWhiteSpace($lastPing)) { $systemLine += " (last seen $lastPing)" }
                 $sectionBody += "`n  - $systemLine"
             }
             $sectionBody += "`n`nRemediation Instructions:`n"
@@ -1679,7 +1685,6 @@ $($script:Templates.TicketNotes.NextStepsText)
         try {
             $result | Out-File -FilePath $OutputPath -Encoding UTF8
             $script:TicketNotesPath = $OutputPath
-            [System.Windows.Forms.MessageBox]::Show("Ticket notes saved to:`n$OutputPath", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to save ticket notes: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
@@ -1687,7 +1692,6 @@ $($script:Templates.TicketNotes.NextStepsText)
         # Copy to clipboard (fallback for when called from button without file path)
         try {
             [System.Windows.Forms.Clipboard]::SetText($result)
-            [System.Windows.Forms.MessageBox]::Show("Ticket notes copied to clipboard!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to copy to clipboard: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
@@ -2126,16 +2130,16 @@ function Show-ConnectSecureSettingsDialog {
     $btnTest.ForeColor = [System.Drawing.Color]::White
     $btnTest.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTest.FlatAppearance.BorderSize = 0
-    $btnTest.Add_Click({
-        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
-            [System.Windows.Forms.MessageBox]::Show("Please fill in all fields first.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-        $btnTest.Enabled = $false
-        $btnTest.Text = "Testing..."
-        $dlg.Refresh()
-        try {
-            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+        $btnTest.Add_Click({
+            if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Please fill in all fields first.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+            $btnTest.Enabled = $false
+            $btnTest.Text = "Testing..."
+            $dlg.Refresh()
+            try {
+                $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text.Trim() -TenantName $txtTenant.Text.Trim() -ClientId $txtClientId.Text.Trim() -ClientSecret $txtClientSecret.Text.Trim()
             if ($connected) {
                 [System.Windows.Forms.MessageBox]::Show("Credentials are valid!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             } else {
@@ -2280,7 +2284,7 @@ function Show-ConnectWiseAutomateSettingsDialog {
 function Show-FiltersDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Report Filters"
-    $dlg.Size = New-Object System.Drawing.Size(480, 220)
+    $dlg.Size = New-Object System.Drawing.Size(500, 260)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2301,6 +2305,13 @@ function Show-FiltersDialog {
     $numMinEPSS.Increment = 0.001
     $numMinEPSS.Value = $script:FilterMinEPSS
     $dlg.Controls.Add($numMinEPSS)
+    $lblMinEPSSHint = New-Object System.Windows.Forms.Label
+    $lblMinEPSSHint.Location = New-Object System.Drawing.Point(265, ($y - 2))
+    $lblMinEPSSHint.Size = New-Object System.Drawing.Size(200, 32)
+    $lblMinEPSSHint.Text = "Excludes items below this. Network vulns use synthetic 0.1."
+    $lblMinEPSSHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblMinEPSSHint.Font = New-Object System.Drawing.Font($lblMinEPSSHint.Font.FontFamily, 8)
+    $dlg.Controls.Add($lblMinEPSSHint)
     $y += 40
 
     $lblSeverity = New-Object System.Windows.Forms.Label
@@ -2324,7 +2335,7 @@ function Show-FiltersDialog {
     $chkMedium.Location = New-Object System.Drawing.Point(265, $y)
     $chkMedium.Size = New-Object System.Drawing.Size(70, 20)
     $chkMedium.Text = "Medium"
-    $chkMedium.Checked = $script:FilterIncludeMedium
+    $chkMedium.Checked = if ($null -ne $script:UserSettings.FilterIncludeMedium) { $script:UserSettings.FilterIncludeMedium } else { $script:FilterIncludeMedium }
     $dlg.Controls.Add($chkMedium)
     $chkLow = New-Object System.Windows.Forms.CheckBox
     $chkLow.Location = New-Object System.Drawing.Point(340, $y)
@@ -2332,7 +2343,19 @@ function Show-FiltersDialog {
     $chkLow.Text = "Low"
     $chkLow.Checked = $script:FilterIncludeLow
     $dlg.Controls.Add($chkLow)
-    $y += 35
+    $chkCriticalHighOnly = New-Object System.Windows.Forms.CheckBox
+    $chkCriticalHighOnly.Location = New-Object System.Drawing.Point(135, ($y + 22))
+    $chkCriticalHighOnly.Size = New-Object System.Drawing.Size(140, 20)
+    $chkCriticalHighOnly.Text = "Critical/High only"
+    $chkCriticalHighOnly.Checked = (-not $script:FilterIncludeMedium -and -not $script:FilterIncludeLow)
+    $chkCriticalHighOnly.Add_CheckedChanged({
+        if ($chkCriticalHighOnly.Checked) {
+            $chkMedium.Checked = $false
+            $chkLow.Checked = $false
+        }
+    })
+    $dlg.Controls.Add($chkCriticalHighOnly)
+    $y += 50
 
     $lblTopN = New-Object System.Windows.Forms.Label
     $lblTopN.Location = New-Object System.Drawing.Point(20, $y)
@@ -2346,6 +2369,13 @@ function Show-FiltersDialog {
     @("10", "20", "50", "100", "All") | ForEach-Object { [void]$comboTopN.Items.Add($_) }
     $idx = 0; foreach ($i in 0..4) { if ($comboTopN.Items[$i] -eq $script:FilterTopN) { $idx = $i; break } }; $comboTopN.SelectedIndex = $idx
     $dlg.Controls.Add($comboTopN)
+    $lblTopNHint = New-Object System.Windows.Forms.Label
+    $lblTopNHint.Location = New-Object System.Drawing.Point(205, ($y - 2))
+    $lblTopNHint.Size = New-Object System.Drawing.Size(260, 32)
+    $lblTopNHint.Text = "All = all items meeting min EPSS + severity (no limit)"
+    $lblTopNHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblTopNHint.Font = New-Object System.Drawing.Font($lblTopNHint.Font.FontFamily, 8)
+    $dlg.Controls.Add($lblTopNHint)
     $y += 45
 
     $btnOK = New-Object System.Windows.Forms.Button
@@ -2360,6 +2390,13 @@ function Show-FiltersDialog {
         $script:FilterIncludeMedium = $chkMedium.Checked
         $script:FilterIncludeLow = $chkLow.Checked
         $script:FilterTopN = $comboTopN.SelectedItem.ToString()
+        $script:UserSettings.FilterTopN = $script:FilterTopN
+        $script:UserSettings.FilterMinEPSS = $script:FilterMinEPSS
+        $script:UserSettings.FilterIncludeCritical = $script:FilterIncludeCritical
+        $script:UserSettings.FilterIncludeHigh = $script:FilterIncludeHigh
+        $script:UserSettings.FilterIncludeMedium = $script:FilterIncludeMedium
+        $script:UserSettings.FilterIncludeLow = $script:FilterIncludeLow
+        Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -2378,13 +2415,20 @@ function Show-FiltersDialog {
         $script:FilterIncludeMedium = $chkMedium.Checked
         $script:FilterIncludeLow = $chkLow.Checked
         $script:FilterTopN = $comboTopN.SelectedItem.ToString()
+        $script:UserSettings.FilterTopN = $script:FilterTopN
+        $script:UserSettings.FilterMinEPSS = $script:FilterMinEPSS
+        $script:UserSettings.FilterIncludeCritical = $script:FilterIncludeCritical
+        $script:UserSettings.FilterIncludeHigh = $script:FilterIncludeHigh
+        $script:UserSettings.FilterIncludeMedium = $script:FilterIncludeMedium
+        $script:UserSettings.FilterIncludeLow = $script:FilterIncludeLow
+        Save-UserSettings | Out-Null
     }
 }
 
 function Show-OutputOptionsDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Output Options"
-    $dlg.Size = New-Object System.Drawing.Size(420, 290)
+    $dlg.Size = New-Object System.Drawing.Size(420, 315)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2432,20 +2476,27 @@ function Show-OutputOptionsDialog {
     $chkAutoLookup.Checked = if ($script:UserSettings.HostnameReviewAutoLookupConnectSecure) { $true } else { $false }
     $dlg.Controls.Add($chkAutoLookup)
 
+    $chkAutoLookupLastPing = New-Object System.Windows.Forms.CheckBox
+    $chkAutoLookupLastPing.Location = New-Object System.Drawing.Point(20, 178)
+    $chkAutoLookupLastPing.Size = New-Object System.Drawing.Size(360, 20)
+    $chkAutoLookupLastPing.Text = "Reports - Look up last ping time from ConnectSecure for hostnames"
+    $chkAutoLookupLastPing.Checked = if ($script:UserSettings.HostnameReviewAutoLookupLastPing) { $true } else { $false }
+    $dlg.Controls.Add($chkAutoLookupLastPing)
+
     $chkAutoResize = New-Object System.Windows.Forms.CheckBox
-    $chkAutoResize.Location = New-Object System.Drawing.Point(20, 178)
+    $chkAutoResize.Location = New-Object System.Drawing.Point(20, 201)
     $chkAutoResize.Size = New-Object System.Drawing.Size(360, 20)
     $chkAutoResize.Text = "Downloaded reports - Auto-resize Excel columns (excludes Company, Proposed Remediations)"
     $chkAutoResize.Checked = if ($script:UserSettings.DownloadAutoResizeColumns) { $true } else { $false }
     $dlg.Controls.Add($chkAutoResize)
 
     $lblWin11Thresh = New-Object System.Windows.Forms.Label
-    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 203)
+    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 224)
     $lblWin11Thresh.Size = New-Object System.Drawing.Size(280, 20)
     $lblWin11Thresh.Text = "Hostname Review - Windows 11 O/S vuln threshold (below = unselected):"
     $dlg.Controls.Add($lblWin11Thresh)
     $numWin11Thresh = New-Object System.Windows.Forms.NumericUpDown
-    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 201)
+    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 222)
     $numWin11Thresh.Size = New-Object System.Drawing.Size(80, 22)
     $numWin11Thresh.Minimum = 0
     $numWin11Thresh.Maximum = 9999
@@ -2453,7 +2504,7 @@ function Show-OutputOptionsDialog {
     $dlg.Controls.Add($numWin11Thresh)
 
     $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Location = New-Object System.Drawing.Point(210, 232)
+    $btnOK.Location = New-Object System.Drawing.Point(210, 253)
     $btnOK.Size = New-Object System.Drawing.Size(90, 28)
     $btnOK.Text = "OK"
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2464,13 +2515,14 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.HostnameReviewAutoLookupLastPing = $chkAutoLookupLastPing.Checked
         $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(305, 232)
+    $btnCancel.Location = New-Object System.Drawing.Point(305, 253)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Text = "Cancel"
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -2485,6 +2537,7 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.HostnameReviewAutoLookupLastPing = $chkAutoLookupLastPing.Checked
         $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null

@@ -20,7 +20,7 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 - **Dynamic Severity Thresholds** – Adapts risk score thresholds based on your data
 - **General Help & API Help** – In-app help for workflow guidance and API credential setup
 
-**Recent updates (4.0.2):** Structured output paths with Network Documentation/Vulnerability Scans; quarter folder format (2026 - Q1); Processing Summary and Report Folder History for quick access to output folders; bulk processing skips completion popups; removed View Generated Reports section; Company Folder Mappings auto-normalization.
+**Recent updates (4.0.9):** AI Improve Selected uses single-item path (fixes single-char output); Improve All uses chunked batch with 429 retry; Report Filters (Top N, EPSS, severity) persisted across sessions; removed Lookup Complete, Ticket Notes, Report Gen success popups; Ripple20/placeholder Fix handling; pie chart limited to 25 items (avoids Word COM RPC failures); rate limit tuning (smaller chunks, longer delays).
 
 ---
 
