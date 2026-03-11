@@ -531,6 +531,22 @@ function Get-ConnectWiseUsernamesByHostname {
 $script:CompanyFolderMap = @{}
 
 function Load-CompanyFolderMap {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $clientData = Get-VScanMagicClientData
+            if ($clientData -and $clientData.CompanyFolderMap) {
+                $script:CompanyFolderMap = $clientData.CompanyFolderMap
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Company folder mappings loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load company folder mappings from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { $script:CompanyFolderMap = @{}; return }
     $json = Get-JsonFile -Path $script:CompanyFolderMapPath
     $script:CompanyFolderMap = @{}
@@ -542,6 +558,24 @@ function Load-CompanyFolderMap {
 }
 
 function Save-CompanyFolderMap {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            # Load existing client data to preserve RMIT Plus settings
+            $existingData = Get-VScanMagicClientData
+            $rmitPlusSettings = if ($existingData -and $existingData.RMITPlusSettings) { $existingData.RMITPlusSettings } else { @{} }
+            
+            if (Save-VScanMagicClientData -RMITPlusSettings $rmitPlusSettings -CompanyFolderMap $script:CompanyFolderMap) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Company folder mappings saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save company folder mappings to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { return $false }
     return Set-JsonFile -Path $script:CompanyFolderMapPath -Object $script:CompanyFolderMap -Depth 2
 }
@@ -968,6 +1002,42 @@ function Get-DefaultRemediationRules {
 
 function Load-RemediationRules {
     $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
+    
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicRemediationRules -ErrorAction SilentlyContinue) {
+        try {
+            $sharedRules = Get-VScanMagicRemediationRules
+            if ($sharedRules -and $sharedRules.Count -gt 0) {
+                $script:RemediationRules = @()
+                foreach ($rule in $sharedRules) {
+                    $script:RemediationRules += @{ Pattern = $rule.Pattern; WordText = $rule.WordText; TicketText = $rule.TicketText; IsDefault = $rule.IsDefault }
+                }
+                # Merge in any new default rules not already in shared file
+                $defaults = Get-DefaultRemediationRules
+                $existingPatterns = @{}
+                foreach ($r in $script:RemediationRules) { $existingPatterns[$r.Pattern] = $true }
+                $added = 0
+                foreach ($d in $defaults) {
+                    if (-not $existingPatterns.ContainsKey($d.Pattern)) {
+                        $script:RemediationRules += @{ Pattern = $d.Pattern; WordText = $d.WordText; TicketText = $d.TicketText; IsDefault = $d.IsDefault }
+                        $existingPatterns[$d.Pattern] = $true
+                        $added++
+                    }
+                }
+                if ($added -gt 0) {
+                    Save-RemediationRules | Out-Null
+                    Write-Host "Added $added new default remediation rule(s) to shared storage"
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Remediation rules loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load remediation rules from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     $json = Get-JsonFile -Path $script:RemediationRulesPath
     if ($json -and $json.Count -gt 0) {
         $script:RemediationRules = @()
@@ -990,7 +1060,7 @@ function Load-RemediationRules {
             Save-RemediationRules | Out-Null
             Write-Host "Added $added new default remediation rule(s)"
         }
-        Write-Host "Remediation rules loaded from $script:RemediationRulesPath"
+        Write-Host "Remediation rules loaded from local storage: $script:RemediationRulesPath"
     } else {
         $script:RemediationRules = Get-DefaultRemediationRules
         if (-not [string]::IsNullOrEmpty($script:RemediationRulesPath)) { Save-RemediationRules }
@@ -998,13 +1068,28 @@ function Load-RemediationRules {
 }
 
 function Save-RemediationRules {
+    $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
+    
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicRemediationRules -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicRemediationRules -Rules $script:RemediationRules) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Remediation rules saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save remediation rules to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:RemediationRulesPath)) {
         Write-Warning "Remediation rules path is not set. Cannot save rules."
         return $false
     }
-    $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
     if (Set-JsonFile -Path $script:RemediationRulesPath -Object $script:RemediationRules -Depth 10) {
-        Write-Host "Remediation rules saved to $script:RemediationRulesPath"
+        Write-Host "Remediation rules saved to local storage: $script:RemediationRulesPath"
         return $true
     }
     return $false

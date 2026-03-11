@@ -41,6 +41,19 @@ if (-not (Test-Path $modulesDir)) {
     exit 1
 }
 
+# --- Import MemberberryIntegration module (if available) ---
+$memberberryIntegrationPath = Join-Path $modulesDir "MemberberryIntegration.psm1"
+if (Test-Path $memberberryIntegrationPath) {
+    try {
+        Import-Module $memberberryIntegrationPath -Force -ErrorAction Stop
+        Write-Host "Memberberry integration module loaded successfully" -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not load MemberberryIntegration module: $($_.Exception.Message). Using local storage."
+    }
+} else {
+    Write-Host "MemberberryIntegration module not found. Using local storage." -ForegroundColor Yellow
+}
+
 # --- Load Modules (order matters: Core -> Data -> Reports -> Dialogs -> Form) ---
 $corePath = Join-Path $modulesDir "VScanMagic-Core.ps1"
 $dataPath = Join-Path $modulesDir "VScanMagic-Data.ps1"

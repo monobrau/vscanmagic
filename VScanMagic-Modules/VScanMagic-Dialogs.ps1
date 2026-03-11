@@ -273,10 +273,32 @@ function Show-SetClientTypesDialog {
     $colRMIT.HeaderText = "RMIT+"
     $colRMIT.FillWeight = 30
     $dgv.Columns.Add($colRMIT) | Out-Null
+    
+    # Load existing RMIT Plus settings from shared storage if available
+    $savedRMITPlusSettings = @{}
+    if (Get-Command Get-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $clientData = Get-VScanMagicClientData
+            if ($clientData -and $clientData.RMITPlusSettings) {
+                $savedRMITPlusSettings = $clientData.RMITPlusSettings
+            }
+        } catch {
+            # Ignore errors loading saved settings
+        }
+    }
+    
     foreach ($c in $CompaniesToProcess) {
         $clientName = if ($c.ClientName) { $c.ClientName } else { ($c.Company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
         $clientName = if ([string]::IsNullOrWhiteSpace($clientName)) { $c.Company.DisplayName } else { $clientName }
-        $defaultVal = if ($c.IsRMITPlus -ne $null) { $c.IsRMITPlus } else { $DefaultIsRMITPlus }
+        
+        # Try to get saved RMIT Plus setting, then fall back to existing value, then default
+        $defaultVal = $DefaultIsRMITPlus
+        if ($savedRMITPlusSettings.ContainsKey($clientName)) {
+            $defaultVal = $savedRMITPlusSettings[$clientName]
+        } elseif ($c.IsRMITPlus -ne $null) {
+            $defaultVal = $c.IsRMITPlus
+        }
+        
         $row = $dgv.Rows.Add($clientName, $defaultVal)
         $dgv.Rows[$row].Tag = $c
     }
@@ -310,6 +332,7 @@ function Show-SetClientTypesDialog {
     $form.CancelButton = $btnCancel
     if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     $result = @{}
+    $rmitPlusSettingsToSave = @{}
     $idx = 0
     foreach ($c in $CompaniesToProcess) {
         $val = $false
@@ -318,8 +341,35 @@ function Show-SetClientTypesDialog {
         }
         $key = if ($c.Company -and $c.Company.Id -ne $null) { $c.Company.Id } else { $idx }
         $result[$key] = $val
+        
+        # Store by client name for persistence (prefer ClientName, fallback to DisplayName)
+        $clientName = if ($c.ClientName) { $c.ClientName } else { ($c.Company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
+        $clientName = if ([string]::IsNullOrWhiteSpace($clientName)) { $c.Company.DisplayName } else { $clientName }
+        if (-not [string]::IsNullOrWhiteSpace($clientName)) {
+            $rmitPlusSettingsToSave[$clientName] = $val
+        }
+        
         $idx++
     }
+    
+    # Save RMIT Plus settings to shared storage if MemberberryIntegration is available
+    if (Get-Command Save-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $existingData = Get-VScanMagicClientData
+            $existingRMITPlus = if ($existingData -and $existingData.RMITPlusSettings) { $existingData.RMITPlusSettings } else { @{} }
+            $existingFolderMap = if ($existingData -and $existingData.CompanyFolderMap) { $existingData.CompanyFolderMap } else { @{} }
+            
+            # Merge new settings with existing
+            foreach ($key in $rmitPlusSettingsToSave.Keys) {
+                $existingRMITPlus[$key] = $rmitPlusSettingsToSave[$key]
+            }
+            
+            Save-VScanMagicClientData -RMITPlusSettings $existingRMITPlus -CompanyFolderMap $existingFolderMap | Out-Null
+        } catch {
+            Write-Warning "Could not save RMIT Plus settings: $($_.Exception.Message)"
+        }
+    }
+    
     return $result
 }
 
