@@ -3534,7 +3534,8 @@ function Show-CompanyFolderMappingDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(480, 485)
+    # Increase form height to accommodate Memberberry integration section
+    $settingsForm.Size = New-Object System.Drawing.Size(480, 570)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -3700,6 +3701,109 @@ function Show-SettingsDialog {
     })
     $settingsForm.Controls.Add($btnBrowseSettingsDir)
     $y += 35
+
+    # Memberberry Integration Status Section
+    if (Get-Command Get-VScanMagicStorageInfo -ErrorAction SilentlyContinue) {
+        $lblMemberberrySection = New-Object System.Windows.Forms.Label
+        $lblMemberberrySection.Text = "Memberberry Integration (Shared Storage):"
+        $lblMemberberrySection.Location = New-Object System.Drawing.Point(20, $y)
+        $lblMemberberrySection.Size = New-Object System.Drawing.Size(440, 20)
+        $lblMemberberrySection.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+        $settingsForm.Controls.Add($lblMemberberrySection)
+        $y += 25
+
+        try {
+            $storageInfo = Get-VScanMagicStorageInfo
+            $isShared = $storageInfo.IsShared
+            $dataPath = $storageInfo.DataPath
+            $configPath = $storageInfo.MemberberryConfigPath
+
+            # Storage Status
+            $lblStorageStatus = New-Object System.Windows.Forms.Label
+            $lblStorageStatus.Location = New-Object System.Drawing.Point(20, $y)
+            $lblStorageStatus.Size = New-Object System.Drawing.Size(150, 20)
+            $lblStorageStatus.Text = "Storage Type:"
+            $lblStorageStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $settingsForm.Controls.Add($lblStorageStatus)
+
+            $lblStorageStatusValue = New-Object System.Windows.Forms.Label
+            $lblStorageStatusValue.Location = New-Object System.Drawing.Point(180, $y)
+            $lblStorageStatusValue.Size = New-Object System.Drawing.Size(280, 20)
+            if ($isShared) {
+                $lblStorageStatusValue.Text = "Shared Storage (Memberberry)"
+                $lblStorageStatusValue.ForeColor = [System.Drawing.Color]::Green
+            } else {
+                $lblStorageStatusValue.Text = "Local Storage"
+                $lblStorageStatusValue.ForeColor = [System.Drawing.Color]::Gray
+            }
+            $settingsForm.Controls.Add($lblStorageStatusValue)
+            $y += 25
+
+            # Data Path
+            $lblDataPathLabel = New-Object System.Windows.Forms.Label
+            $lblDataPathLabel.Location = New-Object System.Drawing.Point(20, $y)
+            $lblDataPathLabel.Size = New-Object System.Drawing.Size(150, 20)
+            $lblDataPathLabel.Text = "Data Path:"
+            $lblDataPathLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $settingsForm.Controls.Add($lblDataPathLabel)
+
+            $txtDataPathDisplay = New-Object System.Windows.Forms.TextBox
+            $txtDataPathDisplay.Location = New-Object System.Drawing.Point(180, $y)
+            $txtDataPathDisplay.Size = New-Object System.Drawing.Size(280, 20)
+            $txtDataPathDisplay.Text = $dataPath
+            $txtDataPathDisplay.ReadOnly = $true
+            $txtDataPathDisplay.BackColor = [System.Drawing.SystemColors]::Control
+            $settingsForm.Controls.Add($txtDataPathDisplay)
+            $y += 25
+
+            # Memberberry Config Path (if found)
+            if ($configPath) {
+                $lblConfigPathLabel = New-Object System.Windows.Forms.Label
+                $lblConfigPathLabel.Location = New-Object System.Drawing.Point(20, $y)
+                $lblConfigPathLabel.Size = New-Object System.Drawing.Size(150, 20)
+                $lblConfigPathLabel.Text = "Memberberry Config:"
+                $lblConfigPathLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                $settingsForm.Controls.Add($lblConfigPathLabel)
+
+                $txtConfigPathDisplay = New-Object System.Windows.Forms.TextBox
+                $txtConfigPathDisplay.Location = New-Object System.Drawing.Point(180, $y)
+                $txtConfigPathDisplay.Size = New-Object System.Drawing.Size(280, 20)
+                $txtConfigPathDisplay.Text = $configPath
+                $txtConfigPathDisplay.ReadOnly = $true
+                $txtConfigPathDisplay.BackColor = [System.Drawing.SystemColors]::Control
+                $settingsForm.Controls.Add($txtConfigPathDisplay)
+                $y += 25
+
+                # Hint about configuring in Memberberry
+                $lblMemberberryHint = New-Object System.Windows.Forms.Label
+                $lblMemberberryHint.Location = New-Object System.Drawing.Point(180, $y)
+                $lblMemberberryHint.Size = New-Object System.Drawing.Size(280, 35)
+                $lblMemberberryHint.Text = "To change the shared storage location, edit data_path in Memberberry's Settings (Settings button in Memberberry GUI)."
+                $lblMemberberryHint.Font = New-Object System.Drawing.Font("Segoe UI", 7)
+                $lblMemberberryHint.ForeColor = [System.Drawing.Color]::Gray
+                $settingsForm.Controls.Add($lblMemberberryHint)
+                $y += 40
+            } else {
+                # No config found
+                $lblNoConfig = New-Object System.Windows.Forms.Label
+                $lblNoConfig.Location = New-Object System.Drawing.Point(180, $y)
+                $lblNoConfig.Size = New-Object System.Drawing.Size(280, 35)
+                $lblNoConfig.Text = "Memberberry config.json not found. Using local storage. Configure Memberberry to enable shared storage."
+                $lblNoConfig.Font = New-Object System.Drawing.Font("Segoe UI", 7)
+                $lblNoConfig.ForeColor = [System.Drawing.Color]::Orange
+                $settingsForm.Controls.Add($lblNoConfig)
+                $y += 40
+            }
+        } catch {
+            $lblError = New-Object System.Windows.Forms.Label
+            $lblError.Location = New-Object System.Drawing.Point(180, $y)
+            $lblError.Size = New-Object System.Drawing.Size(280, 20)
+            $lblError.Text = "Error checking Memberberry integration: $($_.Exception.Message)"
+            $lblError.ForeColor = [System.Drawing.Color]::Red
+            $settingsForm.Controls.Add($lblError)
+            $y += 25
+        }
+    }
 
     # AI API Keys
     $btnAIApiKeys = New-Object System.Windows.Forms.Button
