@@ -908,6 +908,12 @@ function Get-ConsolidatedProduct {
     # Normalize the product name for comparison
     $normalizedProduct = $ProductName.Trim()
 
+    # Consolidate Visual C++ and .NET variants early (so Top N includes more diverse items)
+    $groupKey = Get-TimeEstimateGroupKey -ProductName $normalizedProduct
+    if ($groupKey -ne $normalizedProduct) {
+        return $groupKey
+    }
+
     # Check against consolidation rules (case-insensitive)
     foreach ($consolidated in $script:Config.WindowsConsolidation.Keys) {
         $patterns = $script:Config.WindowsConsolidation[$consolidated]

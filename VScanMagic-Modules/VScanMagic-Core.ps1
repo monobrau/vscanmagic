@@ -1442,6 +1442,23 @@ $script:FirstPartyVendorPatterns = @(
     '*VMware*', '*vSphere*', '*VMware Tools*'
 )
 
+function Get-TimeEstimateGroupKey {
+    <#
+    .SYNOPSIS
+    Returns a group key for time estimate lookups. Visual C++ variants and .NET variants are grouped;
+    other products use the product name as-is.
+    #>
+    param([string]$ProductName)
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $ProductName }
+    $p = $ProductName.Trim()
+    if ($p -like "*Visual C++*" -or $p -like "*Visual C#*") { return "Microsoft Visual C++" }
+    if ($p -like "*\.NET Framework*" -or $p -match "Microsoft \.NET Framework") { return "Microsoft .NET Framework" }
+    if ($p -like "*\.NET Core*" -or $p -match "Microsoft \.NET Core") { return "Microsoft .NET Core" }
+    if ($p -like "*\.NET Runtime*" -or $p -like "*\.NET 5*" -or $p -like "*\.NET 6*" -or $p -like "*\.NET 7*" -or $p -like "*\.NET 8*" -or $p -like "*\.NET 9*" -or $p -like "*\.NET 10*") { return "Microsoft .NET Runtime" }
+    if ($p -match "Microsoft \.NET") { return "Microsoft .NET" }
+    return $p
+}
+
 function Test-IsFirstPartyVendor {
     param(
         [string]$ProductName

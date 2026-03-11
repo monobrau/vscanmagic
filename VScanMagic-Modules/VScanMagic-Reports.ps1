@@ -588,7 +588,8 @@ function New-WordReport {
             $selection.Style = "Heading 2"
             $title = "$rank. $($item.Product)"
 
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
             # Add modifier text or product-type suffix (Top N report uses full modifier for client benefit: ticket generated, approval needed)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {

@@ -808,17 +808,34 @@ function Show-TimeEstimateEntryDialog {
         $dataGridView.Columns.Add($colTicketGenerated) | Out-Null
     }
 
-    # Populate grid with top 10 data
+    # Group by Get-TimeEstimateGroupKey (Visual C++, .NET Framework, .NET Core, .NET Runtime bundled)
+    $grouped = @{}
     foreach ($item in $Top10Data) {
+        $key = Get-TimeEstimateGroupKey -ProductName $item.Product
+        if (-not $grouped.ContainsKey($key)) {
+            $grouped[$key] = @{ Product = $key; Seen = @{} }
+        }
+        if ($item.AffectedSystems) {
+            foreach ($sys in $item.AffectedSystems) {
+                $hn = if ($sys.HostName) { $sys.HostName } else { $sys.IP }
+                $ip = if ($sys.IP) { $sys.IP } else { '' }
+                $uid = "$hn|$ip"
+                if (-not $grouped[$key].Seen[$uid]) {
+                    $grouped[$key].Seen[$uid] = $true
+                }
+            }
+        }
+    }
+    $groupedList = @($grouped.Values)
+    foreach ($grp in $groupedList) {
         $row = $dataGridView.Rows.Add()
-        $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
-        $hostnameCount = if ($item.AffectedSystems) { $item.AffectedSystems.Count } else { 0 }
+        $dataGridView.Rows[$row].Cells["Product"].Value = $grp.Product
+        $hostnameCount = if ($grp.Seen) { $grp.Seen.Count } else { 0 }
         $dataGridView.Rows[$row].Cells["Hostnames"].Value = $hostnameCount
         $dataGridView.Rows[$row].Cells["TimeEstimate"].Value = ""
         $dataGridView.Rows[$row].Cells["AfterHours"].Value = $false
         if ($IsRMITPlus) {
-            # Default 3rd party status: first-party vendors (SonicWall, Fortinet, Microsoft, HP, Duo) are covered; all others are 3rd party
-            $isThirdPartyDefault = -not (Test-IsFirstPartyVendor -ProductName $item.Product)
+            $isThirdPartyDefault = -not (Test-IsFirstPartyVendor -ProductName $grp.Product)
             $dataGridView.Rows[$row].Cells["ThirdParty"].Value = $isThirdPartyDefault
             $dataGridView.Rows[$row].Cells["TicketGenerated"].Value = $false
         }
@@ -920,11 +937,21 @@ function New-TimeEstimate {
                 if (-not [string]::IsNullOrWhiteSpace($rec.Product)) { $generalRecMap[$rec.Product] = $rec }
             }
         }
-        for ($i = 0; $i -lt $Top10Data.Count; $i++) {
-            $item = $Top10Data[$i]
-            $timeEstimate = $TimeEstimates[$i]
+        $timeEstimateMap = @{}
+        if ($null -ne $TimeEstimates) {
+            foreach ($te in $TimeEstimates) {
+                if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeEstimateMap[$te.Product] = $te }
+            }
+        }
+        $rank = 1
+        foreach ($item in $Top10Data) {
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
+            if ($null -eq $timeEstimate) {
+                $timeEstimate = [PSCustomObject]@{ TimeEstimate = 0.0; AfterHours = $false; ThirdParty = $false; TicketGenerated = $false }
+            }
 
-            [void]$sb.AppendLine("$($i + 1). $($item.Product)")
+            [void]$sb.AppendLine("$rank. $($item.Product)")
             
             # Add hostnames/hosts CSV list (use hostname or IP so we include all systems; append last ping when available)
             if ($item.AffectedSystems -and $item.AffectedSystems.Count -gt 0) {
@@ -1022,6 +1049,7 @@ function New-TimeEstimate {
                 $grandTotal += $timeEstimate.TimeEstimate
             }
             [void]$sb.AppendLine()
+            $rank++
         }
 
         [void]$sb.AppendLine()
@@ -1101,7 +1129,8 @@ function New-TicketInstructions {
             $item = $TopTenData[$i]
             $num = $i + 1
 
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
             # Generate ticket subject based on product type
             $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
@@ -1243,7 +1272,8 @@ function New-TicketInstructionsHtml {
             $item = $TopTenData[$i]
             $num = $i + 1
             $sectionId = "vuln-$num"
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
             $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
             # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
@@ -1663,7 +1693,8 @@ function New-TicketNotes {
         $timeByProduct = @{}
         foreach ($te in $TimeEstimates) { if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeByProduct[$te.Product] = $te } }
         foreach ($item in $Top10Data) {
-            $timeEstimate = if ($timeByProduct.ContainsKey($item.Product)) { $timeByProduct[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeByProduct.ContainsKey($lookupKey)) { $timeByProduct[$lookupKey] } else { $null }
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $autoTicketGenerated = $timeEstimate.ThirdParty -and $timeEstimate.AfterHours
                 $isTicketGenerated = $timeEstimate.TicketGenerated -or $autoTicketGenerated

@@ -1281,14 +1281,20 @@ function Show-VScanMagicGUI {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } elseif ($skipDialogs -and $hasTop10Data) {
-                    $timeEstimates = foreach ($item in $top10) {
+                    $seenGroups = @{}
+                    $timeEstimates = @()
+                    foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
-                        [PSCustomObject]@{
-                            Product = $prod
-                            TimeEstimate = 0.0
-                            AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
-                            TicketGenerated = $false
+                        $key = Get-TimeEstimateGroupKey -ProductName $prod
+                        if (-not $seenGroups.ContainsKey($key)) {
+                            $seenGroups[$key] = $true
+                            $timeEstimates += [PSCustomObject]@{
+                                Product = $key
+                                TimeEstimate = 0.0
+                                AfterHours = $false
+                                ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $key) } else { $false }
+                                TicketGenerated = $false
+                            }
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
@@ -1561,14 +1567,20 @@ function Show-VScanMagicGUI {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } elseif ($skipDialogs -and $hasTop10Data) {
-                    $timeEstimates = foreach ($item in $top10) {
+                    $seenGroups = @{}
+                    $timeEstimates = @()
+                    foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
-                        [PSCustomObject]@{
-                            Product = $prod
-                            TimeEstimate = 0.0
-                            AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
-                            TicketGenerated = $false
+                        $key = Get-TimeEstimateGroupKey -ProductName $prod
+                        if (-not $seenGroups.ContainsKey($key)) {
+                            $seenGroups[$key] = $true
+                            $timeEstimates += [PSCustomObject]@{
+                                Product = $key
+                                TimeEstimate = 0.0
+                                AfterHours = $false
+                                ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $key) } else { $false }
+                                TicketGenerated = $false
+                            }
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
