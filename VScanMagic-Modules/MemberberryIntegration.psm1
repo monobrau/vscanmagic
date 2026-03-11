@@ -10,6 +10,8 @@ $script:DefaultLocalAppDataPath = Join-Path $env:LOCALAPPDATA "VScanMagic"
 # File names for shared storage
 $script:ClientDataFileName = "vscanmagic-clients.json"
 $script:RemediationRulesFileName = "vscanmagic-remediation-rules.json"
+$script:CoveredSoftwareFileName = "vscanmagic-covered-software.json"
+$script:GeneralRecommendationsFileName = "vscanmagic-general-recommendations.json"
 
 <#
 .SYNOPSIS
@@ -384,6 +386,224 @@ function Get-VScanMagicStorageInfo {
     }
 }
 
+<#
+.SYNOPSIS
+    Loads covered software list from shared storage
+.DESCRIPTION
+    Loads covered software patterns from the shared location specified in memberberry's config.json.
+    Returns an array of covered software objects.
+#>
+function Get-VScanMagicCoveredSoftware {
+    $dataPath = Get-VScanMagicDataPath
+    $coveredSoftwareFile = Join-Path $dataPath $script:CoveredSoftwareFileName
+    
+    if (-not (Test-Path $coveredSoftwareFile)) {
+        return @()
+    }
+    
+    try {
+        # Validate file size (max 10MB)
+        $fileSize = (Get-Item $coveredSoftwareFile).Length
+        if ($fileSize -gt 10MB) {
+            Write-Warning "Covered software file too large: $([math]::Round($fileSize / 1MB, 2)) MB. Skipping load."
+            return @()
+        }
+        
+        $json = Get-Content $coveredSoftwareFile -Raw | ConvertFrom-Json
+        if ($json -is [System.Array]) {
+            return @($json)
+        } elseif ($json -is [PSCustomObject]) {
+            if ($json.CoveredSoftware) {
+                return @($json.CoveredSoftware)
+            }
+            return @($json)
+        }
+        
+        return @()
+    } catch {
+        Write-Warning "Could not load covered software from $coveredSoftwareFile : $($_.Exception.Message)"
+        return @()
+    }
+}
+
+<#
+.SYNOPSIS
+    Saves covered software list to shared storage
+.DESCRIPTION
+    Saves covered software patterns to the shared location specified in memberberry's config.json.
+    Implements file locking to prevent concurrent write conflicts.
+.PARAMETER CoveredSoftware
+    Array of covered software objects to save
+#>
+function Save-VScanMagicCoveredSoftware {
+    param(
+        [array]$CoveredSoftware = @()
+    )
+    
+    $dataPath = Get-VScanMagicDataPath
+    $coveredSoftwareFile = Join-Path $dataPath $script:CoveredSoftwareFileName
+    
+    # Ensure directory exists
+    if (-not (Test-Path $dataPath)) {
+        try {
+            New-Item -Path $dataPath -ItemType Directory -Force | Out-Null
+        } catch {
+            Write-Error "Could not create data directory: $dataPath"
+            return $false
+        }
+    }
+    
+    # Implement simple file locking using a lock file
+    $lockFile = "$coveredSoftwareFile.lock"
+    $maxRetries = 10
+    $retryDelay = 200  # milliseconds
+    
+    for ($retry = 0; $retry -lt $maxRetries; $retry++) {
+        if (Test-Path $lockFile) {
+            Start-Sleep -Milliseconds $retryDelay
+            continue
+        }
+        
+        try {
+            # Create lock file
+            $null = New-Item -Path $lockFile -ItemType File -Force
+            
+            # Validate JSON structure before saving
+            $testJson = $CoveredSoftware | ConvertTo-Json -Depth 10
+            $null = $testJson | ConvertFrom-Json  # Validate it can be parsed back
+            
+            # Save covered software
+            $CoveredSoftware | ConvertTo-Json -Depth 10 | Set-Content $coveredSoftwareFile -Encoding UTF8
+            
+            # Remove lock file
+            Remove-Item -Path $lockFile -Force -ErrorAction SilentlyContinue
+            
+            return $true
+        } catch {
+            # Remove lock file on error
+            Remove-Item -Path $lockFile -Force -ErrorAction SilentlyContinue
+            
+            if ($retry -eq $maxRetries - 1) {
+                Write-Error "Failed to save covered software after $maxRetries retries: $($_.Exception.Message)"
+                return $false
+            }
+            
+            Start-Sleep -Milliseconds $retryDelay
+        }
+    }
+    
+    return $false
+}
+
+<#
+.SYNOPSIS
+    Loads general recommendations from shared storage
+.DESCRIPTION
+    Loads general recommendations from the shared location specified in memberberry's config.json.
+    Returns an array of recommendation objects.
+#>
+function Get-VScanMagicGeneralRecommendations {
+    $dataPath = Get-VScanMagicDataPath
+    $generalRecommendationsFile = Join-Path $dataPath $script:GeneralRecommendationsFileName
+    
+    if (-not (Test-Path $generalRecommendationsFile)) {
+        return @()
+    }
+    
+    try {
+        # Validate file size (max 10MB)
+        $fileSize = (Get-Item $generalRecommendationsFile).Length
+        if ($fileSize -gt 10MB) {
+            Write-Warning "General recommendations file too large: $([math]::Round($fileSize / 1MB, 2)) MB. Skipping load."
+            return @()
+        }
+        
+        $json = Get-Content $generalRecommendationsFile -Raw | ConvertFrom-Json
+        if ($json -is [System.Array]) {
+            return @($json)
+        } elseif ($json -is [PSCustomObject]) {
+            if ($json.GeneralRecommendations) {
+                return @($json.GeneralRecommendations)
+            }
+            return @($json)
+        }
+        
+        return @()
+    } catch {
+        Write-Warning "Could not load general recommendations from $generalRecommendationsFile : $($_.Exception.Message)"
+        return @()
+    }
+}
+
+<#
+.SYNOPSIS
+    Saves general recommendations to shared storage
+.DESCRIPTION
+    Saves general recommendations to the shared location specified in memberberry's config.json.
+    Implements file locking to prevent concurrent write conflicts.
+.PARAMETER GeneralRecommendations
+    Array of general recommendation objects to save
+#>
+function Save-VScanMagicGeneralRecommendations {
+    param(
+        [array]$GeneralRecommendations = @()
+    )
+    
+    $dataPath = Get-VScanMagicDataPath
+    $generalRecommendationsFile = Join-Path $dataPath $script:GeneralRecommendationsFileName
+    
+    # Ensure directory exists
+    if (-not (Test-Path $dataPath)) {
+        try {
+            New-Item -Path $dataPath -ItemType Directory -Force | Out-Null
+        } catch {
+            Write-Error "Could not create data directory: $dataPath"
+            return $false
+        }
+    }
+    
+    # Implement simple file locking using a lock file
+    $lockFile = "$generalRecommendationsFile.lock"
+    $maxRetries = 10
+    $retryDelay = 200  # milliseconds
+    
+    for ($retry = 0; $retry -lt $maxRetries; $retry++) {
+        if (Test-Path $lockFile) {
+            Start-Sleep -Milliseconds $retryDelay
+            continue
+        }
+        
+        try {
+            # Create lock file
+            $null = New-Item -Path $lockFile -ItemType File -Force
+            
+            # Validate JSON structure before saving
+            $testJson = $GeneralRecommendations | ConvertTo-Json -Depth 10
+            $null = $testJson | ConvertFrom-Json  # Validate it can be parsed back
+            
+            # Save general recommendations
+            $GeneralRecommendations | ConvertTo-Json -Depth 10 | Set-Content $generalRecommendationsFile -Encoding UTF8
+            
+            # Remove lock file
+            Remove-Item -Path $lockFile -Force -ErrorAction SilentlyContinue
+            
+            return $true
+        } catch {
+            # Remove lock file on error
+            Remove-Item -Path $lockFile -Force -ErrorAction SilentlyContinue
+            
+            if ($retry -eq $maxRetries - 1) {
+                Write-Error "Failed to save general recommendations after $maxRetries retries: $($_.Exception.Message)"
+                return $false
+            }
+            
+            Start-Sleep -Milliseconds $retryDelay
+        }
+    }
+    
+    return $false
+}
+
 # Export module members
 Export-ModuleMember -Function @(
     'Get-MemberberryConfig',
@@ -392,5 +612,9 @@ Export-ModuleMember -Function @(
     'Save-VScanMagicClientData',
     'Get-VScanMagicRemediationRules',
     'Save-VScanMagicRemediationRules',
+    'Get-VScanMagicCoveredSoftware',
+    'Save-VScanMagicCoveredSoftware',
+    'Get-VScanMagicGeneralRecommendations',
+    'Save-VScanMagicGeneralRecommendations',
     'Get-VScanMagicStorageInfo'
 )

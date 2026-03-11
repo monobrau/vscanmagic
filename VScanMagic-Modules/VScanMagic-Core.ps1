@@ -1107,6 +1107,29 @@ function Get-DefaultCoveredSoftware {
 }
 
 function Load-CoveredSoftware {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicCoveredSoftware -ErrorAction SilentlyContinue) {
+        try {
+            $sharedCoveredSoftware = Get-VScanMagicCoveredSoftware
+            if ($sharedCoveredSoftware -and $sharedCoveredSoftware.Count -gt 0) {
+                $script:CoveredSoftware = @()
+                foreach ($item in $sharedCoveredSoftware) {
+                    $script:CoveredSoftware += @{
+                        Pattern = $item.Pattern
+                        IsPattern = $item.IsPattern
+                        Override = if ($null -ne $item.Override) { $item.Override } else { $false }
+                    }
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Covered software list loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load covered software from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if (-not [string]::IsNullOrEmpty($script:CoveredSoftwarePath) -and (Test-Path $script:CoveredSoftwarePath)) {
         try {
             $json = Get-Content $script:CoveredSoftwarePath -Raw | ConvertFrom-Json
@@ -1118,7 +1141,7 @@ function Load-CoveredSoftware {
                     Override = if ($null -ne $item.Override) { $item.Override } else { $false }
                 }
             }
-            Write-Host "Covered software list loaded from $script:CoveredSoftwarePath"
+            Write-Host "Covered software list loaded from local storage: $script:CoveredSoftwarePath"
         } catch {
             Write-Warning "Could not load covered software list: $($_.Exception.Message). Using defaults."
             $script:CoveredSoftware = Get-DefaultCoveredSoftware
@@ -1132,6 +1155,20 @@ function Load-CoveredSoftware {
 }
 
 function Save-CoveredSoftware {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicCoveredSoftware -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicCoveredSoftware -CoveredSoftware $script:CoveredSoftware) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Covered software list saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save covered software to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CoveredSoftwarePath)) {
         Write-Warning "Covered software path is not set. Cannot save list."
         return $false
@@ -1144,7 +1181,7 @@ function Save-CoveredSoftware {
         }
 
         $script:CoveredSoftware | ConvertTo-Json -Depth 10 | Set-Content $script:CoveredSoftwarePath -Encoding UTF8
-        Write-Host "Covered software list saved to $script:CoveredSoftwarePath"
+        Write-Host "Covered software list saved to local storage: $script:CoveredSoftwarePath"
         return $true
     } catch {
         Write-Warning "Could not save covered software list: $($_.Exception.Message)"
@@ -1155,6 +1192,28 @@ function Save-CoveredSoftware {
 # --- General Recommendations Persistence ---
 
 function Load-GeneralRecommendations {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicGeneralRecommendations -ErrorAction SilentlyContinue) {
+        try {
+            $sharedRecommendations = Get-VScanMagicGeneralRecommendations
+            if ($sharedRecommendations -and $sharedRecommendations.Count -gt 0) {
+                $script:GeneralRecommendations = @()
+                foreach ($rec in $sharedRecommendations) {
+                    $script:GeneralRecommendations += @{
+                        Product = $rec.Product
+                        Recommendations = $rec.Recommendations
+                    }
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "General recommendations loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load general recommendations from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if (-not [string]::IsNullOrEmpty($script:GeneralRecommendationsPath) -and (Test-Path $script:GeneralRecommendationsPath)) {
         try {
             $json = Get-Content $script:GeneralRecommendationsPath -Raw | ConvertFrom-Json
@@ -1165,7 +1224,7 @@ function Load-GeneralRecommendations {
                     Recommendations = $rec.Recommendations
                 }
             }
-            Write-Host "General recommendations loaded from $script:GeneralRecommendationsPath"
+            Write-Host "General recommendations loaded from local storage: $script:GeneralRecommendationsPath"
         } catch {
             Write-Warning "Could not load general recommendations: $($_.Exception.Message). Using empty list."
             $script:GeneralRecommendations = @()
@@ -1178,6 +1237,20 @@ function Load-GeneralRecommendations {
 }
 
 function Save-GeneralRecommendations {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicGeneralRecommendations -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicGeneralRecommendations -GeneralRecommendations $script:GeneralRecommendations) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "General recommendations saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save general recommendations to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:GeneralRecommendationsPath)) {
         Write-Warning "General recommendations path is not set. Cannot save recommendations."
         return $false
@@ -1190,7 +1263,7 @@ function Save-GeneralRecommendations {
         }
 
         $script:GeneralRecommendations | ConvertTo-Json -Depth 10 | Set-Content $script:GeneralRecommendationsPath -Encoding UTF8
-        Write-Host "General recommendations saved to $script:GeneralRecommendationsPath"
+        Write-Host "General recommendations saved to local storage: $script:GeneralRecommendationsPath"
         return $true
     } catch {
         Write-Warning "Could not save general recommendations: $($_.Exception.Message)"

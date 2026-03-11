@@ -32,6 +32,8 @@ Import-Module $modulePath -Force
 $localAppDataPath = Join-Path $env:LOCALAPPDATA "VScanMagic"
 $localRemediationRulesPath = Join-Path $localAppDataPath "VScanMagic_RemediationRules.json"
 $localCompanyFolderMapPath = Join-Path $localAppDataPath "VScanMagic_CompanyFolderMap.json"
+$localCoveredSoftwarePath = Join-Path $localAppDataPath "VScanMagic_CoveredSoftware.json"
+$localGeneralRecommendationsPath = Join-Path $localAppDataPath "VScanMagic_GeneralRecommendations.json"
 
 # Get shared storage path
 if (-not [string]::IsNullOrWhiteSpace($MemberberryConfigPath)) {
@@ -89,7 +91,7 @@ $migrationSuccess = $true
 $filesMigrated = 0
 
 # Migrate Remediation Rules
-Write-Host "`n[1/2] Migrating Remediation Rules..." -ForegroundColor Cyan
+Write-Host "`n[1/4] Migrating Remediation Rules..." -ForegroundColor Cyan
 if (Test-Path $localRemediationRulesPath) {
     try {
         $rules = Get-Content $localRemediationRulesPath -Raw | ConvertFrom-Json
@@ -122,7 +124,7 @@ if (Test-Path $localRemediationRulesPath) {
 }
 
 # Migrate Company Folder Map
-Write-Host "`n[2/2] Migrating Company Folder Mappings..." -ForegroundColor Cyan
+Write-Host "`n[2/4] Migrating Company Folder Mappings..." -ForegroundColor Cyan
 if (Test-Path $localCompanyFolderMapPath) {
     try {
         $companyFolderMap = Get-Content $localCompanyFolderMapPath -Raw | ConvertFrom-Json
@@ -163,6 +165,72 @@ if (Test-Path $localCompanyFolderMapPath) {
     }
 } else {
     Write-Host "  - No local company folder map file found (skipping)" -ForegroundColor Gray
+}
+
+# Migrate Covered Software
+Write-Host "`n[3/4] Migrating Covered Software List..." -ForegroundColor Cyan
+if (Test-Path $localCoveredSoftwarePath) {
+    try {
+        $coveredSoftware = Get-Content $localCoveredSoftwarePath -Raw | ConvertFrom-Json
+        if ($coveredSoftware -and $coveredSoftware.Count -gt 0) {
+            if (Save-VScanMagicCoveredSoftware -CoveredSoftware $coveredSoftware) {
+                Write-Host "  ✓ Covered software list migrated successfully" -ForegroundColor Green
+                $filesMigrated++
+                
+                if ($BackupOriginal) {
+                    Copy-Item -Path $localCoveredSoftwarePath -Destination (Join-Path $backupPath "VScanMagic_CoveredSoftware.json") -Force
+                }
+                
+                if ($DeleteOriginal) {
+                    Remove-Item -Path $localCoveredSoftwarePath -Force
+                    Write-Host "  ✓ Original file deleted" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Warning "  ✗ Failed to save covered software to shared storage"
+                $migrationSuccess = $false
+            }
+        } else {
+            Write-Host "  - No covered software found in local storage" -ForegroundColor Gray
+        }
+    } catch {
+        Write-Warning "  ✗ Error migrating covered software: $($_.Exception.Message)"
+        $migrationSuccess = $false
+    }
+} else {
+    Write-Host "  - No local covered software file found (skipping)" -ForegroundColor Gray
+}
+
+# Migrate General Recommendations
+Write-Host "`n[4/4] Migrating General Recommendations..." -ForegroundColor Cyan
+if (Test-Path $localGeneralRecommendationsPath) {
+    try {
+        $generalRecommendations = Get-Content $localGeneralRecommendationsPath -Raw | ConvertFrom-Json
+        if ($generalRecommendations -and $generalRecommendations.Count -gt 0) {
+            if (Save-VScanMagicGeneralRecommendations -GeneralRecommendations $generalRecommendations) {
+                Write-Host "  ✓ General recommendations migrated successfully" -ForegroundColor Green
+                $filesMigrated++
+                
+                if ($BackupOriginal) {
+                    Copy-Item -Path $localGeneralRecommendationsPath -Destination (Join-Path $backupPath "VScanMagic_GeneralRecommendations.json") -Force
+                }
+                
+                if ($DeleteOriginal) {
+                    Remove-Item -Path $localGeneralRecommendationsPath -Force
+                    Write-Host "  ✓ Original file deleted" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Warning "  ✗ Failed to save general recommendations to shared storage"
+                $migrationSuccess = $false
+            }
+        } else {
+            Write-Host "  - No general recommendations found in local storage" -ForegroundColor Gray
+        }
+    } catch {
+        Write-Warning "  ✗ Error migrating general recommendations: $($_.Exception.Message)"
+        $migrationSuccess = $false
+    }
+} else {
+    Write-Host "  - No local general recommendations file found (skipping)" -ForegroundColor Gray
 }
 
 # Summary
