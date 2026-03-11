@@ -20,7 +20,7 @@ param(
 )
 
 # Import MemberberryIntegration module
-$modulePath = Join-Path $PSScriptRoot "Modules\MemberberryIntegration.psm1"
+$modulePath = Join-Path $PSScriptRoot "VScanMagic-Modules\MemberberryIntegration.psm1"
 if (-not (Test-Path $modulePath)) {
     Write-Error "MemberberryIntegration module not found at: $modulePath"
     exit 1
