@@ -74,8 +74,8 @@ $script:Config = @{
     MinNetworkVulnsInTopN = 2
 
     # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
-    AIBatchChunkSize = 4
-    AIBatchChunkDelaySeconds = 8
+    AIBatchChunkSize = 2
+    AIBatchChunkDelaySeconds = 20
 }
 
 # --- User Settings Persistence ---
@@ -1880,6 +1880,7 @@ function Invoke-AIImproveRemediationTextBatch {
         return @(Invoke-AIImproveRemediationText -Text $i.Text -ProductName $i.ProductName -CveIdList $i.CveIdList -HostContext $hostCtx)
     }
 
+    $script:AIBatch429Count = 0
     $delim = "###RESULT###"
     $chunkSize = $script:Config.AIBatchChunkSize
     $chunkDelay = $script:Config.AIBatchChunkDelaySeconds
@@ -1965,20 +1966,44 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
         $chunkMaxTokens = [Math]::Min(8192, 1024 + ($chunk.Count * 400))
 
         $raw = $null
-        $claudeRetries = 2
+        $claudeRetries = 1
+        $script:AIBatch429Count = if ($null -eq $script:AIBatch429Count) { 0 } else { $script:AIBatch429Count }
+        if ($script:AIBatch429Count -ge 3) {
+            Write-Log "AI batch: too many 429s ($($script:AIBatch429Count)). Skipping remaining chunks. Using original text. Try again later or use Improve Selected for fewer items." -Level Warning
+            try {
+                [System.Windows.Forms.MessageBox]::Show("Rate limit exceeded (429). $($allResults.Count) items improved; remaining use original text.`n`nTry again later or use Improve Selected for fewer items.", "AI Rate Limit", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            } catch { }
+            $allResults += @($chunk | ForEach-Object { $_.Text })
+            $remaining = $Items.Count - $allResults.Count
+            for ($r = 0; $r -lt $remaining; $r++) {
+                $idx = $allResults.Count + $r
+                if ($idx -lt $Items.Count) { $allResults += $Items[$idx].Text }
+            }
+            return $allResults
+        }
         foreach ($provider in @('ChatGPT','Claude','Copilot')) {
             $key = if ($provider -eq 'ChatGPT') { $script:UserSettings.AIApiKeyChatGPT } elseif ($provider -eq 'Claude') { $script:UserSettings.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyCopilot }
             if ([string]::IsNullOrWhiteSpace($key)) { continue }
             for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
                 try {
                     $raw = & $tryApiChunk $key $provider $chunkPrompt $chunkMaxTokens
+                    $script:AIBatch429Count = 0
                     break
                 } catch {
                     $is429 = $_.Exception.Message -match '429|Too Many Requests'
-                    if ($is429 -and $attempt -lt $claudeRetries) {
-                        $waitSec = 15 + ($attempt * 10)
-                        Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry..." -Level Warning
-                        Start-Sleep -Seconds $waitSec
+                    if ($is429) {
+                        $script:AIBatch429Count++
+                        if ($attempt -lt $claudeRetries) {
+                            $waitSec = 30
+                            Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
+                            for ($w = 0; $w -lt $waitSec; $w++) {
+                                Start-Sleep -Seconds 1
+                                try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+                            }
+                        } else {
+                            $raw = $null
+                            break
+                        }
                     } else {
                         $raw = $null
                         break
@@ -2006,7 +2031,10 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
         }
 
         if ($c -lt $chunks.Count - 1 -and $chunkDelay -gt 0) {
-            Start-Sleep -Seconds $chunkDelay
+            for ($d = 0; $d -lt $chunkDelay; $d++) {
+                Start-Sleep -Seconds 1
+                try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+            }
         }
     }
     return $allResults
