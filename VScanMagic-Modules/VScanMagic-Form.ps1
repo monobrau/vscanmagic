@@ -75,7 +75,7 @@ function Show-VScanMagicGUI {
     $btnOutputOptions.Location = New-Object System.Drawing.Point(20, 52)
     $btnOutputOptions.Size = New-Object System.Drawing.Size(110, 24)
     $btnOutputOptions.Text = "Output Options"
-    $btnOutputOptions.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnOutputOptions.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnOutputOptions.ForeColor = [System.Drawing.Color]::White
     $btnOutputOptions.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnOutputOptions.FlatAppearance.BorderSize = 0
@@ -86,7 +86,7 @@ function Show-VScanMagicGUI {
     $btnTemplates.Location = New-Object System.Drawing.Point(330, 52)
     $btnTemplates.Size = New-Object System.Drawing.Size(90, 24)
     $btnTemplates.Text = "Templates"
-    $btnTemplates.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnTemplates.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnTemplates.ForeColor = [System.Drawing.Color]::White
     $btnTemplates.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTemplates.FlatAppearance.BorderSize = 0
@@ -126,7 +126,7 @@ function Show-VScanMagicGUI {
     $btnApiSettings.Location = New-Object System.Drawing.Point(20, $dlgY)
     $btnApiSettings.Size = New-Object System.Drawing.Size(100, 24)
     $btnApiSettings.Text = "API Settings"
-    $btnApiSettings.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnApiSettings.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
     $btnApiSettings.ForeColor = [System.Drawing.Color]::White
     $btnApiSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnApiSettings.FlatAppearance.BorderSize = 0
@@ -136,7 +136,7 @@ function Show-VScanMagicGUI {
     $btnApiHelp.Location = New-Object System.Drawing.Point(128, $dlgY)
     $btnApiHelp.Size = New-Object System.Drawing.Size(80, 24)
     $btnApiHelp.Text = "API Help"
-    $btnApiHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnApiHelp.BackColor = [System.Drawing.Color]::FromArgb(255, 167, 38)
     $btnApiHelp.ForeColor = [System.Drawing.Color]::White
     $btnApiHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnApiHelp.FlatAppearance.BorderSize = 0
@@ -202,7 +202,7 @@ function Show-VScanMagicGUI {
     $btnCompanyReview.Location = New-Object System.Drawing.Point(348, ($dlgY + 52))
     $btnCompanyReview.Size = New-Object System.Drawing.Size(124, 22)
     $btnCompanyReview.Text = "Company Review"
-    $btnCompanyReview.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnCompanyReview.BackColor = [System.Drawing.Color]::FromArgb(103, 58, 183)
     $btnCompanyReview.ForeColor = [System.Drawing.Color]::White
     $btnCompanyReview.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCompanyReview.FlatAppearance.BorderSize = 0
@@ -288,7 +288,13 @@ function Show-VScanMagicGUI {
     $chkExternalVulnerabilities.Text = "External Scan (XLSX)"
     $chkExternalVulnerabilities.Checked = $true
     $groupBoxDownload.Controls.Add($chkExternalVulnerabilities)
-    $dlgY += 26
+    $chkNetworkVulnerabilities = New-Object System.Windows.Forms.CheckBox
+    $chkNetworkVulnerabilities.Location = New-Object System.Drawing.Point(350, $dlgY)
+    $chkNetworkVulnerabilities.Size = New-Object System.Drawing.Size(310, 18)
+    $chkNetworkVulnerabilities.Text = "Network Vulnerabilities (XLSX)"
+    $chkNetworkVulnerabilities.Checked = $true
+    $groupBoxDownload.Controls.Add($chkNetworkVulnerabilities)
+    $dlgY += 20
 
     $lblDownloadProgress = New-Object System.Windows.Forms.Label
     $lblDownloadProgress.Location = New-Object System.Drawing.Point(20, $dlgY)
@@ -296,13 +302,16 @@ function Show-VScanMagicGUI {
     $lblDownloadProgress.Text = ""
     $lblDownloadProgress.ForeColor = [System.Drawing.Color]::Blue
     $groupBoxDownload.Controls.Add($lblDownloadProgress)
-    $dlgY += 28
+    $dlgY += 20
 
     $btnDownloadStandardOnly = New-Object System.Windows.Forms.Button
     $btnDownloadStandardOnly.Location = New-Object System.Drawing.Point(20, $dlgY)
     $btnDownloadStandardOnly.Size = New-Object System.Drawing.Size(240, 28)
     $btnDownloadStandardOnly.Text = "Download Standard Reports Only"
+    $btnDownloadStandardOnly.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadStandardOnly.ForeColor = [System.Drawing.Color]::White
     $btnDownloadStandardOnly.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadStandardOnly.FlatAppearance.BorderSize = 0
     $btnDownloadStandardOnly.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -340,6 +349,7 @@ function Show-VScanMagicGUI {
             @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" }
             @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" }
             @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" }
+            @{ Type = "network-vulnerabilities"; Name = "Network Vulnerabilities"; Ext = "xlsx" }
             @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" }
             @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" }
         )
@@ -402,7 +412,10 @@ function Show-VScanMagicGUI {
     $btnDownloadCustom.Location = New-Object System.Drawing.Point(270, $dlgY)
     $btnDownloadCustom.Size = New-Object System.Drawing.Size(150, 28)
     $btnDownloadCustom.Text = "Download Custom..."
+    $btnDownloadCustom.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadCustom.ForeColor = [System.Drawing.Color]::White
     $btnDownloadCustom.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadCustom.FlatAppearance.BorderSize = 0
     $btnDownloadCustom.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -494,7 +507,10 @@ function Show-VScanMagicGUI {
     $btnDownloadGlobal.Location = New-Object System.Drawing.Point(430, $dlgY)
     $btnDownloadGlobal.Size = New-Object System.Drawing.Size(140, 28)
     $btnDownloadGlobal.Text = "Download Global..."
+    $btnDownloadGlobal.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
+    $btnDownloadGlobal.ForeColor = [System.Drawing.Color]::White
     $btnDownloadGlobal.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDownloadGlobal.FlatAppearance.BorderSize = 0
     $btnDownloadGlobal.Add_Click({
         $creds = Load-ConnectSecureCredentials
         if (-not $creds -or [string]::IsNullOrWhiteSpace($creds.BaseUrl) -or [string]::IsNullOrWhiteSpace($creds.ClientId) -or [string]::IsNullOrWhiteSpace($creds.ClientSecret)) {
@@ -918,6 +934,10 @@ function Show-VScanMagicGUI {
     $buttonSettings.Location = New-Object System.Drawing.Point(380, 0)
     $buttonSettings.Size = New-Object System.Drawing.Size(100, 30)
     $buttonSettings.Text = "Settings"
+    $buttonSettings.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $buttonSettings.ForeColor = [System.Drawing.Color]::White
+    $buttonSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $buttonSettings.FlatAppearance.BorderSize = 0
     $buttonSettings.Add_Click({
         Show-SettingsDialog
         if ($script:UpdateOutputDirUI) { & $script:UpdateOutputDirUI }
@@ -928,7 +948,7 @@ function Show-VScanMagicGUI {
     $buttonHelp.Location = New-Object System.Drawing.Point(490, 0)
     $buttonHelp.Size = New-Object System.Drawing.Size(80, 30)
     $buttonHelp.Text = "Help"
-    $buttonHelp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $buttonHelp.BackColor = [System.Drawing.Color]::FromArgb(255, 167, 38)
     $buttonHelp.ForeColor = [System.Drawing.Color]::White
     $buttonHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $buttonHelp.FlatAppearance.BorderSize = 0
@@ -996,9 +1016,10 @@ function Show-VScanMagicGUI {
             if ($chkAllVulnerabilities.Checked) { $reports += @{ Type = "all-vulnerabilities"; Name = "All Vulnerabilities Report"; Ext = "xlsx" } }
             if ($chkSuppressedVulnerabilities.Checked) { $reports += @{ Type = "suppressed-vulnerabilities"; Name = "Suppressed Vulnerabilities"; Ext = "xlsx" } }
             if ($chkExternalVulnerabilities.Checked) { $reports += @{ Type = "external-vulnerabilities"; Name = "External Scan"; Ext = "xlsx" } }
+            if ($chkNetworkVulnerabilities.Checked) { $reports += @{ Type = "network-vulnerabilities"; Name = "Network Vulnerabilities"; Ext = "xlsx" } }
             if ($chkExecutiveSummary.Checked) { $reports += @{ Type = "executive-summary"; Name = "Executive Summary Report"; Ext = "docx" } }
             if ($chkPendingEPSS.Checked) { $reports += @{ Type = "pending-epss"; Name = "Pending Remediation EPSS Score Reports"; Ext = "xlsx" } }
-            $topCount = if ($script:FilterTopN -eq "All") { 500 } else { [int]$script:FilterTopN }
+            $topCount = if ($script:FilterTopN -eq "All") { 0 } else { [int]$script:FilterTopN }
 
             if (-not $hasFile) {
                 if ([string]::IsNullOrWhiteSpace($script:UserSettings.ReportsBasePath) -and -not (Test-Path $downloadFolder)) {
@@ -1150,6 +1171,7 @@ function Show-VScanMagicGUI {
                 # Allow previous Excel instance (from Get-VulnerabilityData) to fully release before starting report generation
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
+                [System.Windows.Forms.Application]::DoEvents()
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
@@ -1220,19 +1242,59 @@ function Show-VScanMagicGUI {
             
             $script:CurrentTop10Data = $top10
 
+            # Enrich AffectedSystems with last ping time from ConnectSecure when enabled
+            if ($companyId -gt 0 -and $script:UserSettings.HostnameReviewAutoLookupLastPing -and $top10 -and $top10.Count -gt 0) {
+                $creds = Load-ConnectSecureCredentials
+                if ($creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+                    $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+                    if ($connected) {
+                        Update-Progress -Status "Looking up last ping time from ConnectSecure..." -Show $true
+                        $allHostnames = @()
+                        $allIPs = @()
+                        foreach ($item in $top10) {
+                            if (-not $item.AffectedSystems) { continue }
+                            foreach ($sys in $item.AffectedSystems) {
+                                if (-not [string]::IsNullOrWhiteSpace($sys.HostName)) { $allHostnames += $sys.HostName }
+                                if (-not [string]::IsNullOrWhiteSpace($sys.IP)) { $allIPs += $sys.IP }
+                            }
+                        }
+                        $allHostnames = $allHostnames | Select-Object -Unique
+                        $allIPs = $allIPs | Select-Object -Unique
+                        if ($allHostnames.Count -gt 0 -or $allIPs.Count -gt 0) {
+                            $pingMap = Get-ConnectSecureLastPingByHostname -CompanyId $companyId -Hostnames $allHostnames -IPs $allIPs
+                            foreach ($item in $top10) {
+                                if (-not $item.AffectedSystems) { continue }
+                                foreach ($sys in $item.AffectedSystems) {
+                                    $pingStr = ""
+                                    if (-not [string]::IsNullOrWhiteSpace($sys.HostName) -and $pingMap.ContainsKey($sys.HostName.Trim())) { $pingStr = $pingMap[$sys.HostName.Trim()] }
+                                    if ([string]::IsNullOrWhiteSpace($pingStr) -and -not [string]::IsNullOrWhiteSpace($sys.IP) -and $pingMap.ContainsKey($sys.IP.Trim())) { $pingStr = $pingMap[$sys.IP.Trim()] }
+                                    if (-not [string]::IsNullOrWhiteSpace($pingStr)) { $sys | Add-Member -NotePropertyName 'LastPingTime' -NotePropertyValue $pingStr -Force }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs -and $hasTop10Data) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } elseif ($skipDialogs -and $hasTop10Data) {
-                    $timeEstimates = foreach ($item in $top10) {
+                    $seenGroups = @{}
+                    $timeEstimates = @()
+                    foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
-                        [PSCustomObject]@{
-                            Product = $prod
-                            TimeEstimate = 0.0
-                            AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
-                            TicketGenerated = $false
+                        $key = Get-TimeEstimateGroupKey -ProductName $prod
+                        if (-not $seenGroups.ContainsKey($key)) {
+                            $seenGroups[$key] = $true
+                            $timeEstimates += [PSCustomObject]@{
+                                Product = $key
+                                TimeEstimate = 0.0
+                                AfterHours = $false
+                                ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $key) } else { $false }
+                                TicketGenerated = $false
+                            }
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
@@ -1289,13 +1351,15 @@ function Show-VScanMagicGUI {
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
                 $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
+                $reportsPathPartial = Get-ReportsPathPartial -FullOutputPath $outputDir -CompanyName $companyName
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
                     -IncludeEmailTemplate $script:OutputEmailTemplate `
                     -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
                     -FilterTopN $script:FilterTopN `
-                    -CompanyName $companyName
+                    -CompanyName $companyName `
+                    -ReportsPathPartial $reportsPathPartial
 
                 $script:TicketInstructionsPath = $reportHtmlPath
                 $script:TicketInstructionsHtmlPath = $reportHtmlPath
@@ -1331,11 +1395,6 @@ function Show-VScanMagicGUI {
             }
 
             Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputs)
-
-            if (-not $skipDialogsForBulk) {
-                [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
-                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            }
 
                 } catch {
                         Update-Progress -Status "Error" -Show $false
@@ -1400,6 +1459,7 @@ function Show-VScanMagicGUI {
 
                 [System.GC]::Collect()
                 [System.GC]::WaitForPendingFinalizers()
+                [System.Windows.Forms.Application]::DoEvents()
 
                 Invoke-OperationWithRetry -OperationName "Excel Report Generation" -Operation {
                     New-ExcelReport -InputPath $inputPath -OutputPath $excelOutputPath
@@ -1468,19 +1528,59 @@ function Show-VScanMagicGUI {
             
             $script:CurrentTop10Data = $top10
 
+            # Enrich AffectedSystems with last ping time from ConnectSecure when enabled
+            if ($companyId -gt 0 -and $script:UserSettings.HostnameReviewAutoLookupLastPing -and $top10 -and $top10.Count -gt 0) {
+                $creds = Load-ConnectSecureCredentials
+                if ($creds -and -not [string]::IsNullOrWhiteSpace($creds.BaseUrl)) {
+                    $connected = Connect-ConnectSecureAPI -BaseUrl $creds.BaseUrl -TenantName $creds.TenantName -ClientId $creds.ClientId -ClientSecret $creds.ClientSecret
+                    if ($connected) {
+                        Update-Progress -Status "Looking up last ping time from ConnectSecure..." -Show $true
+                        $allHostnames = @()
+                        $allIPs = @()
+                        foreach ($item in $top10) {
+                            if (-not $item.AffectedSystems) { continue }
+                            foreach ($sys in $item.AffectedSystems) {
+                                if (-not [string]::IsNullOrWhiteSpace($sys.HostName)) { $allHostnames += $sys.HostName }
+                                if (-not [string]::IsNullOrWhiteSpace($sys.IP)) { $allIPs += $sys.IP }
+                            }
+                        }
+                        $allHostnames = $allHostnames | Select-Object -Unique
+                        $allIPs = $allIPs | Select-Object -Unique
+                        if ($allHostnames.Count -gt 0 -or $allIPs.Count -gt 0) {
+                            $pingMap = Get-ConnectSecureLastPingByHostname -CompanyId $companyId -Hostnames $allHostnames -IPs $allIPs
+                            foreach ($item in $top10) {
+                                if (-not $item.AffectedSystems) { continue }
+                                foreach ($sys in $item.AffectedSystems) {
+                                    $pingStr = ""
+                                    if (-not [string]::IsNullOrWhiteSpace($sys.HostName) -and $pingMap.ContainsKey($sys.HostName.Trim())) { $pingStr = $pingMap[$sys.HostName.Trim()] }
+                                    if ([string]::IsNullOrWhiteSpace($pingStr) -and -not [string]::IsNullOrWhiteSpace($sys.IP) -and $pingMap.ContainsKey($sys.IP.Trim())) { $pingStr = $pingMap[$sys.IP.Trim()] }
+                                    if (-not [string]::IsNullOrWhiteSpace($pingStr)) { $sys | Add-Member -NotePropertyName 'LastPingTime' -NotePropertyValue $pingStr -Force }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if ($script:OutputTimeEstimate) {
                 if (-not $skipDialogs -and $hasTop10Data) {
                     Update-Progress -Status "Generating Time Estimate..." -Show $true
                     $timeEstimates = Show-TimeEstimateEntryDialog -Top10Data $top10 -IsRMITPlus $isRMITPlus
                 } elseif ($skipDialogs -and $hasTop10Data) {
-                    $timeEstimates = foreach ($item in $top10) {
+                    $seenGroups = @{}
+                    $timeEstimates = @()
+                    foreach ($item in $top10) {
                         $prod = if ($null -ne $item -and $null -ne $item.Product) { [string]$item.Product } else { '' }
-                        [PSCustomObject]@{
-                            Product = $prod
-                            TimeEstimate = 0.0
-                            AfterHours = $false
-                            ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $prod) } else { $false }
-                            TicketGenerated = $false
+                        $key = Get-TimeEstimateGroupKey -ProductName $prod
+                        if (-not $seenGroups.ContainsKey($key)) {
+                            $seenGroups[$key] = $true
+                            $timeEstimates += [PSCustomObject]@{
+                                Product = $key
+                                TimeEstimate = 0.0
+                                AfterHours = $false
+                                ThirdParty = if ($isRMITPlus) { -not (Test-IsFirstPartyVendor -ProductName $key) } else { $false }
+                                TicketGenerated = $false
+                            }
                         }
                     }
                     [System.Windows.Forms.Application]::DoEvents()
@@ -1532,13 +1632,15 @@ function Show-VScanMagicGUI {
             if ($script:OutputTicketInstructions -or $script:OutputEmailTemplate -or $script:OutputTimeEstimate) {
                 Update-Progress -Status "Generating Report (HTML)..." -Show $true
                 $reportHtmlPath = Get-SafeReportOutputPath -TargetDir $textOutputDir -CompanyName $companyName -ReportSuffix " Report_$reportTimestamp" -Ext "html"
+                $reportsPathPartial = Get-ReportsPathPartial -FullOutputPath $outputDir -CompanyName $companyName
 
                 New-CombinedReportHtml -OutputPath $reportHtmlPath -TopTenData $top10 -TimeEstimates $timeEstimates -IsRMITPlus $isRMITPlus -GeneralRecommendations $generalRecommendations `
                     -IncludeTicketInstructions $script:OutputTicketInstructions `
                     -IncludeEmailTemplate $script:OutputEmailTemplate `
                     -IncludeTimeEstimate ($script:OutputTimeEstimate -and $null -ne $timeEstimates) `
                     -FilterTopN $script:FilterTopN `
-                    -CompanyName $companyName
+                    -CompanyName $companyName `
+                    -ReportsPathPartial $reportsPathPartial
 
                 $script:TicketInstructionsPath = $reportHtmlPath
                 $script:TicketInstructionsHtmlPath = $reportHtmlPath
@@ -1573,9 +1675,6 @@ function Show-VScanMagicGUI {
 
             Show-ProcessingSummaryDialog -ProcessedOutputs @($processedOutputsSync)
 
-            [System.Windows.Forms.MessageBox]::Show("Report generation completed successfully!", "Success",
-                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-
         } catch {
             # Hide progress bar on error
             Update-Progress -Status "Error" -Show $false
@@ -1600,6 +1699,6 @@ function Show-VScanMagicGUI {
     $panelBottomButtons.Controls.Add($buttonClose)
 
     # Show form
-    Write-Log "VScanMagic v3 initialized" -Level Info
+    Write-Log "VScanMagic $($script:Config.Version) initialized" -Level Info
     $form.ShowDialog() | Out-Null
 }

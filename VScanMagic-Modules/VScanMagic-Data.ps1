@@ -265,7 +265,8 @@ function Read-FullListSheetData {
     param(
         [object]$Worksheet,
         [hashtable]$ColumnIndices,
-        [switch]$IsEOLSheet
+        [switch]$IsEOLSheet,
+        [string]$SourceOverride = $null  # When set, use this as Source for all rows (e.g. 'Registry' for Registry worksheet)
     )
     
     $usedRange = $Worksheet.UsedRange
@@ -344,6 +345,12 @@ function Read-FullListSheetData {
             if ([string]::IsNullOrWhiteSpace($cve)) { $cve = '' }
         }
         
+        $source = if ($SourceOverride) { $SourceOverride } else { 'Application' }
+        if (-not $SourceOverride -and $columnIndices.ContainsKey('Source')) {
+            $srcVal = [string]$rangeValues[$row, $columnIndices['Source']]
+            if (-not [string]::IsNullOrWhiteSpace($srcVal)) { $source = $srcVal.Trim() }
+        }
+        
         # Skip rows without required data
         if ([string]::IsNullOrWhiteSpace($product) -or [string]::IsNullOrWhiteSpace($severity)) {
             continue
@@ -351,6 +358,7 @@ function Read-FullListSheetData {
         
         # Add vulnerability record
         $null = $vulnerabilities.Add([PSCustomObject]@{
+            'Source' = $source
             'Host Name' = $hostName
             'IP' = $ip
             'Product' = $product
@@ -387,17 +395,19 @@ function Aggregate-FullListData {
         [array]$Vulnerabilities
     )
     
-    Write-Log "Aggregating $($Vulnerabilities.Count) vulnerabilities by Host/Product/Severity..."
+    Write-Log "Aggregating $($Vulnerabilities.Count) vulnerabilities by Source/Host/Product/Severity..."
     
     $aggregated = [System.Collections.ArrayList]::new()
     
-    # Group by Host Name, IP, and Product
+    # Group by Source, Host Name, IP, and Product (Source keeps Application/Registry/Network in separate sections)
     $grouped = $Vulnerabilities | Group-Object -Property {
-        "$($_.'Host Name')|$($_.IP)|$($_.Product)"
+        $src = if ($_.Source) { $_.Source } else { 'Application' }
+        "$src|$($_.'Host Name')|$($_.IP)|$($_.Product)"
     }
     
     foreach ($group in $grouped) {
         $firstItem = $group.Group[0]
+        $sourceVal = if ($firstItem.Source) { $firstItem.Source } else { 'Application' }
         $counts = Get-SeverityCounts -Items $group.Group -EPSSProp 'EPSS Score'
         $vulnCount = $counts.Critical + $counts.High + $counts.Medium + $counts.Low
         # Collect Fix: first non-empty, or concatenate unique if multiple differ
@@ -412,6 +422,7 @@ function Aggregate-FullListData {
         
         if ($vulnCount -gt 0) {
             $null = $aggregated.Add([PSCustomObject]@{
+                'Source' = $sourceVal
                 'Host Name' = $firstItem.'Host Name'
                 'IP' = $firstItem.IP
                 'Username' = $usernameVal
@@ -512,27 +523,38 @@ function Get-VulnerabilityData {
         # Check if this is an All Vulnerabilities single-sheet format (ConnectSecure 13-column)
         $isAllVulnsFormat = Test-IsAllVulnerabilitiesFormat -Workbook $workbook
         if ($isAllVulnsFormat) {
-            $avSheet = $null
+            # All Vulnerabilities report can have multiple worksheets: main + Registry + Network Scan Findings
+            $avSheetPatterns = @('*All Vulnerabilities*', '*Registry*', '*Network*')
+            $sheetsToRead = @()
             foreach ($sheet in $workbook.Worksheets) {
-                if ($sheet.Name -like "*All Vulnerabilities*") {
-                    $avSheet = $sheet
-                    break
+                foreach ($pat in $avSheetPatterns) {
+                    if ($sheet.Name -like $pat) {
+                        $src = $null
+                        if ($pat -like '*Registry*') { $src = 'Registry' }
+                        elseif ($pat -like '*Network*') { $src = 'Network' }
+                        $sheetsToRead += @{ Sheet = $sheet; Source = $src }
+                        break
+                    }
                 }
             }
-            if ($null -eq $avSheet) {
+            if ($sheetsToRead.Count -eq 0) {
                 throw "All Vulnerabilities sheet not found."
             }
-            $usedRange = $avSheet.UsedRange
+            # Use first sheet for headers (All Vulnerabilities or Registry - both use same 13-column structure)
+            $firstEntry = $sheetsToRead[0]
+            $firstSheet = $firstEntry.Sheet
+            $usedRange = $firstSheet.UsedRange
             $colCount = $usedRange.Columns.Count
             $headers = @{}
             for ($col = 1; $col -le $colCount; $col++) {
-                $headerName = $avSheet.Cells.Item(1, $col).Text
+                $headerName = $firstSheet.Cells.Item(1, $col).Text
                 if ($headerName) {
                     $headers[$headerName] = $col
                 }
             }
             Write-Log "All Vulnerabilities headers: $($headers.Keys -join ', ')"
             $columnMappings = @{
+                'Source' = @('Source', 'Section', 'Vulnerability Source')
                 'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Device')
                 'IP' = @('IP Address', 'IP', 'Address')
                 'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name', 'OS Name', 'OS Full Name', 'Name', 'Problem Name')
@@ -552,12 +574,19 @@ function Get-VulnerabilityData {
             if (-not $columnIndices.ContainsKey('Product') -or -not $columnIndices.ContainsKey('Severity')) {
                 throw "All Vulnerabilities format requires Product Name (or Application Name) and Severity columns."
             }
-            $sheetVulns = Read-FullListSheetData -Worksheet $avSheet -ColumnIndices $columnIndices -IsEOLSheet:$false
-            Write-Log "Read $($sheetVulns.Count) vulnerabilities from All Vulnerabilities sheet"
+            $sheetVulns = @()
+            foreach ($entry in $sheetsToRead) {
+                $s = $entry.Sheet
+                $srcOverride = $entry.Source
+                $vulns = Read-FullListSheetData -Worksheet $s -ColumnIndices $columnIndices -IsEOLSheet:$false -SourceOverride $srcOverride
+                Write-Log "Read $($vulns.Count) vulnerabilities from $($s.Name)"
+                $sheetVulns += $vulns
+                Clear-ComObject $s
+            }
+            Clear-ComObject $usedRange
+            $sheetVulns = Expand-CombinedProductRows -Vulnerabilities $sheetVulns
             $allData = Aggregate-FullListData -Vulnerabilities $sheetVulns
             Write-Log "Aggregated to $($allData.Count) records" -Level Success
-            Clear-ComObject $avSheet
-            Clear-ComObject $usedRange
             return $allData
         }
 
@@ -660,6 +689,8 @@ function Get-VulnerabilityData {
             
             Write-Log "Total vulnerabilities read: $($allVulnerabilities.Count)"
             
+            # Expand combined products (CS often combines e.g. MongoDB 3.4.x or Visual C++ 2008/2010/2012 in one cell)
+            $allVulnerabilities = Expand-CombinedProductRows -Vulnerabilities $allVulnerabilities
             # Aggregate vulnerabilities by Host/Product/Severity
             $allData = Aggregate-FullListData -Vulnerabilities $allVulnerabilities
             
@@ -809,6 +840,64 @@ function Get-VulnerabilityData {
     }
 }
 
+function Get-ProductMajorVersion {
+    <#
+    .SYNONOPSIS
+    Normalizes product name to major version for report formatting. ConnectSecure often combines
+    many minor versions (e.g. MongoDB 3.4.24, 3.4.23, 3.4.22) - this consolidates to "MongoDB 3.4".
+    #>
+    param([string]$ProductName)
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $ProductName }
+    $p = $ProductName.Trim()
+    # Strip trailing patch version: "MongoDB 3.4.24" -> "MongoDB 3.4", "Product 9.0.30729.4974" -> "Product"
+    if ($p -match '^(.+?)\s+(\d+\.\d+)(\.\d+)+$') {
+        $base = $matches[1].Trim()
+        $majorMinor = $matches[2]
+        return "$base $majorMinor"
+    }
+    # Strip trailing single version: "Product 10.0.40219" -> "Product"
+    if ($p -match '^(.+?)\s+\d+\.\d+(\.\d+)*$') {
+        return $matches[1].Trim()
+    }
+    return $p
+}
+
+function Expand-CombinedProductRows {
+    <#
+    .SYNOPSIS
+    Splits rows where Product contains comma/semicolon-separated values (ConnectSecure combines these).
+    Each part is normalized to major version. Returns expanded array of rows.
+    #>
+    param([array]$Vulnerabilities)
+    if (-not $Vulnerabilities -or $Vulnerabilities.Count -eq 0) { return $Vulnerabilities }
+    $expanded = [System.Collections.ArrayList]::new()
+    foreach ($v in $Vulnerabilities) {
+        $product = if ($v.Product) { [string]$v.Product } else { '' }
+        if ([string]::IsNullOrWhiteSpace($product) -or ($product -notmatch '[,;]')) {
+            $null = $expanded.Add($v)
+            continue
+        }
+        $parts = $product -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if ($parts.Count -le 1) {
+            $null = $expanded.Add($v)
+            continue
+        }
+        # If first part has product name, prepend to version-only parts (e.g. "MongoDB 3.4.24, 3.4.23" -> "MongoDB 3.4.23")
+        $productBase = $null
+        if ($parts[0] -match '^(.+?)\s+\d') { $productBase = $matches[1].Trim() }
+        foreach ($part in $parts) {
+            $resolved = $part
+            if ($productBase -and $part -match '^\d+\.\d') { $resolved = "$productBase $part" }
+            $normProduct = Get-ProductMajorVersion -ProductName $resolved
+            $ht = @{}
+            $v.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }
+            $ht['Product'] = $normProduct
+            $null = $expanded.Add([PSCustomObject]$ht)
+        }
+    }
+    return $expanded.ToArray()
+}
+
 function Get-ConsolidatedProduct {
     param([string]$ProductName)
 
@@ -818,6 +907,12 @@ function Get-ConsolidatedProduct {
 
     # Normalize the product name for comparison
     $normalizedProduct = $ProductName.Trim()
+
+    # Consolidate Visual C++ and .NET variants early (so Top N includes more diverse items)
+    $groupKey = Get-TimeEstimateGroupKey -ProductName $normalizedProduct
+    if ($groupKey -ne $normalizedProduct) {
+        return $groupKey
+    }
 
     # Check against consolidation rules (case-insensitive)
     foreach ($consolidated in $script:Config.WindowsConsolidation.Keys) {
@@ -946,6 +1041,32 @@ function Test-IsAutoUpdatingSoftware {
     return $false
 }
 
+function Get-ProductTypeSuffix {
+    <#
+    .SYNOPSIS
+    Returns the product-type suffix for ticket subjects and report titles (e.g. " - Updates Required").
+    Used by New-TicketInstructions, New-TicketInstructionsHtml, and New-WordReport.
+    #>
+    param(
+        [string]$ProductName,
+        [bool]$IsRMITPlus = $false
+    )
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return " - Update Required" }
+    if ($ProductName -like "*Windows Server 2012*" -or $ProductName -like "*end-of-life*" -or $ProductName -like "*out of support*") {
+        return " - End of Support Migration Required"
+    }
+    if ($ProductName -like "*Windows 10*") { return " - Windows 10 is End of Life" }
+    if ($ProductName -like "*Windows 11*") { return " - Updates Required" }
+    if ($ProductName -like "*Windows Server*") { return " - Updates Required" }
+    if ($ProductName -like "*Windows*") { return " - Patch Management Required" }
+    if ($ProductName -like "*printer*" -or $ProductName -like "*Ripple20*") { return " - Firmware Update Required" }
+    if ($ProductName -like "*Microsoft Teams*") { return " - Application Update Required" }
+    if ((Test-IsMicrosoftApplication -ProductName $ProductName) -and $IsRMITPlus) { return " - Updates Required" }
+    if ((Test-IsVMwareProduct -ProductName $ProductName) -and $IsRMITPlus) { return " - Update Required" }
+    if (Test-IsAutoUpdatingSoftware -ProductName $ProductName) { return " - This software updates automatically" }
+    return " - Update Required"
+}
+
 function Get-AverageCVSS {
     param(
         [int]$Critical,
@@ -1009,7 +1130,12 @@ function Get-CompositeRiskScore {
     }
 
     # EPSS boost: (1 + EPSS) ranges from 1.0 to 2.0
-    $epssFactor = 1.0 + $EPSSScore
+    # Items without EPSS (e.g. Network vulns) get synthetic EPSS so they're not buried
+    $effectiveEPSS = $EPSSScore
+    if ($null -eq $effectiveEPSS -or $effectiveEPSS -eq '' -or ($effectiveEPSS -as [double]) -eq $null) {
+        $effectiveEPSS = if ($null -ne $script:Config.SyntheticEPSSForNoEPSS) { $script:Config.SyntheticEPSSForNoEPSS } else { 0.1 }
+    }
+    $epssFactor = 1.0 + $effectiveEPSS
     $riskScore = $severityWeightedSum * $epssFactor
 
     return [Math]::Round($riskScore, 2)
@@ -1030,13 +1156,15 @@ function Get-Top10Vulnerabilities {
     Write-Log "Calculating risk scores and identifying top $countText vulnerabilities..."
     Write-Log "Filters: MinEPSS=$MinEPSS, Critical=$IncludeCritical, High=$IncludeHigh, Medium=$IncludeMedium, Low=$IncludeLow, Count=$countText"
 
-    # Group by product
-    $grouped = $VulnData | Group-Object -Property Product
+    # Group by Source and Product (keeps Application/Registry/Network in separate sections)
+    $grouped = $VulnData | Group-Object -Property { $src = if ($_.Source) { $_.Source } else { 'Application' }; "$src|$($_.Product)" }
 
     $aggregated = @()
 
     foreach ($group in $grouped) {
-        $product = $group.Name
+        $firstItem = $group.Group[0]
+        $sourceVal = if ($firstItem.Source) { $firstItem.Source } else { 'Application' }
+        $product = $firstItem.Product
 
         # Check if product should be filtered
         $shouldFilter = $false
@@ -1055,8 +1183,8 @@ function Get-Top10Vulnerabilities {
         # Consolidate Windows versions
         $consolidatedProduct = Get-ConsolidatedProduct -ProductName $product
 
-        # Check if we already have this consolidated product
-        $existing = $aggregated | Where-Object { $_.Product -eq $consolidatedProduct }
+        # Check if we already have this consolidated product (within same Source)
+        $existing = $aggregated | Where-Object { $_.Source -eq $sourceVal -and $_.Product -eq $consolidatedProduct }
 
         if ($existing) {
             # Merge with existing
@@ -1137,6 +1265,7 @@ function Get-Top10Vulnerabilities {
             }
 
             $aggregated += [PSCustomObject]@{
+                Source = $sourceVal
                 Product = $consolidatedProduct
                 Critical = $critical
                 High = $high
@@ -1173,8 +1302,12 @@ function Get-Top10Vulnerabilities {
     Write-Log "Products by severity: Critical=$productsWithCritical, High=$productsWithHigh, Medium=$productsWithMedium, Low=$productsWithLow"
     
     $filtered = $aggregated | Where-Object {
-        # EPSS filter
-        $epssPass = $_.EPSSScore -ge $MinEPSS
+        # EPSS filter: only include items with effective EPSS >= MinEPSS
+        # Items without valid EPSS (e.g. Network vulns) get synthetic EPSS for this check
+        $hasEpss = $null -ne $_.EPSSScore -and $_.EPSSScore -ne '' -and ($_.EPSSScore -as [double]) -ne $null
+        $syn = if ($null -ne $script:Config.SyntheticEPSSForNoEPSS) { $script:Config.SyntheticEPSSForNoEPSS } else { 0.1 }
+        $effectiveEPSS = if ($hasEpss) { [double]$_.EPSSScore } else { $syn }
+        $epssPass = $effectiveEPSS -ge $MinEPSS
         
         # Severity filter - include if has any of the selected severities
         $severityPass = $false
@@ -1197,14 +1330,45 @@ function Get-Top10Vulnerabilities {
     }
     Write-Log "Filtered products by severity: Critical=$filteredCritical, High=$filteredHigh, Medium=$filteredMedium, Low=$filteredLow"
 
-    # Sort by risk score and take requested count (or all if Count <= 0)
-    if ($Count -le 0) {
-        $topVulns = $filtered | Sort-Object -Property RiskScore -Descending
-        Write-Log "Including all $($topVulns.Count) vulnerabilities above minimum EPSS score"
-    } else {
-        $topVulns = $filtered | Sort-Object -Property RiskScore -Descending | Select-Object -First $Count
-        Write-Log "Identified top $Count vulnerabilities from $($filtered.Count) filtered products"
+    # Combined pool: any item with both CVSS and EPSS scores (Application, Registry, Network, or other - if they have both).
+    # Separate pool: items lacking either score (e.g. Network when EPSS is empty).
+    $hasValidEPSS = {
+        $v = $_.EPSSScore
+        $null -ne $v -and $v -ne '' -and ($v -as [double]) -ne $null
     }
+    $hasCVSS = { $_.VulnCount -gt 0 -or ($null -ne $_.AvgCVSS -and $_.AvgCVSS -gt 0) }
+    $combinedPool = $filtered | Where-Object { (& $hasValidEPSS) -and (& $hasCVSS) }
+    $separatePool = $filtered | Where-Object { -not ((& $hasValidEPSS) -and (& $hasCVSS)) }
+
+    # Combine both pools, sort by RiskScore, then take top N total (not N per pool)
+    $allSorted = @($combinedPool) + @($separatePool) | Sort-Object -Property RiskScore -Descending
+    $topVulns = if ($Count -le 0) { $allSorted } else { $allSorted | Select-Object -First $Count }
+    $countMsg = if ($Count -le 0) { "all" } else { "top $Count (CVSS+EPSS items combined, others separate)" }
+
+    # Ensure at least MinNetworkVulnsInTopN Network vulns are included (regardless of score)
+    $minNetwork = if ($null -ne $script:Config.MinNetworkVulnsInTopN) { $script:Config.MinNetworkVulnsInTopN } else { 2 }
+    $networkInTop = @($topVulns | Where-Object { $_.Source -eq 'Network' })
+    if ($networkInTop.Count -lt $minNetwork) {
+        $networkPool = $filtered | Where-Object { $_.Source -eq 'Network' } | Sort-Object -Property RiskScore -Descending
+        $topVulnKeys = $topVulns | ForEach-Object { "$($_.Source)|$($_.Product)" }
+        $needed = $minNetwork - $networkInTop.Count
+        $added = 0
+        foreach ($n in $networkPool) {
+            if ($added -ge $needed) { break }
+            $key = "$($n.Source)|$($n.Product)"
+            if ($key -notin $topVulnKeys) {
+                $topVulns += $n
+                $topVulnKeys += $key
+                $added++
+            }
+        }
+        if ($added -gt 0) {
+            $topVulns = $topVulns | Sort-Object -Property RiskScore -Descending
+            Write-Log "Added $added Network vuln(s) to meet minimum of $minNetwork (total now $($topVulns.Count))" -Level Info
+        }
+    }
+
+    Write-Log "Identified $($topVulns.Count) vulnerabilities ($countMsg)" -Level Success
 
     return $topVulns
 }

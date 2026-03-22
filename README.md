@@ -20,7 +20,7 @@ A GUI application that processes vulnerability scan reports from **ConnectSecure
 - **Dynamic Severity Thresholds** – Adapts risk score thresholds based on your data
 - **General Help & API Help** – In-app help for workflow guidance and API credential setup
 
-**Recent updates (4.0.2):** Structured output paths with Network Documentation/Vulnerability Scans; quarter folder format (2026 - Q1); Processing Summary and Report Folder History for quick access to output folders; bulk processing skips completion popups; removed View Generated Reports section; Company Folder Mappings auto-normalization.
+**Recent updates (4.0.9):** AI Improve Selected uses single-item path (fixes single-char output); Improve All uses chunked batch with 429 retry; Report Filters (Top N, EPSS, severity) persisted across sessions; removed Lookup Complete, Ticket Notes, Report Gen success popups; Ripple20/placeholder Fix handling; pie chart limited to 25 items (avoids Word COM RPC failures); rate limit tuning (smaller chunks, longer delays).
 
 ---
 
@@ -83,9 +83,14 @@ For building an application remediation database (baseline of applications with 
 
 # From ConnectSecure (using saved API credentials; CompanyId from VScanMagic GUI company list)
 .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+
+# Seed Remediation Steps from ConnectSecure Fix text, or from NVD when CVE IDs are present (requires CVE/Fix columns in source)
+.\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -OutputPath ".\applications-baseline.csv"
+# Optional: NVD API key for higher rate limits — request at https://nvd.nist.gov/developers/request-an-api-key
+.\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -NvdApiKey $env:NVD_API_KEY -OutputPath ".\applications-baseline.csv"
 ```
 
-Output includes Product, severity counts, affected hosts, and a blank **Remediation Steps** column for technicians to populate.
+Output includes Product, severity counts, affected hosts, **CVE** (when present in the report), and **Remediation Steps**. Remediation is taken from ConnectSecure **Fix/Solution** when available; use **`-SeedRemediation`** to pull short summaries from the [NVD API](https://services.nvd.nist.gov/rest/json/cves/2.0) for rows that have CVE IDs but no fix text. Allow outbound HTTPS to `services.nvd.nist.gov` for NVD lookups.
 
 ### Documentation
 

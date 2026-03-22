@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 4.0.8
+Version: 4.0.10
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 Modular: Core, Data, Reports, Dialogs, Form loaded from VScanMagic-Modules/
@@ -39,6 +39,19 @@ $modulesDir = Join-Path $script:ScriptDirectory "VScanMagic-Modules"
 if (-not (Test-Path $modulesDir)) {
     Write-Error "VScanMagic-Modules folder not found at: $modulesDir"
     exit 1
+}
+
+# --- Import MemberberryIntegration module (if available) ---
+$memberberryIntegrationPath = Join-Path $modulesDir "MemberberryIntegration.psm1"
+if (Test-Path $memberberryIntegrationPath) {
+    try {
+        Import-Module $memberberryIntegrationPath -Force -ErrorAction Stop
+        Write-Host "Memberberry integration module loaded successfully" -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not load MemberberryIntegration module: $($_.Exception.Message). Using local storage."
+    }
+} else {
+    Write-Host "MemberberryIntegration module not found. Using local storage." -ForegroundColor Yellow
 }
 
 # --- Load Modules (order matters: Core -> Data -> Reports -> Dialogs -> Form) ---

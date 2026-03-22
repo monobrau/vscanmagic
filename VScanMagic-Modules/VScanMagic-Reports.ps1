@@ -355,8 +355,10 @@ function New-WordReport {
         $selection.Style = "Normal"
         $selection.TypeParagraph()
 
-        # Create table
-        $table = $doc.Tables.Add($selection.Range, ($Top10Data.Count + 1), 7)
+        # Create table (8 columns when Source present for Application/Registry/Network sections)
+        $hasSections = ($Top10Data | Where-Object { $_.Source -and $_.Source -ne 'Application' }).Count -gt 0
+        $colCount = if ($hasSections) { 8 } else { 7 }
+        $table = $doc.Tables.Add($selection.Range, ($Top10Data.Count + 1), $colCount)
         $table.Borders.Enable = $true
         $table.Style = "Grid Table 4 - Accent 1"
 
@@ -364,24 +366,44 @@ function New-WordReport {
         $table.Range.Font.Size = 9
 
         # Headers
-        $headers = @("Rank", "Product/System", "Risk Score", "EPSS", "Avg CVSS", "Total Vulns", "Affected Systems")
+        $headers = if ($hasSections) {
+            @("Rank", "Section", "Product/System", "Risk Score", "EPSS", "Avg CVSS", "Total Vulns", "Affected Systems")
+        } else {
+            @("Rank", "Product/System", "Risk Score", "EPSS", "Avg CVSS", "Total Vulns", "Affected Systems")
+        }
         for ($i = 0; $i -lt $headers.Count; $i++) {
             $table.Cell(1, $i + 1).Range.Text = $headers[$i]
             $table.Cell(1, $i + 1).Range.Font.Bold = $true
         }
 
-        # Data rows
+        # Data rows (group by section for visual separation when multiple sections)
         $rank = 1
+        $sectionRanks = @{}
         foreach ($item in $Top10Data) {
             $rowIndex = $rank + 1
+            $sectionLabel = if ($item.Source) { $item.Source } else { 'Application' }
+            if (-not $sectionRanks.ContainsKey($sectionLabel)) { $sectionRanks[$sectionLabel] = 0 }
+            $sectionRanks[$sectionLabel]++
+            $sectionRank = $sectionRanks[$sectionLabel]
 
-            $table.Cell($rowIndex, 1).Range.Text = $rank.ToString()
-            $table.Cell($rowIndex, 2).Range.Text = $item.Product
-            $table.Cell($rowIndex, 3).Range.Text = $item.RiskScore.ToString("N2")
-            $table.Cell($rowIndex, 4).Range.Text = $item.EPSSScore.ToString("N4")
-            $table.Cell($rowIndex, 5).Range.Text = $item.AvgCVSS.ToString("N2")
-            $table.Cell($rowIndex, 6).Range.Text = $item.VulnCount.ToString()
-            $table.Cell($rowIndex, 7).Range.Text = $item.AffectedSystems.Count.ToString()
+            if ($hasSections) {
+                $table.Cell($rowIndex, 1).Range.Text = $sectionRank.ToString()
+                $table.Cell($rowIndex, 2).Range.Text = $sectionLabel
+                $table.Cell($rowIndex, 3).Range.Text = $item.Product
+                $table.Cell($rowIndex, 4).Range.Text = $item.RiskScore.ToString("N2")
+                $table.Cell($rowIndex, 5).Range.Text = $item.EPSSScore.ToString("N4")
+                $table.Cell($rowIndex, 6).Range.Text = $item.AvgCVSS.ToString("N2")
+                $table.Cell($rowIndex, 7).Range.Text = $item.VulnCount.ToString()
+                $table.Cell($rowIndex, 8).Range.Text = $item.AffectedSystems.Count.ToString()
+            } else {
+                $table.Cell($rowIndex, 1).Range.Text = $rank.ToString()
+                $table.Cell($rowIndex, 2).Range.Text = $item.Product
+                $table.Cell($rowIndex, 3).Range.Text = $item.RiskScore.ToString("N2")
+                $table.Cell($rowIndex, 4).Range.Text = $item.EPSSScore.ToString("N4")
+                $table.Cell($rowIndex, 5).Range.Text = $item.AvgCVSS.ToString("N2")
+                $table.Cell($rowIndex, 6).Range.Text = $item.VulnCount.ToString()
+                $table.Cell($rowIndex, 7).Range.Text = $item.AffectedSystems.Count.ToString()
+            }
 
             # Apply color coding based on risk score using dynamic thresholds
             $colorInfo = Get-RiskScoreColor -RiskScore $item.RiskScore -DynamicThresholds $dynamicThresholds
@@ -402,7 +424,7 @@ function New-WordReport {
             $bgColor = ConvertTo-HexColor -HexColor $colorInfo.Color
             $textColor = ConvertTo-HexColor -HexColor $colorInfo.TextColor
 
-            for ($col = 1; $col -le 7; $col++) {
+            for ($col = 1; $col -le $colCount; $col++) {
                 $table.Cell($rowIndex, $col).Shading.BackgroundPatternColor = $bgColor
                 $table.Cell($rowIndex, $col).Range.Font.Color = $textColor
             }
@@ -413,15 +435,24 @@ function New-WordReport {
         # Set custom column widths for better appearance
         # Column widths in points (1 inch = 72 points)
         $table.Columns(1).SetWidth(36, 0)   # Rank: 0.5 inch (narrow)
-        $table.Columns(2).PreferredWidthType = 3  # wdPreferredWidthPoints (3, not 2)
-        $table.Columns(2).PreferredWidth = 180    # Product/System: 2.5 inches max
-
-        # Auto-fit other columns - use table AutoFitBehavior after setting column 1 & 2
-        $table.Columns(3).SetWidth(72, 0)   # Risk Score: 1 inch
-        $table.Columns(4).SetWidth(54, 0)   # EPSS: 0.75 inch
-        $table.Columns(5).SetWidth(72, 0)   # Avg CVSS: 1 inch
-        $table.Columns(6).SetWidth(72, 0)   # Total Vulns: 1 inch
-        $table.Columns(7).SetWidth(90, 0)   # Affected Systems: 1.25 inch
+        if ($hasSections) {
+            $table.Columns(2).SetWidth(72, 0)   # Section: 1 inch
+            $table.Columns(3).PreferredWidthType = 3
+            $table.Columns(3).PreferredWidth = 180    # Product/System
+            $table.Columns(4).SetWidth(72, 0)   # Risk Score
+            $table.Columns(5).SetWidth(54, 0)   # EPSS
+            $table.Columns(6).SetWidth(72, 0)   # Avg CVSS
+            $table.Columns(7).SetWidth(72, 0)   # Total Vulns
+            $table.Columns(8).SetWidth(90, 0)   # Affected Systems
+        } else {
+            $table.Columns(2).PreferredWidthType = 3
+            $table.Columns(2).PreferredWidth = 180    # Product/System
+            $table.Columns(3).SetWidth(72, 0)   # Risk Score
+            $table.Columns(4).SetWidth(54, 0)   # EPSS
+            $table.Columns(5).SetWidth(72, 0)   # Avg CVSS
+            $table.Columns(6).SetWidth(72, 0)   # Total Vulns
+            $table.Columns(7).SetWidth(90, 0)   # Affected Systems
+        }
 
         $selection.EndKey(6)
         $selection.TypeParagraph()
@@ -467,12 +498,21 @@ function New-WordReport {
             $worksheet.Cells.Item(1, 2) = "Vulnerabilities"
 
             # Sort by VulnCount descending for pie chart (largest percentage first)
+            # Limit to 25 items to avoid Word COM RPC failures with large datasets (150+ items)
+            $maxChartItems = 25
             $sortedChartData = $Top10Data | Sort-Object -Property VulnCount -Descending
+            $chartItems = if ($sortedChartData.Count -le $maxChartItems) { $sortedChartData } else { $sortedChartData | Select-Object -First $maxChartItems }
+            $otherCount = if ($sortedChartData.Count -gt $maxChartItems) { ($sortedChartData | Select-Object -Skip $maxChartItems | Measure-Object -Property VulnCount -Sum).Sum } else { 0 }
 
             $row = 2
-            foreach ($item in $sortedChartData) {
+            foreach ($item in $chartItems) {
                 $worksheet.Cells.Item($row, 1) = [string]$item.Product
                 $worksheet.Cells.Item($row, 2) = [int]$item.VulnCount
+                $row++
+            }
+            if ($otherCount -gt 0) {
+                $worksheet.Cells.Item($row, 1) = "Other ($($sortedChartData.Count - $maxChartItems) more)"
+                $worksheet.Cells.Item($row, 2) = [int]$otherCount
                 $row++
             }
             $lastRow = $row - 1
@@ -548,7 +588,8 @@ function New-WordReport {
             $selection.Style = "Heading 2"
             $title = "$rank. $($item.Product)"
 
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
             # Add modifier text or product-type suffix (Top N report uses full modifier for client benefit: ticket generated, approval needed)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
@@ -566,30 +607,7 @@ function New-WordReport {
                     $title = "After Hours - $title"
                 }
             } else {
-                # Product-type suffix when no modifier (same chain as ticket subject)
-                if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                    $title += " - End of Support Migration Required"
-                } elseif ($item.Product -like "*Windows 10*") {
-                    $title += " - Windows 10 is End of Life"
-                } elseif ($item.Product -like "*Windows 11*") {
-                    $title += " - Updates Required"
-                } elseif ($item.Product -like "*Windows Server*") {
-                    $title += " - Updates Required"
-                } elseif ($item.Product -like "*Windows*") {
-                    $title += " - Patch Management Required"
-                } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                    $title += " - Firmware Update Required"
-                } elseif ($item.Product -like "*Microsoft Teams*") {
-                    $title += " - Application Update Required"
-                } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - Updates Required"
-                } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                    $title += " - Update Required"
-                } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                    $title += " - This software updates automatically"
-                } else {
-                    $title += " - Update Required"
-                }
+                $title += Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus
             }
 
             Add-WordText -Selection $selection -Text $title
@@ -626,11 +644,12 @@ function New-WordReport {
 
             # Display systems as comma-separated list with indent (same uniqueness as Ticket Instructions: HostName, IP, Username)
             $selection.ParagraphFormat.LeftIndent = 36
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             $systemsList = ($uniqueSystems | ForEach-Object {
                 $systemLine = if ($_.HostName) { $_.HostName } else { $_.IP }
                 if (-not [string]::IsNullOrWhiteSpace($_.Username)) { $systemLine += " ($($_.Username))" }
                 if (-not [string]::IsNullOrWhiteSpace($_.IP)) { $systemLine += " - $($_.IP)" }
+                if (-not [string]::IsNullOrWhiteSpace($_.LastPingTime)) { $systemLine += " (last seen $($_.LastPingTime))" }
                 $systemLine
             } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
             Add-WordText -Selection $selection -Text $systemsList
@@ -1087,8 +1106,13 @@ function New-ExcelReport {
             $row = 2
             $rowNum = 0
             $colNames = @('Remediation Type','Product','Host Name','Fix','IP','Evidence Path','Evidence Version','Critical','High','Medium','Low','Vulnerability Count','EPSS Score')
+            $totalRows = $aggregatedData.Count
             foreach ($item in $aggregatedData) {
                 $rowNum++
+                if ($rowNum % 100 -eq 0) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    if ($rowNum % 500 -eq 0) { Write-Log "Writing row $rowNum of $totalRows..." -Level Info }
+                }
                 for ($col = 1; $col -le 13; $col++) {
                     try {
                         if ($col -le 7) {
@@ -1279,9 +1303,11 @@ function New-ExcelReport {
             $xlMax = -4136
             $xlSum = -4157
 
+            [System.Windows.Forms.Application]::DoEvents()
             $pivotCache = $workbook.PivotCaches().Create(1, $pivotSourceRange)
             $pivotTable = $pivotCache.CreatePivotTable($pivotSheet.Range("A3"), "VulnPivotTable")
             Write-Log "Pivot Table object created" -Level Info
+            [System.Windows.Forms.Application]::DoEvents()
 
             # Configure pivot table fields
             $rowFieldsToAdd = @("Remediation Type", "Product", "Host Name", "Fix", "IP", "Evidence Path", "Evidence Version")
@@ -1397,6 +1423,7 @@ function New-ExcelReport {
         Clear-ComObject $pivotSourceRange
 
         # --- 4. Save and Close ---
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Saving workbook to: $OutputPath" -Level Info
 
         # Workaround: Excel COM SaveAs fails on OneDrive/sync folders ("Unable to get the SaveAs property").
@@ -1532,11 +1559,15 @@ function Open-EmailDraftInOutlook {
 }
 
 function Format-EmailTemplateSpacing {
-    <# Collapse multiple spaces to single; preserve paragraph breaks and signature. #>
+    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks; preserve paragraph breaks (double newline). #>
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
-    $lines = $Text -split "`r?`n"
-    $result = ($lines | ForEach-Object { ($_ -replace '[ \t]+', ' ') }) -join "`r`n"
+    $paragraphs = $Text -split "`r?`n`r?`n"
+    $result = ($paragraphs | ForEach-Object {
+        $para = ($_ -split "`r?`n") -join " "
+        $para = $para -replace '[ \t]+', ' '
+        $para.Trim()
+    }) -join "`r`n`r`n"
     return $result.Trim()
 }
 

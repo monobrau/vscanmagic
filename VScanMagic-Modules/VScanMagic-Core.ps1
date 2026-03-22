@@ -4,7 +4,7 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.8"
+    Version = "4.0.10"
     Author = "River Run MSP"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
@@ -66,6 +66,16 @@ $script:Config = @{
     # Excel Formatting Configuration
     ConditionalFormatThreshold = 0.075
     ExcelPathLimit = 200
+
+    # Synthetic EPSS for items without EPSS (e.g. Network vulns) - used for ranking and MinEPSS filter
+    SyntheticEPSSForNoEPSS = 0.1
+
+    # Top N report: always include at least this many Network vulns regardless of score (ensures network findings are visible)
+    MinNetworkVulnsInTopN = 2
+
+    # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
+    AIBatchChunkSize = 2
+    AIBatchChunkDelaySeconds = 20
 }
 
 # --- User Settings Persistence ---
@@ -92,8 +102,8 @@ $script:Templates = $null
 $script:FilterMinEPSS = 0
 $script:FilterIncludeCritical = $true
 $script:FilterIncludeHigh = $true
-$script:FilterIncludeMedium = $true
-$script:FilterIncludeLow = $true
+$script:FilterIncludeMedium = $false
+$script:FilterIncludeLow = $false
 $script:FilterTopN = "10"
 $script:OutputExcel = $true
 $script:OutputWord = $true
@@ -130,11 +140,19 @@ $script:UserSettings = @{
     ReportsBasePath = ""  # Base folder for client output; when set, uses [Base]\[Folder]\[Year] - [QN]\
     HostnameReviewWindows11Threshold = 350  # VulnCount threshold: below = unselected, above = selected for Windows 11 O/S tabs
     HostnameReviewAutoLookupConnectSecure = $true  # When true, automatically lookup usernames from ConnectSecure when Hostname Review opens (CompanyId > 0)
+    HostnameReviewAutoLookupLastPing = $true  # When true, lookup last ping time from ConnectSecure for Top N report and ticket instructions (CompanyId > 0)
     DownloadAutoResizeColumns = $true  # When true, auto-resize columns on downloaded Excel reports (excludes Company and Proposed Remediations (all) sheets)
     # AI API Keys (future: email, ticket notes, remediation, time estimate guidance)
     AIApiKeyCopilot = ""
     AIApiKeyChatGPT = ""
     AIApiKeyClaude = ""
+    # Report Filters (persisted so Top N selection is remembered)
+    FilterTopN = "10"
+    FilterMinEPSS = 0
+    FilterIncludeCritical = $true
+    FilterIncludeHigh = $true
+    FilterIncludeMedium = $false
+    FilterIncludeLow = $false
 }
 
 function Ensure-SettingsDirectory {
@@ -183,6 +201,8 @@ function Update-SettingsPaths {
     $script:RemediationRulesPath = Join-Path $script:SettingsDirectory "VScanMagic_RemediationRules.json"
     $script:CoveredSoftwarePath = Join-Path $script:SettingsDirectory "VScanMagic_CoveredSoftware.json"
     $script:GeneralRecommendationsPath = Join-Path $script:SettingsDirectory "VScanMagic_GeneralRecommendations.json"
+    $script:ConnectSecureCredentialsPath = Join-Path $script:SettingsDirectory "ConnectSecure-Credentials.json"
+    $script:ConnectSecureCompaniesCachePath = Join-Path $script:SettingsDirectory "ConnectSecure-Companies-Cache.json"
     $script:CompanyFolderMapPath = Join-Path $script:SettingsDirectory "VScanMagic_CompanyFolderMap.json"
     $script:ReportFolderHistoryPath = Join-Path $script:SettingsDirectory "VScanMagic_ReportFolderHistory.json"
     $script:ConnectWiseAutomateCredentialsPath = Join-Path $script:SettingsDirectory "ConnectWise-Automate-Credentials.json"
@@ -191,25 +211,45 @@ function Update-SettingsPaths {
     if (Ensure-SettingsDirectory -Path $script:SettingsDirectory) { Write-Host "Created settings directory: $script:SettingsDirectory" }
 }
 
+# Shared files: remediation rules, templates, etc. - safe to share between users
+$script:BackupSharedFiles = @(
+    "VScanMagic_RemediationRules.json",
+    "VScanMagic_Templates.json",
+    "VScanMagic_GeneralRecommendations.json",
+    "VScanMagic_CoveredSoftware.json",
+    "VScanMagic_CompanyFolderMap.json"
+)
+# User-specific files: credentials, paths, API keys - personal, not for sharing
+$script:BackupUserFiles = @(
+    "VScanMagic_Settings.json",
+    "VScanMagic_ReportFolderHistory.json",
+    "ConnectSecure-Credentials.json",
+    "ConnectSecure-Companies-Cache.json",
+    "ConnectWise-Automate-Credentials.json"
+)
+
 function Backup-Settings {
-    param([string]$OutputPath = $null)
-    $settingsFiles = @(
-        "VScanMagic_Settings.json",
-        "VScanMagic_RemediationRules.json",
-        "VScanMagic_CoveredSoftware.json",
-        "VScanMagic_GeneralRecommendations.json",
-        "VScanMagic_CompanyFolderMap.json",
-        "VScanMagic_ReportFolderHistory.json",
-        "VScanMagic_Templates.json",
-        "ConnectSecure-Credentials.json",
-        "ConnectSecure-Companies-Cache.json",
-        "ConnectWise-Automate-Credentials.json"
+    param(
+        [string]$OutputPath = $null,
+        [ValidateSet("All", "Shared", "User")]
+        [string]$Scope = "All"
     )
     if (-not (Test-Path $script:SettingsDirectory)) {
         return $null
     }
+    # Ensure remediation rules are on disk before backup (defaults may be in-memory only)
+    Load-RemediationRules | Out-Null
+    Save-RemediationRules | Out-Null
+
+    $settingsFiles = switch ($Scope) {
+        "Shared" { $script:BackupSharedFiles }
+        "User"   { $script:BackupUserFiles }
+        default  { $script:BackupSharedFiles + $script:BackupUserFiles }
+    }
+
     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-    $defaultName = "VScanMagic_Settings_Backup_$timestamp.zip"
+    $scopeSuffix = if ($Scope -eq "All") { "" } else { "_$Scope" }
+    $defaultName = "VScanMagic_Settings_Backup$scopeSuffix`_$timestamp.zip"
     if ([string]::IsNullOrWhiteSpace($OutputPath)) {
         $OutputPath = Join-Path ([Environment]::GetFolderPath("Desktop")) $defaultName
     } elseif ([System.IO.Directory]::Exists($OutputPath)) {
@@ -219,17 +259,28 @@ function Backup-Settings {
     try {
         New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
         $copied = 0
+        $copiedList = @()
         foreach ($f in $settingsFiles) {
             $src = Join-Path $script:SettingsDirectory $f
             if (Test-Path $src) {
                 Copy-Item -Path $src -Destination (Join-Path $tempDir $f) -Force
                 $copied++
+                $copiedList += $f
             }
         }
         if ($copied -eq 0) {
             Write-Warning "No settings files found to backup."
             return $null
         }
+        # Write manifest
+        $manifest = @"
+VScanMagic Settings Backup
+Scope: $Scope
+Timestamp: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Files included:
+$($copiedList -join "`r`n")
+"@
+        $manifest | Set-Content -Path (Join-Path $tempDir "backup-manifest.txt") -Encoding UTF8
         if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
         Compress-Archive -Path (Join-Path $tempDir "*") -DestinationPath $OutputPath -Force
         return $OutputPath
@@ -239,7 +290,11 @@ function Backup-Settings {
 }
 
 function Restore-Settings {
-    param([string]$BackupPath)
+    param(
+        [string]$BackupPath,
+        [ValidateSet("All", "Shared", "User")]
+        [string]$Scope = "All"
+    )
     if (-not $BackupPath -or -not (Test-Path $BackupPath)) { return $false }
     $ext = [System.IO.Path]::GetExtension($BackupPath)
     if ($ext -ne ".zip") {
@@ -250,21 +305,32 @@ function Restore-Settings {
         Ensure-SettingsDirectory -Path $script:SettingsDirectory | Out-Null
         $tempDir = Join-Path $env:TEMP "VScanMagic_Restore_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
         Expand-Archive -Path $BackupPath -DestinationPath $tempDir -Force
+        $allowedFiles = switch ($Scope) {
+            "Shared" { $script:BackupSharedFiles }
+            "User"   { $script:BackupUserFiles }
+            default  { $null }  # All = no filter
+        }
         $restored = 0
         Get-ChildItem -Path $tempDir -Filter "*.json" | ForEach-Object {
-            $dest = Join-Path $script:SettingsDirectory $_.Name
-            Copy-Item -Path $_.FullName -Destination $dest -Force
-            $restored++
+            if ($null -eq $allowedFiles -or $allowedFiles -contains $_.Name) {
+                $dest = Join-Path $script:SettingsDirectory $_.Name
+                Copy-Item -Path $_.FullName -Destination $dest -Force
+                $restored++
+            }
         }
         Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         if ($restored -gt 0) {
-            Load-UserSettings | Out-Null
-            Update-SettingsPaths
-            Load-RemediationRules
-            Load-CoveredSoftware
-            Load-GeneralRecommendations
-            Load-CompanyFolderMap
-            Load-Templates
+            if ($Scope -eq "All" -or $Scope -eq "User") {
+                Load-UserSettings | Out-Null
+                Update-SettingsPaths
+            }
+            if ($Scope -eq "All" -or $Scope -eq "Shared") {
+                Load-RemediationRules
+                Load-CoveredSoftware
+                Load-GeneralRecommendations
+                Load-CompanyFolderMap
+                Load-Templates
+            }
             return $true
         }
         return $false
@@ -293,12 +359,26 @@ function Load-UserSettings {
         if ($null -ne $json.ReportsBasePath) { $script:UserSettings.ReportsBasePath = $json.ReportsBasePath } else { $script:UserSettings.ReportsBasePath = "" }
         if ($null -ne $json.HostnameReviewWindows11Threshold -and $json.HostnameReviewWindows11Threshold -ge 0) { $script:UserSettings.HostnameReviewWindows11Threshold = [int]$json.HostnameReviewWindows11Threshold } else { $script:UserSettings.HostnameReviewWindows11Threshold = 350 }
         if ($null -ne $json.HostnameReviewAutoLookupConnectSecure) { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = [bool]$json.HostnameReviewAutoLookupConnectSecure } else { $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $true }
+        if ($null -ne $json.HostnameReviewAutoLookupLastPing) { $script:UserSettings.HostnameReviewAutoLookupLastPing = [bool]$json.HostnameReviewAutoLookupLastPing } else { $script:UserSettings.HostnameReviewAutoLookupLastPing = $true }
         if ($null -ne $json.DownloadAutoResizeColumns) { $script:UserSettings.DownloadAutoResizeColumns = [bool]$json.DownloadAutoResizeColumns } else { $script:UserSettings.DownloadAutoResizeColumns = $true }
         if ($null -ne $json.AIApiKeyCopilot) { $script:UserSettings.AIApiKeyCopilot = $json.AIApiKeyCopilot } else { $script:UserSettings.AIApiKeyCopilot = "" }
         if ($null -ne $json.AIApiKeyChatGPT) { $script:UserSettings.AIApiKeyChatGPT = $json.AIApiKeyChatGPT } else { $script:UserSettings.AIApiKeyChatGPT = "" }
         if ($null -ne $json.AIApiKeyClaude) { $script:UserSettings.AIApiKeyClaude = $json.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyClaude = "" }
+        if ($null -ne $json.FilterTopN -and $json.FilterTopN -in @('10','20','50','100','All')) { $script:UserSettings.FilterTopN = $json.FilterTopN } else { $script:UserSettings.FilterTopN = "10" }
+        if ($null -ne $json.FilterMinEPSS) { $script:UserSettings.FilterMinEPSS = [double]$json.FilterMinEPSS } else { $script:UserSettings.FilterMinEPSS = 0 }
+        if ($null -ne $json.FilterIncludeCritical) { $script:UserSettings.FilterIncludeCritical = [bool]$json.FilterIncludeCritical } else { $script:UserSettings.FilterIncludeCritical = $true }
+        if ($null -ne $json.FilterIncludeHigh) { $script:UserSettings.FilterIncludeHigh = [bool]$json.FilterIncludeHigh } else { $script:UserSettings.FilterIncludeHigh = $true }
+        if ($null -ne $json.FilterIncludeMedium) { $script:UserSettings.FilterIncludeMedium = [bool]$json.FilterIncludeMedium } else { $script:UserSettings.FilterIncludeMedium = $false }
+        if ($null -ne $json.FilterIncludeLow) { $script:UserSettings.FilterIncludeLow = [bool]$json.FilterIncludeLow } else { $script:UserSettings.FilterIncludeLow = $false }
         Write-Host "User settings loaded from $script:SettingsPath"
     }
+    # Sync filter script variables from UserSettings (used by Get-Top10Vulnerabilities etc.)
+    $script:FilterTopN = $script:UserSettings.FilterTopN
+    $script:FilterMinEPSS = $script:UserSettings.FilterMinEPSS
+    $script:FilterIncludeCritical = $script:UserSettings.FilterIncludeCritical
+    $script:FilterIncludeHigh = $script:UserSettings.FilterIncludeHigh
+    $script:FilterIncludeMedium = $script:UserSettings.FilterIncludeMedium
+    $script:FilterIncludeLow = $script:UserSettings.FilterIncludeLow
 }
 
 function Save-UserSettings {
@@ -320,11 +400,16 @@ function Load-ConnectSecureCredentials {
     if ([string]::IsNullOrEmpty($script:ConnectSecureCredentialsPath)) { return $null }
     $json = Get-JsonFile -Path $script:ConnectSecureCredentialsPath
     if (-not $json) { return $null }
+    # Trim all values - JSON/save can introduce trailing spaces, newlines, or BOM
+    $baseUrl = if ($json.BaseUrl) { [string]$json.BaseUrl.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $tenantName = if ($json.TenantName) { [string]$json.TenantName.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $clientId = if ($json.ClientId) { [string]$json.ClientId.Trim() -replace "`r`n|`r|`n", "" } else { "" }
+    $clientSecret = if ($json.ClientSecret) { [string]$json.ClientSecret.Trim() -replace "`r`n|`r|`n", "" } else { "" }
     return @{
-        BaseUrl = if ($json.BaseUrl) { $json.BaseUrl } else { "" }
-        TenantName = if ($json.TenantName) { $json.TenantName } else { "" }
-        ClientId = if ($json.ClientId) { $json.ClientId } else { "" }
-        ClientSecret = if ($json.ClientSecret) { $json.ClientSecret } else { "" }
+        BaseUrl = $baseUrl
+        TenantName = $tenantName
+        ClientId = $clientId
+        ClientSecret = $clientSecret
         CompanyId = if ($json.CompanyId) { [int]$json.CompanyId } else { 0 }
     }
 }
@@ -446,6 +531,22 @@ function Get-ConnectWiseUsernamesByHostname {
 $script:CompanyFolderMap = @{}
 
 function Load-CompanyFolderMap {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $clientData = Get-VScanMagicClientData
+            if ($clientData -and $clientData.CompanyFolderMap) {
+                $script:CompanyFolderMap = $clientData.CompanyFolderMap
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Company folder mappings loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load company folder mappings from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { $script:CompanyFolderMap = @{}; return }
     $json = Get-JsonFile -Path $script:CompanyFolderMapPath
     $script:CompanyFolderMap = @{}
@@ -457,6 +558,24 @@ function Load-CompanyFolderMap {
 }
 
 function Save-CompanyFolderMap {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            # Load existing client data to preserve RMIT Plus settings
+            $existingData = Get-VScanMagicClientData
+            $rmitPlusSettings = if ($existingData -and $existingData.RMITPlusSettings) { $existingData.RMITPlusSettings } else { @{} }
+            
+            if (Save-VScanMagicClientData -RMITPlusSettings $rmitPlusSettings -CompanyFolderMap $script:CompanyFolderMap) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Company folder mappings saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save company folder mappings to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CompanyFolderMapPath)) { return $false }
     return Set-JsonFile -Path $script:CompanyFolderMapPath -Object $script:CompanyFolderMap -Depth 2
 }
@@ -515,6 +634,34 @@ function Resolve-VulnerabilityScansSubpath {
     if ([string]::IsNullOrWhiteSpace($FolderName)) { return $FolderName }
     if ($FolderName -like "*Vulnerability Scans*") { return $FolderName }
     return Join-Path $FolderName "Network Documentation\Vulnerability Scans"
+}
+
+function Get-ReportsPathPartial {
+    <#
+    .SYNOPSIS
+    Returns a partial path for ticket instructions: company name (if provided) + Network Documentation onwards.
+    Technicians use this to locate the reports folder (e.g. ClientName\Network Documentation\Vulnerability Scans\2026 - Q1).
+    #>
+    param(
+        [string]$FullOutputPath,
+        [string]$CompanyName = $null
+    )
+    if ([string]::IsNullOrWhiteSpace($FullOutputPath)) { return $null }
+    $path = [System.IO.Path]::GetFullPath($FullOutputPath.Trim())
+    $ndIdx = $path.IndexOf("Network Documentation", [StringComparison]::OrdinalIgnoreCase)
+    $partial = $null
+    if ($ndIdx -ge 0) {
+        $partial = $path.Substring($ndIdx).Replace([System.IO.Path]::DirectorySeparatorChar, '\')
+    } else {
+        # Fallback: use last path segment (year-quarter folder, e.g. 2026 - Q1)
+        $parts = $path.Split([System.IO.Path]::DirectorySeparatorChar, [StringSplitOptions]::RemoveEmptyEntries)
+        if ($parts.Count -ge 1) { $partial = $parts[-1] }
+    }
+    if ([string]::IsNullOrWhiteSpace($partial)) { return $null }
+    if (-not [string]::IsNullOrWhiteSpace($CompanyName)) {
+        $partial = "$($CompanyName.Trim())\$partial"
+    }
+    return $partial
 }
 
 function Resolve-QuarterFolderName {
@@ -689,6 +836,12 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*ripple20*"
+            WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
+            TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*rippl20*"
             WordText = "Ripple20 vulnerabilities affect the Treck TCP/IP stack in millions of IoT and embedded devices. Remediation requires firmware updates from the device manufacturer. Identify affected devices via network scanning; check vendor security advisories (e.g., Intel, HP, Cisco, Schneider Electric). Where patching is not immediately possible, implement network segmentation and firewall rules to restrict access to vulnerable devices."
             TicketText = "- Ripple20 affects Treck TCP/IP stack in IoT/embedded devices`r`n  - Update firmware from device manufacturer`r`n  - Check vendor security advisories for patches`r`n  - Where patching not possible: network segmentation and firewall restrictions"
@@ -707,9 +860,141 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*VMware*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*vSphere*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*ESXi*"
+            WordText = "VMware ESXi and vSphere updates are released by Broadcom. Remediation requires downloading patches from the Broadcom Support Portal and applying via vSphere Lifecycle Manager (recommended) or by manually installing the offline bundle or ISO. Host reboot is required; migrate or shut down VMs before patching."
+            TicketText = "- Download patches from Broadcom Support Portal`r`n  - Apply via vSphere Lifecycle Manager (recommended) or manual offline bundle/ISO`r`n  - Host reboot required; migrate or shut down VMs before patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*vCenter*"
+            WordText = "VMware vCenter Server updates are released by Broadcom. Remediation requires downloading the patch ISO from the Broadcom Support Portal and applying via the vCenter Lifecycle Manager plug-in, GUI installer, or Virtual Appliance Management Interface (VAMI). Plan for maintenance; vCenter services restart during patching."
+            TicketText = "- Download patch ISO from Broadcom Support Portal`r`n  - Apply via vCenter Lifecycle Manager, GUI installer, or VAMI`r`n  - Plan for maintenance; vCenter services restart during patching"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*FortiGate*"
+            WordText = "FortiGate firewall firmware updates are available from the Fortinet Support Portal. For managed devices, use FortiCloud Fabric Manager (Management > Firmware) to download, backup, and install firmware. If automatic upgrade fails, apply manually via the web interface (System > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from Fortinet Support Portal`r`n  - Prefer FortiCloud Fabric Manager (Management > Firmware) for managed devices`r`n  - If automatic upgrade fails, apply manually via web interface (System > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Fortinet*"
+            WordText = "FortiGate firewall firmware updates are available from the Fortinet Support Portal. For managed devices, use FortiCloud Fabric Manager (Management > Firmware) to download, backup, and install firmware. If automatic upgrade fails, apply manually via the web interface (System > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from Fortinet Support Portal`r`n  - Prefer FortiCloud Fabric Manager (Management > Firmware) for managed devices`r`n  - If automatic upgrade fails, apply manually via web interface (System > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*SonicWall*"
+            WordText = "SonicWall firewall firmware updates are available from the MySonicWall portal. Download the firmware for your appliance model, then apply via the management interface (System > Settings > Firmware). Backup the configuration before updating. Plan a maintenance window; the device reboots during the update."
+            TicketText = "- Download firmware from MySonicWall portal`r`n  - Apply via management interface (System > Settings > Firmware)`r`n  - Backup configuration before updating`r`n  - Plan maintenance window; device reboots during update"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Framework*"
+            WordText = "Legacy .NET: .NET Framework (1.0 through 4.8) cannot be upgraded in-place to modern .NET (5, 6, 7, 8, 9). There is no direct upgrade path; attempting to switch runtimes without migration will likely break the application. Modern .NET is a different runtime with different APIs—some Framework APIs do not exist or behave differently. The older the Framework version (e.g. 3.5, 4.0), the more painful the migration. Migration is a real project: retarget the application to .NET 8 (LTS) or later, update deprecated or incompatible APIs, and test thoroughly. For MSP/client conversations: the main reason to migrate is that Framework versions go out of support and stop receiving security patches—not because end users will notice any difference."
+            TicketText = "- .NET Framework cannot be upgraded to modern .NET (5, 6, 7, 8, 9) without migration`r`n  - No direct upgrade path; switching runtimes without migration will likely break the app`r`n  - Modern .NET is a different runtime; many APIs differ or are missing`r`n  - Older Framework versions (3.5, 4.0) are more painful to migrate than 4.x`r`n  - Migration is a real project: retarget to .NET 8 (LTS), update APIs, test thoroughly`r`n  - Main driver: security patches (Framework goes out of support)—not user experience"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Core 2.*"
+            WordText = "Legacy .NET: .NET Core 2.x is out of support. Migration to modern .NET (5/6/7/8) is required. .NET Framework apps need a full migration project; apps already on .NET Core can usually retarget with minimal code changes. The main driver is security: out-of-support versions stop receiving patches."
+            TicketText = "- Legacy .NET Core 2.x: out of support`r`n  - Retarget to .NET 8 (LTS) or later`r`n  - .NET Core apps: usually minimal code changes`r`n  - Main driver: security patches; out-of-support versions receive none"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Core 3.*"
+            WordText = "Legacy .NET: .NET Core 3.x (including 3.1 LTS) has reached or is nearing end of support. Migration to modern .NET 8 (LTS) is recommended. Within the modern .NET lineage, retargeting is usually a project file edit and minimal code changes. The main driver is security: out-of-support versions stop receiving patches."
+            TicketText = "- Legacy .NET Core 3.x: end of support or nearing`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches; out-of-support versions receive none`r`n  - LTS versions (6, 8, 10) get 3 years support"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Core*"
+            WordText = "Legacy .NET: .NET Core (1.x, 2.x, 3.x) is the predecessor to modern .NET (5+). Core 2.x and 3.x are out of support. Migration to .NET 8 (LTS) is recommended. .NET Framework requires a full migration project; apps on Core can usually retarget with minimal changes. The main driver is security patches."
+            TicketText = "- Legacy .NET Core: out of support or nearing`r`n  - Retarget to .NET 8 (LTS) or later`r`n  - Main driver: security patches; out-of-support versions receive none`r`n  - .NET Framework migration is a real project; Core retarget is usually low friction"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime 5.*"
+            WordText = "Modern .NET: .NET 5 is out of support (18-month lifecycle). Retarget to .NET 8 (LTS) with minimal code changes. Within modern .NET, upgrades are largely drop-in. The main driver is support: LTS versions get 3 years; non-LTS get 18 months. End users typically notice nothing; value is security patches and lower infrastructure costs."
+            TicketText = "- Modern .NET 5: out of support`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches`r`n  - LTS versions get 3 years support; non-LTS get 18 months"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime 6.*"
+            WordText = "Modern .NET: .NET 6 (LTS) maintains strong backwards compatibility. Retargeting to .NET 8 (LTS) is usually a project file edit and minimal code changes. The main reason to upgrade is support lifecycle: LTS versions get 3 years; staying current ensures security patches. End users typically notice nothing; value is security patches and lower infrastructure costs."
+            TicketText = "- Modern .NET 6: largely drop-in upgradeable to .NET 8`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: support lifecycle and security patches`r`n  - LTS versions get 3 years support"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime 7.*"
+            WordText = "Modern .NET: .NET 7 (non-LTS) has an 18-month support window. Consider retargeting to .NET 8 (LTS) for 3-year support. Upgrades within modern .NET are largely drop-in. The main driver is support lifecycle and security patches. End users typically notice nothing."
+            TicketText = "- Modern .NET 7: non-LTS (18 months support)`r`n  - Consider retarget to .NET 8 (LTS) for 3-year support`r`n  - Largely drop-in upgradeable`r`n  - Main driver: support lifecycle and security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime 8.*"
+            WordText = "Modern .NET: .NET 8 (LTS) is the current long-term support release with 3 years of support. Keep current with patch updates. If a newer LTS (e.g. .NET 10) is available, retargeting is usually minimal. End users typically notice nothing; value is security patches and lower infrastructure costs."
+            TicketText = "- Modern .NET 8 (LTS): keep current with patch updates`r`n  - 3 years support`r`n  - Retarget to newer LTS when available with minimal changes`r`n  - Main driver: security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime 9.*"
+            WordText = "Modern .NET: .NET 9 (non-LTS) has an 18-month support window. For long-term support, consider .NET 8 (LTS) or plan for .NET 10 (LTS). Upgrades within modern .NET are largely drop-in. The main driver is support lifecycle and security patches."
+            TicketText = "- Modern .NET 9: non-LTS (18 months support)`r`n  - Consider .NET 8 (LTS) or .NET 10 (LTS) for longer support`r`n  - Largely drop-in upgradeable`r`n  - Main driver: support lifecycle and security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET Runtime*"
+            WordText = "Modern .NET: .NET 5+ (Runtime) maintains strong backwards compatibility. Retargeting between versions is usually a project file edit and minimal code changes. The main reason to upgrade is support: LTS versions (6, 8, 10) get 3 years; non-LTS get 18 months. End users typically notice nothing; for MSP/client conversations, the value is security patches and lower infrastructure costs—not user-facing improvements."
+            TicketText = "- Modern .NET: largely drop-in upgradeable between versions`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches (older versions go out of support)—not user experience`r`n  - LTS versions get 3 years support; non-LTS get 18 months"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET 5.*"
+            WordText = "Modern .NET: .NET 5 is out of support (18-month lifecycle). Retarget to .NET 8 (LTS) with minimal code changes. Within modern .NET, upgrades are largely drop-in. The main driver is support and security patches."
+            TicketText = "- Modern .NET 5: out of support`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET 6.*"
+            WordText = "Modern .NET: .NET 6 (LTS) is largely drop-in upgradeable to .NET 8 (LTS). Retargeting is usually a project file edit and minimal code changes. The main driver is support lifecycle and security patches. End users typically notice nothing."
+            TicketText = "- Modern .NET 6: largely drop-in upgradeable to .NET 8`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: support lifecycle and security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET 7.*"
+            WordText = "Modern .NET: .NET 7 (non-LTS) has an 18-month support window. Consider retargeting to .NET 8 (LTS) for 3-year support. Upgrades within modern .NET are largely drop-in."
+            TicketText = "- Modern .NET 7: non-LTS`r`n  - Consider retarget to .NET 8 (LTS) for 3-year support`r`n  - Largely drop-in upgradeable"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET 8.*"
+            WordText = "Modern .NET: .NET 8 (LTS) is the current long-term support release with 3 years of support. Keep current with patch updates. End users typically notice nothing; value is security patches and lower infrastructure costs."
+            TicketText = "- Modern .NET 8 (LTS): keep current with patch updates`r`n  - 3 years support`r`n  - Main driver: security patches"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET 9.*"
+            WordText = "Modern .NET: .NET 9 (non-LTS) has an 18-month support window. For long-term support, consider .NET 8 (LTS) or plan for .NET 10 (LTS). Upgrades within modern .NET are largely drop-in."
+            TicketText = "- Modern .NET 9: non-LTS (18 months support)`r`n  - Consider .NET 8 or .NET 10 (LTS) for longer support`r`n  - Largely drop-in upgradeable"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*"
-            WordText = "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
-            TicketText = "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
+            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If available via ConnectWise Automate/RMM, deploy updates via patch management or scripts; otherwise, manual updates may be required."
+            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via ConnectWise Automate/RMM if available; otherwise manual updates"
             IsDefault = $true
         }
     )
@@ -717,13 +1002,65 @@ function Get-DefaultRemediationRules {
 
 function Load-RemediationRules {
     $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
+    
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicRemediationRules -ErrorAction SilentlyContinue) {
+        try {
+            $sharedRules = Get-VScanMagicRemediationRules
+            if ($sharedRules -and $sharedRules.Count -gt 0) {
+                $script:RemediationRules = @()
+                foreach ($rule in $sharedRules) {
+                    $script:RemediationRules += @{ Pattern = $rule.Pattern; WordText = $rule.WordText; TicketText = $rule.TicketText; IsDefault = $rule.IsDefault }
+                }
+                # Merge in any new default rules not already in shared file
+                $defaults = Get-DefaultRemediationRules
+                $existingPatterns = @{}
+                foreach ($r in $script:RemediationRules) { $existingPatterns[$r.Pattern] = $true }
+                $added = 0
+                foreach ($d in $defaults) {
+                    if (-not $existingPatterns.ContainsKey($d.Pattern)) {
+                        $script:RemediationRules += @{ Pattern = $d.Pattern; WordText = $d.WordText; TicketText = $d.TicketText; IsDefault = $d.IsDefault }
+                        $existingPatterns[$d.Pattern] = $true
+                        $added++
+                    }
+                }
+                if ($added -gt 0) {
+                    Save-RemediationRules | Out-Null
+                    Write-Host "Added $added new default remediation rule(s) to shared storage"
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Remediation rules loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load remediation rules from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     $json = Get-JsonFile -Path $script:RemediationRulesPath
     if ($json -and $json.Count -gt 0) {
         $script:RemediationRules = @()
         foreach ($rule in $json) {
             $script:RemediationRules += @{ Pattern = $rule.Pattern; WordText = $rule.WordText; TicketText = $rule.TicketText; IsDefault = $rule.IsDefault }
         }
-        Write-Host "Remediation rules loaded from $script:RemediationRulesPath"
+        # Merge in any new default rules not already in user's file (e.g. VMware, vCenter added in newer versions)
+        $defaults = Get-DefaultRemediationRules
+        $existingPatterns = @{}
+        foreach ($r in $script:RemediationRules) { $existingPatterns[$r.Pattern] = $true }
+        $added = 0
+        foreach ($d in $defaults) {
+            if (-not $existingPatterns.ContainsKey($d.Pattern)) {
+                $script:RemediationRules += @{ Pattern = $d.Pattern; WordText = $d.WordText; TicketText = $d.TicketText; IsDefault = $d.IsDefault }
+                $existingPatterns[$d.Pattern] = $true
+                $added++
+            }
+        }
+        if ($added -gt 0 -and -not [string]::IsNullOrEmpty($script:RemediationRulesPath)) {
+            Save-RemediationRules | Out-Null
+            Write-Host "Added $added new default remediation rule(s)"
+        }
+        Write-Host "Remediation rules loaded from local storage: $script:RemediationRulesPath"
     } else {
         $script:RemediationRules = Get-DefaultRemediationRules
         if (-not [string]::IsNullOrEmpty($script:RemediationRulesPath)) { Save-RemediationRules }
@@ -731,13 +1068,28 @@ function Load-RemediationRules {
 }
 
 function Save-RemediationRules {
+    $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
+    
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicRemediationRules -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicRemediationRules -Rules $script:RemediationRules) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Remediation rules saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save remediation rules to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:RemediationRulesPath)) {
         Write-Warning "Remediation rules path is not set. Cannot save rules."
         return $false
     }
-    $script:CachedRemediationRulesForGuidance = $null  # invalidate cache
     if (Set-JsonFile -Path $script:RemediationRulesPath -Object $script:RemediationRules -Depth 10) {
-        Write-Host "Remediation rules saved to $script:RemediationRulesPath"
+        Write-Host "Remediation rules saved to local storage: $script:RemediationRulesPath"
         return $true
     }
     return $false
@@ -755,6 +1107,29 @@ function Get-DefaultCoveredSoftware {
 }
 
 function Load-CoveredSoftware {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicCoveredSoftware -ErrorAction SilentlyContinue) {
+        try {
+            $sharedCoveredSoftware = Get-VScanMagicCoveredSoftware
+            if ($sharedCoveredSoftware -and $sharedCoveredSoftware.Count -gt 0) {
+                $script:CoveredSoftware = @()
+                foreach ($item in $sharedCoveredSoftware) {
+                    $script:CoveredSoftware += @{
+                        Pattern = $item.Pattern
+                        IsPattern = $item.IsPattern
+                        Override = if ($null -ne $item.Override) { $item.Override } else { $false }
+                    }
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Covered software list loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load covered software from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if (-not [string]::IsNullOrEmpty($script:CoveredSoftwarePath) -and (Test-Path $script:CoveredSoftwarePath)) {
         try {
             $json = Get-Content $script:CoveredSoftwarePath -Raw | ConvertFrom-Json
@@ -766,7 +1141,7 @@ function Load-CoveredSoftware {
                     Override = if ($null -ne $item.Override) { $item.Override } else { $false }
                 }
             }
-            Write-Host "Covered software list loaded from $script:CoveredSoftwarePath"
+            Write-Host "Covered software list loaded from local storage: $script:CoveredSoftwarePath"
         } catch {
             Write-Warning "Could not load covered software list: $($_.Exception.Message). Using defaults."
             $script:CoveredSoftware = Get-DefaultCoveredSoftware
@@ -780,6 +1155,20 @@ function Load-CoveredSoftware {
 }
 
 function Save-CoveredSoftware {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicCoveredSoftware -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicCoveredSoftware -CoveredSoftware $script:CoveredSoftware) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "Covered software list saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save covered software to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:CoveredSoftwarePath)) {
         Write-Warning "Covered software path is not set. Cannot save list."
         return $false
@@ -792,7 +1181,7 @@ function Save-CoveredSoftware {
         }
 
         $script:CoveredSoftware | ConvertTo-Json -Depth 10 | Set-Content $script:CoveredSoftwarePath -Encoding UTF8
-        Write-Host "Covered software list saved to $script:CoveredSoftwarePath"
+        Write-Host "Covered software list saved to local storage: $script:CoveredSoftwarePath"
         return $true
     } catch {
         Write-Warning "Could not save covered software list: $($_.Exception.Message)"
@@ -803,6 +1192,28 @@ function Save-CoveredSoftware {
 # --- General Recommendations Persistence ---
 
 function Load-GeneralRecommendations {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Get-VScanMagicGeneralRecommendations -ErrorAction SilentlyContinue) {
+        try {
+            $sharedRecommendations = Get-VScanMagicGeneralRecommendations
+            if ($sharedRecommendations -and $sharedRecommendations.Count -gt 0) {
+                $script:GeneralRecommendations = @()
+                foreach ($rec in $sharedRecommendations) {
+                    $script:GeneralRecommendations += @{
+                        Product = $rec.Product
+                        Recommendations = $rec.Recommendations
+                    }
+                }
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "General recommendations loaded from shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return
+            }
+        } catch {
+            Write-Warning "Could not load general recommendations from shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if (-not [string]::IsNullOrEmpty($script:GeneralRecommendationsPath) -and (Test-Path $script:GeneralRecommendationsPath)) {
         try {
             $json = Get-Content $script:GeneralRecommendationsPath -Raw | ConvertFrom-Json
@@ -813,7 +1224,7 @@ function Load-GeneralRecommendations {
                     Recommendations = $rec.Recommendations
                 }
             }
-            Write-Host "General recommendations loaded from $script:GeneralRecommendationsPath"
+            Write-Host "General recommendations loaded from local storage: $script:GeneralRecommendationsPath"
         } catch {
             Write-Warning "Could not load general recommendations: $($_.Exception.Message). Using empty list."
             $script:GeneralRecommendations = @()
@@ -826,6 +1237,20 @@ function Load-GeneralRecommendations {
 }
 
 function Save-GeneralRecommendations {
+    # Try to use MemberberryIntegration module if available
+    if (Get-Command Save-VScanMagicGeneralRecommendations -ErrorAction SilentlyContinue) {
+        try {
+            if (Save-VScanMagicGeneralRecommendations -GeneralRecommendations $script:GeneralRecommendations) {
+                $storageInfo = Get-VScanMagicStorageInfo
+                Write-Host "General recommendations saved to shared storage: $($storageInfo.DataPath)" -ForegroundColor Green
+                return $true
+            }
+        } catch {
+            Write-Warning "Could not save general recommendations to shared storage: $($_.Exception.Message). Falling back to local storage."
+        }
+    }
+    
+    # Fallback to local storage (backward compatibility)
     if ([string]::IsNullOrEmpty($script:GeneralRecommendationsPath)) {
         Write-Warning "General recommendations path is not set. Cannot save recommendations."
         return $false
@@ -838,7 +1263,7 @@ function Save-GeneralRecommendations {
         }
 
         $script:GeneralRecommendations | ConvertTo-Json -Depth 10 | Set-Content $script:GeneralRecommendationsPath -Encoding UTF8
-        Write-Host "General recommendations saved to $script:GeneralRecommendationsPath"
+        Write-Host "General recommendations saved to local storage: $script:GeneralRecommendationsPath"
         return $true
     } catch {
         Write-Warning "Could not save general recommendations: $($_.Exception.Message)"
@@ -1017,6 +1442,23 @@ $script:FirstPartyVendorPatterns = @(
     '*VMware*', '*vSphere*', '*VMware Tools*'
 )
 
+function Get-TimeEstimateGroupKey {
+    <#
+    .SYNOPSIS
+    Returns a group key for time estimate lookups. Visual C++ variants and .NET variants are grouped;
+    other products use the product name as-is.
+    #>
+    param([string]$ProductName)
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $ProductName }
+    $p = $ProductName.Trim()
+    if ($p -like "*Visual C++*" -or $p -like "*Visual C#*") { return "Microsoft Visual C++" }
+    if ($p -like "*\.NET Framework*" -or $p -match "Microsoft \.NET Framework") { return "Microsoft .NET Framework" }
+    if ($p -like "*\.NET Core*" -or $p -match "Microsoft \.NET Core") { return "Microsoft .NET Core" }
+    if ($p -like "*\.NET Runtime*" -or $p -like "*\.NET 5*" -or $p -like "*\.NET 6*" -or $p -like "*\.NET 7*" -or $p -like "*\.NET 8*" -or $p -like "*\.NET 9*" -or $p -like "*\.NET 10*") { return "Microsoft .NET Runtime" }
+    if ($p -match "Microsoft \.NET") { return "Microsoft .NET" }
+    return $p
+}
+
 function Test-IsFirstPartyVendor {
     param(
         [string]$ProductName
@@ -1026,35 +1468,6 @@ function Test-IsFirstPartyVendor {
     foreach ($pattern in $script:FirstPartyVendorPatterns) {
         if ($p -like $pattern) { return $true }
     }
-    return $false
-}
-
-function Test-IsCoveredSoftware {
-    param(
-        [string]$ProductName
-    )
-    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
-
-    if ($null -eq $script:CoveredSoftware -or $script:CoveredSoftware.Count -eq 0) {
-        Load-CoveredSoftware
-    }
-
-    foreach ($item in $script:CoveredSoftware) {
-        if ($item.Override) {
-            continue  # Skip overridden items
-        }
-
-        if ($item.IsPattern) {
-            if ($ProductName -like $item.Pattern) {
-                return $true
-            }
-        } else {
-            if ($ProductName -eq $item.Pattern) {
-                return $true
-            }
-        }
-    }
-
     return $false
 }
 
@@ -1229,6 +1642,17 @@ function Test-FileLocked {
     }
 }
 
+function Test-IsPlaceholderFixText {
+    <#
+    .SYNOPSIS
+    Returns $true if the Fix/Solution text is a placeholder (None, [None], N/A) with no real remediation.
+    #>
+    param([string]$RawFix)
+    if ([string]::IsNullOrWhiteSpace($RawFix)) { return $true }
+    $t = $RawFix.Trim()
+    return $t -match '^\s*(\[?\s*)?(None|N/A|nil)\s*(\]?\s*)?$' -or $t -eq "['None']" -or $t -eq '["None"]'
+}
+
 function ConvertTo-ReadableFixText {
     <#
     .SYNOPSIS
@@ -1237,6 +1661,7 @@ function ConvertTo-ReadableFixText {
     #>
     param([string]$RawFix)
     if ([string]::IsNullOrWhiteSpace($RawFix)) { return $RawFix }
+    if (Test-IsPlaceholderFixText -RawFix $RawFix) { return '' }
     $parts = [System.Collections.ArrayList]::new()
     $matches = [regex]::Matches($RawFix, "'([^']*)'")
     foreach ($m in $matches) {
@@ -1278,7 +1703,8 @@ function Invoke-AIImproveRemediationText {
     param(
         [string]$Text,
         [string]$ProductName = "",
-        [string]$CveIdList = ""
+        [string]$CveIdList = "",
+        [string]$HostContext = ""
     )
 
     if ([string]::IsNullOrWhiteSpace($Text)) {
@@ -1287,15 +1713,22 @@ function Invoke-AIImproveRemediationText {
 
     $cleaned = ConvertTo-ReadableFixText -RawFix $Text
     $vulnContext = ""
-    if (-not [string]::IsNullOrWhiteSpace($ProductName) -or -not [string]::IsNullOrWhiteSpace($CveIdList)) {
-        $parts = @()
-        if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
-        if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product: $ProductName" }
-        $vulnContext = ($parts -join "`n") + "`n`n"
+    $parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
+    if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product/OS: $ProductName" }
+    if (-not [string]::IsNullOrWhiteSpace($HostContext)) { $parts += "Affected hosts: $HostContext" }
+    if ($parts.Count -gt 0) { $vulnContext = ($parts -join "`n") + "`n`n" }
+
+    $cveOnlyHint = ""
+    $trimmed = $cleaned.Trim()
+    if ($trimmed -match '^CVE-\d{4}-\d+' -and $trimmed.Length -lt 120) {
+        $cveOnlyHint = "IMPORTANT: The input is only a CVE ID (or minimal text). First determine what the device or software is (use Product/OS and Affected hosts). Remediation often requires reviewing the manufacturer's security advisories and vulnerability data, checking for firmware updates, and considering configuration changes (e.g. mitigating controls, network segmentation). Provide platform-appropriate guidance: Windows Update KB for Windows hosts, firmware updates for printers/IoT/embedded devices, vendor patches for specific software. Match the fix to the host/OS type.`n`n"
     }
+
     $prompt = @"
 You are rephrasing SPECIFIC remediation steps for ONE vulnerability. The text below contains the exact fix (e.g. KB numbers, version updates) for a particular CVE or product.
 
+$cveOnlyHint
 RULES:
 - Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
 - Do NOT output things like "Prioritize remediation", "Patch management", "Vulnerability scanning", "Documentation" - those are generic.
@@ -1303,7 +1736,8 @@ RULES:
 - If the input is already specific (e.g. "Apply KB5077181"), just make it slightly more readable - do not expand into generic guidance.
 - Output ONLY the rephrased text. No preamble, no explanation, no bullet lists of general practices.
 - NEVER respond with "I don't have specific information" or similar. If CVE IDs are provided or the vulnerability is known (e.g. Ripple20/rippl20, CVE-2020-11898, CVE-2020-11910), provide the best available remediation guidance for that specific vulnerability.
-- When CVE IDs are given, use them to provide CVE-specific remediation (patches, KB numbers, version updates, workarounds from NVD/CERT advisories).
+- When CVE IDs are given: determine the device/software identity, review manufacturer vulnerability data and security advisories, check for firmware updates, consider configuration mitigations. Provide CVE-specific remediation (patches, KB numbers, version updates, workarounds). When input is only a CVE, use Product/OS and host context to tailor the fix (Windows vs Linux vs firmware vs IoT).
+- CRITICAL: The remediation MUST match the Product/OS above. If Product is Windows 11 or Windows Server, output ONLY Windows Update KB numbers or build numbers - NEVER Chrome, Firefox, or other software version numbers. If Product is Google Chrome, output ONLY Chrome version numbers. Do NOT mix product types.
 - Common vulnerabilities: rippl20-icmp = Ripple20 Treck TCP/IP ICMP flaws; remediate via firmware updates from manufacturer, network segmentation where patching not possible.
 
 $vulnContext
@@ -1345,7 +1779,7 @@ Input to rephrase:
         for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
             try {
                 $reqBody = @{
-                    model = "claude-3-haiku-20240307"
+                    model = "claude-haiku-4-5-20251001"
                     max_tokens = 1024
                     messages = @(
                         @{ role = "user"; content = "$prompt`n`n---`n`n$cleaned" }
@@ -1357,7 +1791,17 @@ Input to rephrase:
                     "Content-Type" = "application/json"
                 }
                 $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
-                $improved = $resp.content[0].text.Trim()
+                $content = @($resp.content)
+                $improved = ''
+                foreach ($block in $content) {
+                    if ($block -and $block.type -eq 'text' -and $null -ne $block.text) {
+                        $improved += [string]$block.text
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($improved) -and $content.Count -gt 0 -and $content[0] -and $null -ne $content[0].text) {
+                    $improved = [string]$content[0].text
+                }
+                $improved = if ($improved) { $improved.Trim() } else { '' }
                 if (-not [string]::IsNullOrWhiteSpace($improved)) {
                     if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
                         $fallback = Get-RemediationGuidance -ProductName $ProductName -OutputType 'Word'
@@ -1394,7 +1838,7 @@ Input to rephrase:
                 "Authorization" = "Bearer $key"
                 "Content-Type" = "application/json"
             }
-            $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
+                $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 30
             $improved = $resp.choices[0].message.content.Trim()
             if (-not [string]::IsNullOrWhiteSpace($improved)) {
                 if ($improved -match "don't have specific information|do not have specific information|don't have information|no specific information") {
@@ -1410,4 +1854,188 @@ Input to rephrase:
 
     Write-Log "No AI API key configured or all attempts failed. Configure AI keys in Settings." -Level Warning
     return $Text
+}
+
+function Invoke-AIImproveRemediationTextBatch {
+    <#
+    .SYNOPSIS
+    Rephrases multiple vulnerability remediation texts via AI API calls.
+    Processes in chunks to avoid rate limits; retries on 429.
+    .PARAMETER Items
+    Array of hashtables: @{ Text, ProductName, CveIdList }
+    .OUTPUTS
+    Array of improved strings (same order as input). Falls back to original text on parse/API failure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Items
+    )
+
+    if ($null -eq $Items -or $Items.Count -eq 0) {
+        return @()
+    }
+    if ($Items.Count -eq 1) {
+        $i = $Items[0]
+        $hostCtx = if ($i.HostContext) { $i.HostContext } else { "" }
+        return @(Invoke-AIImproveRemediationText -Text $i.Text -ProductName $i.ProductName -CveIdList $i.CveIdList -HostContext $hostCtx)
+    }
+
+    $script:AIBatch429Count = 0
+    $delim = "###RESULT###"
+    $chunkSize = $script:Config.AIBatchChunkSize
+    $chunkDelay = $script:Config.AIBatchChunkDelaySeconds
+    $rulesHeader = @"
+You are rephrasing SPECIFIC remediation steps for MULTIPLE vulnerabilities. Below are N items. For EACH item, output the improved text, then the exact delimiter '$delim' (including the delimiter line).
+
+RULES (apply to EACH item):
+- Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
+- Do NOT output things like 'Prioritize remediation', 'Patch management', 'Vulnerability scanning' - those are generic.
+- Output ONLY a clear, professional rewrite of the SPECIFIC fix. One short paragraph or a few sentences max.
+- If the input is already specific (e.g. 'Apply KB5077181'), just make it slightly more readable.
+- NEVER respond with 'I don't have specific information'. Use CVE IDs to provide CVE-specific remediation when given.
+- When investigating CVEs: determine what the device/software is (Product/OS, Affected hosts), review manufacturer security advisories and vulnerability data, check for firmware updates, consider configuration mitigations. Provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT/embedded, vendor patch for software).
+- CRITICAL: Remediation MUST match the Product/OS. Windows 11/Server = Windows KB numbers only, never Chrome/Firefox versions. Google Chrome = Chrome versions only. Do NOT mix product types.
+- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates from manufacturer, network segmentation.
+
+OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 2', or numbering), then a line with exactly: $delim
+
+--- INPUT ITEMS ---
+"@
+
+    $tryApiChunk = {
+        param($key, $provider, $prompt, $maxTokens)
+        if ([string]::IsNullOrWhiteSpace($key)) { return $null }
+        try {
+            if ($provider -eq 'ChatGPT' -or $provider -eq 'Copilot') {
+                $reqBody = @{ model = "gpt-4o-mini"; messages = @( @{ role = "user"; content = $prompt } ); max_tokens = $maxTokens } | ConvertTo-Json -Depth 5
+                $headers = @{ "Authorization" = "Bearer $key"; "Content-Type" = "application/json" }
+                $resp = Invoke-RestMethod -Uri "https://api.openai.com/v1/chat/completions" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
+                return $resp.choices[0].message.content.Trim()
+            }
+            if ($provider -eq 'Claude') {
+                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, $maxTokens); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
+                $headers = @{ "x-api-key" = $key; "anthropic-version" = "2023-06-01"; "Content-Type" = "application/json" }
+                $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
+                $content = @($resp.content)
+                $rawText = ''
+                foreach ($block in $content) {
+                    if ($block -and $block.type -eq 'text' -and $null -ne $block.text) { $rawText += [string]$block.text }
+                }
+                if ([string]::IsNullOrWhiteSpace($rawText) -and $content.Count -gt 0 -and $content[0] -and $null -ne $content[0].text) {
+                    $rawText = [string]$content[0].text
+                }
+                if ($rawText) { return $rawText.Trim() }
+                return ''
+            }
+        } catch {
+            $errDetail = $_.Exception.Message
+            if ($_.ErrorDetails.Message) { $errDetail += " | " + $_.ErrorDetails.Message }
+            Write-Log "$provider batch AI failed: $errDetail" -Level Warning
+            throw
+        }
+        return $null
+    }
+
+    $allResults = @()
+    $chunks = @()
+    for ($i = 0; $i -lt $Items.Count; $i += $chunkSize) {
+        $end = [Math]::Min($i + $chunkSize, $Items.Count)
+        $chunks += ,@($Items[$i..($end - 1)])
+    }
+
+    for ($c = 0; $c -lt $chunks.Count; $c++) {
+        $chunk = $chunks[$c]
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine($rulesHeader)
+        for ($idx = 0; $idx -lt $chunk.Count; $idx++) {
+            $i = $chunk[$idx]
+            $textToUse = $i.Text
+            if ($textToUse.Length -le 2 -and -not [string]::IsNullOrWhiteSpace($i.ProductName)) {
+                $fallback = Get-RemediationGuidance -ProductName $i.ProductName -OutputType 'Word'
+                if (-not [string]::IsNullOrWhiteSpace($fallback)) { $textToUse = $fallback }
+            }
+            $cleaned = ConvertTo-ReadableFixText -RawFix $textToUse
+            [void]$sb.AppendLine("")
+            [void]$sb.AppendLine("--- ITEM $($idx + 1) ---")
+            if (-not [string]::IsNullOrWhiteSpace($i.CveIdList)) { [void]$sb.AppendLine("CVE ID(s): $($i.CveIdList)") }
+            if (-not [string]::IsNullOrWhiteSpace($i.ProductName)) { [void]$sb.AppendLine("Product/OS: $($i.ProductName)") }
+            if (-not [string]::IsNullOrWhiteSpace($i.HostContext)) { [void]$sb.AppendLine("Affected hosts: $($i.HostContext)") }
+            [void]$sb.AppendLine("Text to rephrase: $cleaned")
+        }
+        $chunkPrompt = $sb.ToString()
+        $chunkMaxTokens = [Math]::Min(8192, 1024 + ($chunk.Count * 400))
+
+        $raw = $null
+        $claudeRetries = 1
+        $script:AIBatch429Count = if ($null -eq $script:AIBatch429Count) { 0 } else { $script:AIBatch429Count }
+        if ($script:AIBatch429Count -ge 3) {
+            Write-Log "AI batch: too many 429s ($($script:AIBatch429Count)). Skipping remaining chunks. Using original text. Try again later or use Improve Selected for fewer items." -Level Warning
+            try {
+                [System.Windows.Forms.MessageBox]::Show("Rate limit exceeded (429). $($allResults.Count) items improved; remaining use original text.`n`nTry again later or use Improve Selected for fewer items.", "AI Rate Limit", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            } catch { }
+            $allResults += @($chunk | ForEach-Object { $_.Text })
+            $remaining = $Items.Count - $allResults.Count
+            for ($r = 0; $r -lt $remaining; $r++) {
+                $idx = $allResults.Count + $r
+                if ($idx -lt $Items.Count) { $allResults += $Items[$idx].Text }
+            }
+            return $allResults
+        }
+        foreach ($provider in @('ChatGPT','Claude','Copilot')) {
+            $key = if ($provider -eq 'ChatGPT') { $script:UserSettings.AIApiKeyChatGPT } elseif ($provider -eq 'Claude') { $script:UserSettings.AIApiKeyClaude } else { $script:UserSettings.AIApiKeyCopilot }
+            if ([string]::IsNullOrWhiteSpace($key)) { continue }
+            for ($attempt = 0; $attempt -le $claudeRetries; $attempt++) {
+                try {
+                    $raw = & $tryApiChunk $key $provider $chunkPrompt $chunkMaxTokens
+                    $script:AIBatch429Count = 0
+                    break
+                } catch {
+                    $is429 = $_.Exception.Message -match '429|Too Many Requests'
+                    if ($is429) {
+                        $script:AIBatch429Count++
+                        if ($attempt -lt $claudeRetries) {
+                            $waitSec = 30
+                            Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
+                            for ($w = 0; $w -lt $waitSec; $w++) {
+                                Start-Sleep -Seconds 1
+                                try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+                            }
+                        } else {
+                            $raw = $null
+                            break
+                        }
+                    } else {
+                        $raw = $null
+                        break
+                    }
+                }
+            }
+            if ($raw) { break }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-Log "Batch AI chunk $($c + 1)/$($chunks.Count): all providers failed. Using original text for chunk." -Level Warning
+            $allResults += @($chunk | ForEach-Object { $_.Text })
+        } else {
+            $parts = $raw -split [regex]::Escape($delim)
+            $itemPrefix = '^\s*(?:\*\*)?\s*ITEM\s+\d+\s*:?\s*\r?\n?\s*'
+            for ($idx = 0; $idx -lt $chunk.Count; $idx++) {
+                $improved = if ($idx -lt $parts.Count) { $parts[$idx].Trim() } else { $null }
+                if ($improved -and $improved -match $itemPrefix) { $improved = $improved -replace $itemPrefix, '' }
+                if ([string]::IsNullOrWhiteSpace($improved) -or $improved -match "don't have specific information|do not have specific information") {
+                    $fallback = Get-RemediationGuidance -ProductName $chunk[$idx].ProductName -OutputType 'Word'
+                    $improved = if (-not [string]::IsNullOrWhiteSpace($fallback)) { $fallback } else { $chunk[$idx].Text }
+                }
+                $allResults += $improved
+            }
+        }
+
+        if ($c -lt $chunks.Count - 1 -and $chunkDelay -gt 0) {
+            for ($d = 0; $d -lt $chunkDelay; $d++) {
+                Start-Sleep -Seconds 1
+                try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+            }
+        }
+    }
+    return $allResults
 }

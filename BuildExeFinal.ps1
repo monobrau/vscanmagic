@@ -15,8 +15,7 @@ if (-not (Test-Path $modulePath)) {
     Save-Module -Name ps2exe -Path $modulesDir -Repository PSGallery -Force
 }
 
-# Import the module properly
-$modulePath = Join-Path $modulesDir "ps2exe\1.0.17\ps2exe.psm1"
+# Import the module
 if (Test-Path $modulePath) {
     Write-Host "Loading module from: $modulePath"
     Import-Module $modulePath -Force
@@ -42,11 +41,11 @@ if (Test-Path $modulePath) {
         $params = @{
             inputFile = $inputScript
             outputFile = $outputExe
-            title = "VScanMagic v4.0.8"
+            title = "VScanMagic v4.0.10"
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "4.0.8"
+            version = "4.0.10"
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         

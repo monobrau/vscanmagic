@@ -1,0 +1,12 @@
+---
+description: Test scripts must be created in the archive folder
+alwaysApply: true
+---
+
+# Test Scripts Location
+
+Always create test scripts in the `archive/` folder. The archive folder is gitignored and contains:
+- Test scripts (e.g. `archive/Test-*.ps1`, `archive/company-review-tests/`)
+- One-off utilities and reference scripts
+
+Do not create test scripts in the project root or other tracked directories.

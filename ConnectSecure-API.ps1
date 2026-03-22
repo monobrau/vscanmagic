@@ -77,8 +77,7 @@ function Test-RateLimit {
     
     # Remove old entries outside the time window
     $script:ConnectSecureConfig.RequestHistory = $script:ConnectSecureConfig.RequestHistory | Where-Object { $_ -gt $windowStart }
-    
-    $recentRequests = ($script:ConnectSecureConfig.RequestHistory | Where-Object { $_ -gt $windowStart }).Count
+    $recentRequests = $script:ConnectSecureConfig.RequestHistory.Count
     
     if ($recentRequests -ge $MaxRequests) {
         return $false
@@ -369,6 +368,18 @@ function Connect-ConnectSecureAPI {
                 Write-CSApiLog "API returned error message: $errorMsg" -Level Warning
                 Write-CSApiLog "This is different from Failed to authorize - credentials appear correct but API returned an error." -Level Warning
                 
+                # "Failed to tenant info" - tenant lookup failed on ConnectSecure side
+                if ($errorMsg -eq "Failed to tenant info") {
+                    Write-CSApiLog "" -Level Warning
+                    Write-CSApiLog "TENANT LOOKUP FAILED - ConnectSecure could not find your tenant." -Level Warning
+                    Write-CSApiLog "  1. Base URL: Use the exact URL from API Key page. Try tenant URL if pod fails: https://YOURTENANT.myconnectsecure.com" -Level Warning
+                    Write-CSApiLog "  2. Tenant Name: Must match exactly - case-sensitive, no spaces. Use the subdomain you use to log in." -Level Warning
+                    Write-CSApiLog "  3. Pod change: If your tenant moved pods, the old URL may no longer work. Re-copy from ConnectSecure portal." -Level Warning
+                    Write-CSApiLog "  4. Re-save: Open API Settings, re-enter credentials (avoid copy-paste artifacts), Save, then Test." -Level Warning
+                    Write-CSApiLog "  5. Contact ConnectSecure support if settings are correct - this can be a server-side tenant config issue." -Level Warning
+                    Write-CSApiLog "" -Level Warning
+                }
+                
                 # "Failed to create customer" is unexpected for a simple auth test
                 if ($errorMsg -eq "Failed to create customer") {
                     Write-CSApiLog "" -Level Warning
@@ -654,6 +665,8 @@ $script:VulnEndpoints = @{
     'application'  = '/r/report_queries/vulnerabilities_details'
     'external'     = '/r/report_queries/external_asset_vulnerabilities'
     'suppressed'   = '/r/report_queries/vulnerabilities_details_suppressed'
+    'registry'     = '/r/report_queries/registry_problems_remediation'
+    'network'      = '/r/report_queries/application_vulnerabilities_net'
 }
 # Max records to fetch (0 = unlimited). Stops after this - ~5 pages at 5k each. Set higher if you need more.
 $script:VulnMaxRecords = 25000
@@ -690,13 +703,13 @@ function Invoke-ConnectSecureVulnerabilityQuery {
     .SYNOPSIS
     Shared implementation for fetching vulnerability data from report_queries endpoints.
     .PARAMETER VulnType
-    One of: application, external, suppressed
+    One of: application, external, suppressed, registry, network
     .PARAMETER MaxRecords
     Override script VulnMaxRecords for this call. 0 = use script default.
     #>
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('application', 'external', 'suppressed')]
+        [ValidateSet('application', 'external', 'suppressed', 'registry', 'network')]
         [string]$VulnType,
         [int]$CompanyId = 0,
         [int]$Limit = 5000,
@@ -704,7 +717,9 @@ function Invoke-ConnectSecureVulnerabilityQuery {
         [string]$Filter = "",
         [string]$Sort = 'severity.keyword:desc',
         [bool]$FetchAll = $false,
-        [int]$MaxRecords = -1
+        [int]$MaxRecords = -1,
+        [switch]$RegistryRemediatedOnly,
+        [switch]$RegistrySuppressedOnly
     )
 
     $endpoint = $script:VulnEndpoints[$VulnType]
@@ -712,6 +727,9 @@ function Invoke-ConnectSecureVulnerabilityQuery {
         'application' { 'vulnerabilities' }
         'external'    { 'external vulnerabilities' }
         'suppressed'  { 'suppressed vulnerabilities' }
+        'registry'    { 'registry vulnerabilities' }
+        'network'     { 'network vulnerabilities' }
+        default       { 'vulnerabilities' }
     }
 
     Write-CSApiLog ('Fetching ' + $label + ' (CompanyId: ' + $CompanyId + ', Limit: ' + $Limit + ', Skip: ' + $Skip + ')...') -Level Info
@@ -722,16 +740,32 @@ function Invoke-ConnectSecureVulnerabilityQuery {
     $maxPages = 200  # Safety: 200 x 5000 = 1M records max
 
     do {
-        $queryParams = @{
-            limit = $pageSize
-            skip  = $currentSkip
-            sort  = $Sort
-        }
-
-        if ($CompanyId -gt 0) {
-            $queryParams.company_id = $CompanyId
-            if ($script:UseConditionForCompanyFilter) {
-                $queryParams.condition = 'company_ids:' + $CompanyId
+        $queryParams = @{ limit = $pageSize; skip = $currentSkip }
+        # Registry and network use condition+order_by (per portal capture); others use company_id+sort
+        if ($VulnType -eq 'registry') {
+            $queryParams.order_by = 'severity asc'
+            if ($CompanyId -gt 0) {
+                $registryClause = if ($RegistryRemediatedOnly) { 'is_remediated = true' }
+                    elseif ($RegistrySuppressedOnly) { 'is_suppressed=true and is_remediated = false' }
+                    else { 'is_suppressed=false and is_remediated = false' }
+                $queryParams.condition = "company_id=$CompanyId and $registryClause"
+            }
+        } elseif ($VulnType -eq 'network') {
+            $queryParams.order_by = 'affected_assets desc'
+            # API requires condition to return network vulns; without it the report can be blank
+            $netCondition = "software_type='networksoftware' and unconfirmed = 'false'"
+            if ($CompanyId -gt 0) {
+                $queryParams.condition = "company_id=$CompanyId and $netCondition"
+            } else {
+                $queryParams.condition = $netCondition
+            }
+        } else {
+            $queryParams.sort = $Sort
+            if ($CompanyId -gt 0) {
+                $queryParams.company_id = $CompanyId
+                if ($script:UseConditionForCompanyFilter) {
+                    $queryParams.condition = 'company_ids:' + $CompanyId
+                }
             }
         }
         if (-not [string]::IsNullOrWhiteSpace($Filter)) { $queryParams.filter = $Filter }
@@ -739,17 +773,26 @@ function Invoke-ConnectSecureVulnerabilityQuery {
         try {
             $response = Invoke-ConnectSecureRequest -Endpoint $endpoint -QueryParameters $queryParams
 
+            # Extract data: standard { status, data } or Elasticsearch { hits: { hits: [...] } }
+            $pageData = $null
             if ($response.status -and $response.data) {
-                $allData += $response.data
+                $pageData = $response.data
+            } elseif ($response.hits -and $response.hits.hits) {
+                $pageData = $response.hits.hits | ForEach-Object { if ($_._source) { $_._source } else { $_ } }
+                Write-CSApiLog ('API returned Elasticsearch format: extracted ' + $pageData.Count + ' rows') -Level Info
+            }
+
+            if ($pageData -and $pageData.Count -gt 0) {
+                $allData += $pageData
                 $pageNum = [Math]::Floor($currentSkip / $pageSize) + 1
-                Write-CSApiLog ('Page ' + $pageNum + ' : retrieved ' + $response.data.Count + ' ' + $label + ' (Total: ' + $allData.Count + ')') -Level Info
+                Write-CSApiLog ('Page ' + $pageNum + ' : retrieved ' + $pageData.Count + ' ' + $label + ' (Total: ' + $allData.Count + ')') -Level Info
 
                 $maxRec = if ($MaxRecords -ge 0) { $MaxRecords } else { $script:VulnMaxRecords }
                 if ($maxRec -gt 0 -and $allData.Count -ge $maxRec) {
                     Write-CSApiLog ('Reached record limit (' + $maxRec + ').') -Level Warning
                     break
                 }
-                if ($FetchAll -eq $true -and $response.data.Count -eq $pageSize) {
+                if ($FetchAll -eq $true -and $pageData.Count -eq $pageSize) {
                     if ($pageNum -ge $maxPages) {
                         Write-CSApiLog ('Reached safety limit ' + $maxPages + ' pages. Use higher Limit or paginate manually for more.') -Level Warning
                         break
@@ -933,6 +976,66 @@ function Get-ConnectSecureSuppressedVulnerabilities {
     return $data
 }
 
+function Get-ConnectSecureRegistryVulnerabilities {
+    <#
+    .SYNOPSIS
+    Fetches registry/misconfiguration vulnerabilities from registry_problems_remediation.
+    Returns raw API rows; use ConvertFrom-RegistryProblemsFormat for 13-column Excel export.
+    .PARAMETER RemediatedOnly
+    When set, fetches remediated issues (is_remediated = true). Default fetches open issues (is_remediated = false).
+    .PARAMETER SuppressedOnly
+    When set, fetches suppressed issues (is_suppressed=true and is_remediated = false).
+    #>
+    param(
+        [int]$CompanyId = 0,
+        [int]$Limit = 5000,
+        [int]$Skip = 0,
+        [string]$Filter = "",
+        [string]$Sort = 'severity.keyword:desc',
+        [switch]$FetchAll,
+        [switch]$RemediatedOnly,
+        [switch]$SuppressedOnly
+    )
+    $doFetchAll = if ($FetchAll) { $true } else { $false }
+    $data = Invoke-ConnectSecureVulnerabilityQuery -VulnType 'registry' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $Filter -Sort $Sort -FetchAll $doFetchAll -RegistryRemediatedOnly:$RemediatedOnly -RegistrySuppressedOnly:$SuppressedOnly
+    if ($CompanyId -gt 0 -and $data -and $data.Count -gt 0) {
+        $before = $data.Count
+        $cidStr = [string]$CompanyId
+        $data = $data | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($data.Count -lt $before) {
+            Write-CSApiLog ('Filtered registry to company ' + $CompanyId + ': ' + $before + ' -> ' + $data.Count + ' rows') -Level Info
+        }
+    }
+    return $data
+}
+
+function Get-ConnectSecureNetworkVulnerabilities {
+    <#
+    .SYNOPSIS
+    Fetches network-scoped application vulnerabilities from application_vulnerabilities_net.
+    Returns software-level aggregated data (no per-asset host_name/ip).
+    #>
+    param(
+        [int]$CompanyId = 0,
+        [int]$Limit = 5000,
+        [int]$Skip = 0,
+        [string]$Filter = "",
+        [string]$Sort = 'severity.keyword:desc',
+        [switch]$FetchAll
+    )
+    $doFetchAll = if ($FetchAll) { $true } else { $false }
+    $data = Invoke-ConnectSecureVulnerabilityQuery -VulnType 'network' -CompanyId $CompanyId -Limit $Limit -Skip $Skip -Filter $Filter -Sort $Sort -FetchAll $doFetchAll
+    if ($CompanyId -gt 0 -and $data -and $data.Count -gt 0) {
+        $before = $data.Count
+        $cidStr = [string]$CompanyId
+        $data = $data | Where-Object { Test-RowMatchesCompanyId -Row $_ -CompanyIdStr $cidStr }
+        if ($data.Count -lt $before) {
+            Write-CSApiLog ('Filtered network to company ' + $CompanyId + ': ' + $before + ' -> ' + $data.Count + ' rows') -Level Info
+        }
+    }
+    return $data
+}
+
 function Get-ConnectSecureAssets {
     <#
     .SYNOPSIS
@@ -959,12 +1062,18 @@ function Get-ConnectSecureAssets {
     $pageSize = [Math]::Max(100, [Math]::Min(5000, $Limit))
     $maxPages = 100
     $pageNum = 0
+    $assetsCondition = $null
+    if ($CompanyId -gt 0) {
+        if ($script:UseConditionForCompanyFilter) {
+            $assetsCondition = 'company_ids:' + $CompanyId
+        } else {
+            # Try condition=company_id=X (same format as registry/network). Swagger shows assets accepts condition.
+            $assetsCondition = 'company_id=' + $CompanyId
+        }
+    }
     do {
         $queryParams = @{ limit = $pageSize; skip = $currentSkip }
-        if ($CompanyId -gt 0 -and $script:UseConditionForCompanyFilter) {
-            $queryParams.condition = 'company_ids:' + $CompanyId
-        }
-        # Note: /r/asset/assets does NOT accept company_id per swagger (condition, skip, limit, order_by only). Passing company_id causes 400.
+        if ($assetsCondition) { $queryParams.condition = $assetsCondition }
         try {
             $response = Invoke-ConnectSecureRequest -Endpoint '/r/asset/assets' -QueryParameters $queryParams
             $assets = @()
@@ -980,6 +1089,14 @@ function Get-ConnectSecureAssets {
                 } else { break }
             } else { break }
         } catch {
+            if ($assetsCondition -and $_.Exception.Message -match '400|Bad Request') {
+                Write-CSApiLog ('Assets condition rejected (400), retrying without company filter: ' + $assetsCondition) -Level Warning
+                $assetsCondition = $null
+                $currentSkip = $Skip
+                $allData = @()
+                $pageNum = 0
+                continue
+            }
             Write-CSApiLog ('Error fetching assets: ' + $_.Exception.Message) -Level Error
             throw
         }
@@ -990,7 +1107,7 @@ function Get-ConnectSecureAssets {
 
 # --- Company Review (agents, probes, credentials, firewall, scan dates) ---
 # NOTE: Before adding client-side filtering for any endpoint, capture from the web portal first
-# (see archive/portal-capture/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
+# (see api/CAPTURE-PORTAL-COMPANY-REVIEW-GUIDE.md). The portal may use server-side params we can adopt.
 # Endpoints from swagger.yaml
 $script:CompanyReviewEndpoints = @{
     JobsView                  = '/r/company/jobs_view'
@@ -1139,6 +1256,65 @@ function Get-ConnectSecureUsernamesByHostname {
         }
     } catch {
         Write-CSApiLog "Get-ConnectSecureUsernamesByHostname failed: $($_.Exception.Message)" -Level Warning
+    }
+    return $result
+}
+
+function Get-ConnectSecureLastPingByHostname {
+    <#
+    .SYNOPSIS
+    Returns hostname/IP -> last_ping_time map from ConnectSecure agents. Use for Top N report and ticket instructions.
+    Same last_ping_time used for company review "agent last online" display.
+    #>
+    param(
+        [int]$CompanyId,
+        [string[]]$Hostnames,
+        [string[]]$IPs = @()
+    )
+    if ($CompanyId -le 0) { return @{} }
+    $result = @{}
+    foreach ($h in $Hostnames) { if (-not [string]::IsNullOrWhiteSpace($h)) { $result[$h.Trim()] = "" } }
+    foreach ($ip in $IPs) { if (-not [string]::IsNullOrWhiteSpace($ip)) { $result[$ip.Trim()] = "" } }
+    if ($result.Count -eq 0) { return @{} }
+    try {
+        $agents = Get-ConnectSecureCompanyAgents -CompanyId $CompanyId
+        if (-not $agents -or $agents.Count -eq 0) { return $result }
+        $hostToPing = @{}
+        $ipToPing = @{}
+        foreach ($a in $agents) {
+            $lp = $a.last_ping_time; switch (-not $lp) { $true { $lp = $a.lastPingTime } }
+            switch (-not $lp) { $true { $lp = $a.'Last Ping Time' } }
+            switch (-not $lp) { $true { continue } }
+            try {
+                $dt = [DateTime]::Parse($lp)
+                $formatted = $dt.ToLocalTime().ToString('yyyy-MM-dd HH:mm')
+            } catch { continue }
+            $hn = $a.host_name; switch (-not $hn) { $true { $hn = $a.'Host Name' } }
+            switch (-not $hn) { $true { $hn = $a.hostname } }; switch (-not $hn) { $true { $hn = $a.name } }
+            $ip = $a.ip; switch (-not $ip) { $true { $ip = $a.IP } }
+            if (-not [string]::IsNullOrWhiteSpace($hn)) {
+                $hnNorm = [string]$hn.Trim().ToLowerInvariant()
+                $shortName = if ($hnNorm -match '^([^.]+)\.') { $Matches[1] } else { $hnNorm }
+                if (-not $hostToPing.ContainsKey($hnNorm) -or [string]::Compare($formatted, $hostToPing[$hnNorm]) -gt 0) { $hostToPing[$hnNorm] = $formatted }
+                if (-not $hostToPing.ContainsKey($shortName) -or [string]::Compare($formatted, $hostToPing[$shortName]) -gt 0) { $hostToPing[$shortName] = $formatted }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                $ipStr = [string]$ip.Trim()
+                if (-not $ipToPing.ContainsKey($ipStr) -or [string]::Compare($formatted, $ipToPing[$ipStr]) -gt 0) { $ipToPing[$ipStr] = $formatted }
+            }
+        }
+        foreach ($key in @($result.Keys)) {
+            $keyNorm = $key.Trim().ToLowerInvariant()
+            $shortKey = if ($keyNorm -match '^([^.]+)\.') { $Matches[1] } else { $keyNorm }
+            $pingStr = ""
+            if ($hostToPing.ContainsKey($keyNorm)) { $pingStr = $hostToPing[$keyNorm] }
+            elseif ($hostToPing.ContainsKey($shortKey)) { $pingStr = $hostToPing[$shortKey] }
+            elseif ($ipToPing.ContainsKey($key)) { $pingStr = $ipToPing[$key] }
+            elseif ($ipToPing.ContainsKey($key.Trim())) { $pingStr = $ipToPing[$key.Trim()] }
+            $result[$key] = $pingStr
+        }
+    } catch {
+        Write-CSApiLog "Get-ConnectSecureLastPingByHostname failed: $($_.Exception.Message)" -Level Warning
     }
     return $result
 }
@@ -1569,6 +1745,8 @@ function Get-ConnectSecureAssetWiseVulnerabilities {
     .SYNOPSIS
     Fetches asset-wise vulnerabilities (one row per host+vuln) from /r/report_queries/asset_wise_vulnerabilities.
     Use for 13-column export: CVE ID, Severity, CVSS, EPSS, Asset Name, OS, IP, Description, Application Name, Product Name, First Seen, Last Seen, Owner.
+    .PARAMETER Assets
+    Optional. Pre-fetched assets for company filtering. If provided, avoids a separate asset fetch when filtering by company.
     #>
     param(
         [int]$CompanyId = 0,
@@ -1576,7 +1754,8 @@ function Get-ConnectSecureAssetWiseVulnerabilities {
         [int]$Skip = 0,
         [string]$Filter = "",
         [string]$Sort = 'severity.keyword:desc',
-        [switch]$FetchAll
+        [switch]$FetchAll,
+        [array]$Assets = $null
     )
     $endpoint = '/r/report_queries/asset_wise_vulnerabilities'
     $doFetchAll = if ($FetchAll) { $true } else { $false }
@@ -1625,7 +1804,7 @@ function Get-ConnectSecureAssetWiseVulnerabilities {
             Write-CSApiLog ('Filtered asset-wise by company_ids to company ' + $CompanyId + ': ' + $before + ' -> ' + $allData.Count + ' rows') -Level Info
         } else {
             # Rows often lack company_ids; filter by asset_ids belonging to company
-            $companyAssetIds = Get-ConnectSecureCompanyAssetIds -CompanyId $CompanyId
+            $companyAssetIds = Get-ConnectSecureCompanyAssetIds -CompanyId $CompanyId -Assets $Assets
             if ($companyAssetIds.Count -gt 0) {
                 $filtered = $allData | Where-Object { Test-AssetWiseRowMatchesCompany -Row $_ -CompanyAssetIds $companyAssetIds }
                 if ($filtered.Count -gt 0) {
@@ -1700,6 +1879,7 @@ function ConvertTo-ConnectSecure13ColumnFormat {
         if ($null -eq $fixVal) { $fixVal = Get-ConnectSecureVulnFieldDeep -Item $v -FieldNames @('Solution', 'solution', 'fix', 'remediation') }
         $fixStr = if ($null -ne $fixVal -and -not [string]::IsNullOrWhiteSpace([string]$fixVal)) { [string]$fixVal } else { '' }
         $result += [PSCustomObject]@{
+            'Source'           = 'Application'
             'CVE ID'           = if ($v.problem_name) { [string]$v.problem_name } else { '' }
             'Severity'         = if ($v.severity) { [string]$v.severity } else { '' }
             'CVSS Score'       = if ($null -ne $v.base_score) { $v.base_score } else { '' }
@@ -1714,6 +1894,128 @@ function ConvertTo-ConnectSecure13ColumnFormat {
             'Last Seen'        = if ($v.last_discovered_time) { [string]$v.last_discovered_time } else { '' }
             'Owner'            = $ownerVal
             'Fix'              = $fixStr
+        }
+    }
+    return $result
+}
+
+function ConvertFrom-RegistryProblemsFormat {
+    <#
+    .SYNOPSIS
+    Maps registry_problems_remediation rows to 13-column format for Excel export.
+    Portal format: name, affected_assets, asset_ids, base_score, description, epss_score, fix, severity, url, vul_id.
+    No host_name/ip per row; resolves asset_ids to host names via AssetMap.
+    #>
+    param([array]$Data, [hashtable]$AssetDetailMap = $null, [hashtable]$AssetMap = $null)
+    if (-not $Data -or $Data.Count -eq 0) { return @() }
+    $result = @()
+    foreach ($v in $Data) {
+        $obj = if ($null -ne $v._source) { $v._source } else { $v }
+        $assetIds = $obj.asset_ids
+        $hostNames = @()
+        if ($assetIds -and $AssetMap) {
+            $ids = if ($assetIds -is [array]) { @($assetIds) } else { @([string]$assetIds) }
+            foreach ($aid in $ids) {
+                $k = [string]$aid
+                if ($AssetMap.ContainsKey($k)) { $hostNames += $AssetMap[$k] } else { $hostNames += $k }
+            }
+        }
+        $assetNameStr = if ($hostNames.Count -gt 0) { ($hostNames -join '; ').Trim() } else { '' }
+        if (-not $assetNameStr -and $obj.affected_assets) { $assetNameStr = "($($obj.affected_assets) affected)" }
+        $osVal = ''; $ownerVal = ''
+        if ($AssetDetailMap -and $assetIds) {
+            $firstId = if ($assetIds -is [array] -and $assetIds.Count -gt 0) { [string]$assetIds[0] } else { [string]$assetIds }
+            if ($AssetDetailMap.ContainsKey($firstId)) {
+                $d = $AssetDetailMap[$firstId]
+                $osVal = $d.os_name; if ($d.os_version) { $osVal = ($osVal + ' ' + $d.os_version).Trim() }
+                $ownerVal = $d.asset_owner
+            }
+        }
+        $nameVal = if ($obj.name) { [string]$obj.name } else { '' }
+        $lastSeenVal = if ($obj.remediated_on) { [string]$obj.remediated_on } else { '' }
+        $result += [PSCustomObject]@{
+            'Source'           = 'Registry'
+            'CVE ID'           = $nameVal
+            'Severity'         = if ($obj.severity) { [string]$obj.severity } else { '' }
+            'CVSS Score'       = if ($null -ne $obj.base_score) { $obj.base_score } else { '' }
+            'EPSS Score'       = if ($null -ne $obj.epss_score) { $obj.epss_score } else { '' }
+            'Asset Name'       = $assetNameStr
+            'OS'               = $osVal
+            'IP Address'       = ''
+            'Description'      = if ($obj.description) { [string]$obj.description } else { '' }
+            'Application Name' = $nameVal
+            'Product Name'     = $nameVal
+            'First Seen'       = ''
+            'Last Seen'        = $lastSeenVal
+            'Owner'            = $ownerVal
+            'Fix'              = if ($obj.fix) { [string]$obj.fix } else { '' }
+        }
+    }
+    return $result
+}
+
+function ConvertFrom-NetworkVulnerabilitiesFormat {
+    <#
+    .SYNOPSIS
+    Maps application_vulnerabilities_net rows to flat Excel format.
+    Swagger: software_name, cvss_score, severity, affected_assets, ports[], title, affected_operating_systems, software_version.
+    No per-asset host_name/ip - software-level aggregated.
+    #>
+    param([array]$Data)
+    if (-not $Data -or $Data.Count -eq 0) { return @() }
+    $result = @()
+    foreach ($v in $Data) {
+        $obj = if ($null -ne $v._source) { $v._source } else { $v }
+        $portsStr = ''
+        if ($obj.ports -and $obj.ports.Count -gt 0) {
+            $portsStr = ($obj.ports | ForEach-Object { [string]$_ }) -join '; '
+        }
+        $result += [PSCustomObject]@{
+            'Product Name'      = if ($obj.software_name) { [string]$obj.software_name } else { '' }
+            'Severity'          = if ($obj.severity) { [string]$obj.severity } else { '' }
+            'CVSS Score'        = if ($null -ne $obj.cvss_score) { $obj.cvss_score } else { '' }
+            'Affected Assets'   = if ($null -ne $obj.affected_assets) { $obj.affected_assets } else { '' }
+            'Ports'             = $portsStr
+            'Title'             = if ($obj.title) { [string]$obj.title } else { '' }
+            'Affected OS'       = if ($obj.affected_operating_systems) { [string]$obj.affected_operating_systems } else { '' }
+            'Software Version'  = if ($obj.software_version) { [string]$obj.software_version } else { '' }
+            'Software Type'     = if ($obj.software_type) { [string]$obj.software_type } else { '' }
+        }
+    }
+    return $result
+}
+
+function ConvertFrom-NetworkTo13ColumnFormat {
+    <#
+    .SYNOPSIS
+    Maps application_vulnerabilities_net rows to 13-column format for inclusion in All Vulnerabilities.
+    Used when merging Registry and Network into Top N / ticket instructions. Asset Name = "(Network scan)".
+    #>
+    param([array]$Data)
+    if (-not $Data -or $Data.Count -eq 0) { return @() }
+    $result = @()
+    foreach ($v in $Data) {
+        $obj = if ($null -ne $v._source) { $v._source } else { $v }
+        $prod = if ($obj.software_name) { [string]$obj.software_name } else { '' }
+        $title = if ($obj.title) { [string]$obj.title } else { '' }
+        $affStr = if ($null -ne $obj.affected_assets) { "Affects $($obj.affected_assets) assets" } else { '' }
+        $desc = if ($title) { $title } else { $affStr }
+        $result += [PSCustomObject]@{
+            'Source'           = 'Network'
+            'CVE ID'           = $title
+            'Severity'         = if ($obj.severity) { [string]$obj.severity } else { '' }
+            'CVSS Score'       = if ($null -ne $obj.cvss_score) { $obj.cvss_score } else { '' }
+            'EPSS Score'       = ''
+            'Asset Name'       = '(Network scan)'
+            'OS'               = if ($obj.affected_operating_systems) { [string]$obj.affected_operating_systems } else { '' }
+            'IP Address'       = ''
+            'Description'      = $desc
+            'Application Name' = $prod
+            'Product Name'     = $prod
+            'First Seen'       = ''
+            'Last Seen'        = ''
+            'Owner'            = ''
+            'Fix'              = ''
         }
     }
     return $result
@@ -2028,6 +2330,98 @@ function Export-ConnectSecureDataToExcel {
     }
 }
 
+function Export-ConnectSecureMultiSheetToExcel {
+    <#
+    .SYNOPSIS
+    Exports multiple sheets to one Excel workbook. Each sheet uses 13-column format.
+    .PARAMETER Sheets
+    Array of @{ SheetName = '...'; Data = @(...) } - Data is array of PSCustomObjects with 13-column properties.
+    #>
+    param(
+        [array]$Sheets,
+        [string]$OutputPath,
+        [scriptblock]$OnProgress = $null
+    )
+    if (-not $Sheets -or $Sheets.Count -eq 0) { throw 'Sheets parameter must have at least one sheet.' }
+    $excel = $null
+    $workbook = $null
+    try {
+        if ($OnProgress) { & $OnProgress 'Opening Excel...' }
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+        $excel.ScreenUpdating = $false
+        $workbook = $excel.Workbooks.Add()
+        $sheetIndex = 0
+        foreach ($sh in $Sheets) {
+            $sheetName = $sh.SheetName
+            $data = $sh.Data
+            if (-not $data) { $data = @() }
+            $ws = if ($sheetIndex -eq 0) { $workbook.Worksheets.Item(1) } else { $workbook.Worksheets.Add([System.Reflection.Missing]::Value, $workbook.Worksheets.Item($workbook.Worksheets.Count)) }
+            $ws.Name = $sheetName
+            $headers = @()
+            if ($data -and $data.Count -gt 0) {
+                $allKeys = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($item in $data) {
+                    $obj = if ($null -ne $item -and $item.PSObject.Properties['_source']) { $item._source } else { $item }
+                    if ($null -ne $obj -and $obj.PSObject.Properties) {
+                        $obj.PSObject.Properties.Name | Where-Object { $_ -ne '_source' } | ForEach-Object { $null = $allKeys.Add($_) }
+                    }
+                }
+                $headers = [string[]]$allKeys
+            }
+            if ($headers.Count -eq 0 -and $data.Count -eq 0) {
+                $emptyRow = [PSCustomObject]@{ 'CVE ID'=''; 'Severity'=''; 'CVSS Score'=''; 'EPSS Score'=''; 'Asset Name'=''; 'OS'=''; 'IP Address'=''; 'Description'=''; 'Application Name'=''; 'Product Name'=''; 'First Seen'=''; 'Last Seen'=''; 'Owner'=''; 'Fix'='' }
+                $headers = $emptyRow.PSObject.Properties.Name
+                $data = @($emptyRow)
+            }
+            for ($col = 1; $col -le $headers.Count; $col++) {
+                $ws.Cells.Item(1, $col).Value2 = [string]$headers[$col - 1]
+                $ws.Cells.Item(1, $col).Font.Bold = $true
+            }
+            $row = 2
+            foreach ($item in $data) {
+                $obj = if ($null -ne $item -and $item.PSObject.Properties['_source']) { $item._source } else { $item }
+                for ($col = 1; $col -le $headers.Count; $col++) {
+                    $key = $headers[$col - 1]
+                    $val = if ($null -ne $obj -and $obj.PSObject.Properties[$key]) { $obj.PSObject.Properties[$key].Value } else { '' }
+                    if ($null -eq $val) { $val = '' }
+                    elseif ($val -is [Array] -or ($val -is [System.Collections.IEnumerable] -and $val -isnot [string])) {
+                        $arr = @($val) | Where-Object { $null -ne $_ }
+                        $val = ($arr | ForEach-Object { $_.ToString() }) -join '; '
+                    }
+                    elseif ($val -is [PSCustomObject] -or $val -is [hashtable]) {
+                        try { $val = ($val | ConvertTo-Json -Compress -Depth 2) } catch { $val = $val.ToString() }
+                    }
+                    elseif ($val -isnot [string]) { $val = $val.ToString() }
+                    $ws.Cells.Item($row, $col).Value2 = [string]$val
+                }
+                $row++
+            }
+            if ($data.Count -gt 0) {
+                $usedRange = $ws.UsedRange
+                $usedRange.Columns.AutoFit() | Out-Null
+                Clear-ComObject $usedRange
+            }
+            Clear-ComObject $ws
+            $sheetIndex++
+        }
+        if ($OnProgress) { & $OnProgress 'Saving Excel file...' }
+        if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
+        $workbook.SaveAs($OutputPath)
+        $workbook.Close($false)
+        Write-CSApiLog ('Multi-sheet Excel saved: ' + $OutputPath) -Level Success
+    } catch {
+        Write-CSApiLog ('Error exporting multi-sheet Excel: ' + $_.Exception.Message) -Level Error
+        throw
+    } finally {
+        if ($workbook) { try { $workbook.Close($false); Clear-ComObject $workbook } catch { } }
+        if ($excel) { try { $excel.Quit(); Clear-ComObject $excel } catch { } }
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+    }
+}
+
 # --- Report Generation from ConnectSecure Data (no API server needed) ---
 
 function Get-ConnectSecureVulnField {
@@ -2188,28 +2582,68 @@ function New-PendingEPSSReportFromConnectSecure {
 }
 
 function New-AllVulnerabilitiesReportFromConnectSecure {
-    param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [array]$VulnerabilityData = $null, [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
+    param(
+        [string]$OutputPath,
+        [int]$CompanyId = 0,
+        [string]$ClientName = 'Client',
+        [array]$VulnerabilityData = $null,
+        [scriptblock]$OnProgress = $null,
+        [int]$DebugLimit = 0,
+        [switch]$IncludeRegistryAndNetwork = $true
+    )
     $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
     $fetchAll = ($DebugLimit -le 0)
-    # Use asset_wise_vulnerabilities for 13-column format (CVE ID, Severity, CVSS, EPSS, Asset Name, OS, IP, Description, App Name, Product Name, First Seen, Last Seen, Owner)
-    $assetWise = Get-ConnectSecureAssetWiseVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
-    if ($null -eq $assetWise) { $assetWise = @() }
-    if ($assetWise.Count -eq 0) {
-        # Empty export needs All Vulnerabilities 13-column headers for Get-VulnerabilityData compatibility
-        $emptyRow = [PSCustomObject]@{
-            'CVE ID'=''; 'Severity'=''; 'CVSS Score'=''; 'EPSS Score'=''; 'Asset Name'=''; 'OS'=''; 'IP Address'=''; 'Description'=''; 'Application Name'=''; 'Product Name'=''; 'First Seen'=''; 'Last Seen'=''; 'Owner'=''
-        }
-        Export-ConnectSecureDataToExcel -Data @($emptyRow) -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
-        return
-    }
+    # Fetch assets once and share: asset_wise uses for company filtering, enrichment uses for OS/Owner/asset names
     $assets = @()
     try {
         $assets = Get-ConnectSecureAssets -CompanyId $CompanyId -Limit 5000 -FetchAll:$true
     } catch {
         Write-CSApiLog ('Asset fetch failed (OS/Owner will be empty): ' + $_.Exception.Message) -Level Warning
     }
+    # Use asset_wise_vulnerabilities for 13-column format (CVE ID, Severity, CVSS, EPSS, Asset Name, OS, IP, Description, App Name, Product Name, First Seen, Last Seen, Owner, Fix)
+    $assetWise = Get-ConnectSecureAssetWiseVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll -Assets $assets
+    if ($null -eq $assetWise) { $assetWise = @() }
     $assetDetailMap = Get-ConnectSecureAssetDetailMap -Assets $assets
     $allVulns = ConvertTo-ConnectSecure13ColumnFormat -AssetWiseData $assetWise -AssetDetailMap $assetDetailMap
+    if ($null -eq $allVulns) { $allVulns = @() }
+
+    # Merge Registry (open) and Network into All Vulnerabilities for Top N / ticket instructions
+    if ($IncludeRegistryAndNetwork) {
+        $assetMap = Get-ConnectSecureAssetIdToNameMap -Assets $assets
+        try {
+            $registryVulns = Get-ConnectSecureRegistryVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
+            if ($registryVulns -and $registryVulns.Count -gt 0) {
+                $registry13 = ConvertFrom-RegistryProblemsFormat -Data $registryVulns -AssetDetailMap $assetDetailMap -AssetMap $assetMap
+                if ($registry13 -and $registry13.Count -gt 0) {
+                    $allVulns = @($allVulns) + @($registry13)
+                    Write-CSApiLog "Merged $($registry13.Count) registry vulnerabilities into All Vulnerabilities" -Level Info
+                }
+            }
+        } catch {
+            Write-CSApiLog ('Registry merge skipped: ' + $_.Exception.Message) -Level Warning
+        }
+        try {
+            $networkVulns = Get-ConnectSecureNetworkVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
+            if ($networkVulns -and $networkVulns.Count -gt 0) {
+                $network13 = ConvertFrom-NetworkTo13ColumnFormat -Data $networkVulns
+                if ($network13 -and $network13.Count -gt 0) {
+                    $allVulns = @($allVulns) + @($network13)
+                    Write-CSApiLog "Merged $($network13.Count) network vulnerabilities into All Vulnerabilities" -Level Info
+                }
+            }
+        } catch {
+            Write-CSApiLog ('Network merge skipped: ' + $_.Exception.Message) -Level Warning
+        }
+    }
+
+    if ($allVulns.Count -eq 0) {
+        # Empty export needs All Vulnerabilities 13-column headers for Get-VulnerabilityData compatibility
+        $emptyRow = [PSCustomObject]@{
+            'Source'=''; 'CVE ID'=''; 'Severity'=''; 'CVSS Score'=''; 'EPSS Score'=''; 'Asset Name'=''; 'OS'=''; 'IP Address'=''; 'Description'=''; 'Application Name'=''; 'Product Name'=''; 'First Seen'=''; 'Last Seen'=''; 'Owner'=''; 'Fix'=''
+        }
+        Export-ConnectSecureDataToExcel -Data @($emptyRow) -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
+        return
+    }
     Export-ConnectSecureDataToExcel -Data $allVulns -OutputPath $OutputPath -SheetName 'All Vulnerabilities' -OnProgress $null
 }
 
@@ -2231,6 +2665,70 @@ function New-SuppressedVulnerabilitiesReportFromConnectSecure {
     if ($null -eq $suppressedVulns) { $suppressedVulns = @() }
     $suppressedVulns = Invoke-AssetNameResolution -Data $suppressedVulns -CompanyId $CompanyId
     Export-ConnectSecureDataToExcel -Data $suppressedVulns -OutputPath $OutputPath -SheetName 'Suppressed Vulnerabilities' -OnProgress $null
+}
+
+function New-RegistryVulnerabilitiesReportFromConnectSecure {
+    param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
+    $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
+    $fetchAll = ($DebugLimit -le 0)
+    $registryVulns = Get-ConnectSecureRegistryVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
+    if ($null -eq $registryVulns) { $registryVulns = @() }
+    $assetDetailMap = @{}; $assetMap = @{}
+    if ($registryVulns.Count -gt 0) {
+        try {
+            $assets = Get-ConnectSecureAssets -CompanyId $CompanyId -Limit 5000 -FetchAll:$true
+            $assetDetailMap = Get-ConnectSecureAssetDetailMap -Assets $assets
+            $assetMap = Get-ConnectSecureAssetIdToNameMap -Assets $assets
+        } catch { Write-CSApiLog ('Asset maps skipped: ' + $_.Exception.Message) -Level Warning }
+    }
+    $converted = ConvertFrom-RegistryProblemsFormat -Data $registryVulns -AssetDetailMap $assetDetailMap -AssetMap $assetMap
+    Export-ConnectSecureDataToExcel -Data $converted -OutputPath $OutputPath -SheetName 'Registry Vulnerabilities' -OnProgress $null
+}
+
+function New-RegistryRemediatedReportFromConnectSecure {
+    param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
+    $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
+    $fetchAll = ($DebugLimit -le 0)
+    $registryVulns = Get-ConnectSecureRegistryVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll -RemediatedOnly
+    if ($null -eq $registryVulns) { $registryVulns = @() }
+    $assetDetailMap = @{}; $assetMap = @{}
+    if ($registryVulns.Count -gt 0) {
+        try {
+            $assets = Get-ConnectSecureAssets -CompanyId $CompanyId -Limit 5000 -FetchAll:$true
+            $assetDetailMap = Get-ConnectSecureAssetDetailMap -Assets $assets
+            $assetMap = Get-ConnectSecureAssetIdToNameMap -Assets $assets
+        } catch { Write-CSApiLog ('Asset maps skipped: ' + $_.Exception.Message) -Level Warning }
+    }
+    $converted = ConvertFrom-RegistryProblemsFormat -Data $registryVulns -AssetDetailMap $assetDetailMap -AssetMap $assetMap
+    Export-ConnectSecureDataToExcel -Data $converted -OutputPath $OutputPath -SheetName 'Registry Remediated' -OnProgress $null
+}
+
+function New-RegistrySuppressedReportFromConnectSecure {
+    param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
+    $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
+    $fetchAll = ($DebugLimit -le 0)
+    $registryVulns = Get-ConnectSecureRegistryVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll -SuppressedOnly
+    if ($null -eq $registryVulns) { $registryVulns = @() }
+    $assetDetailMap = @{}; $assetMap = @{}
+    if ($registryVulns.Count -gt 0) {
+        try {
+            $assets = Get-ConnectSecureAssets -CompanyId $CompanyId -Limit 5000 -FetchAll:$true
+            $assetDetailMap = Get-ConnectSecureAssetDetailMap -Assets $assets
+            $assetMap = Get-ConnectSecureAssetIdToNameMap -Assets $assets
+        } catch { Write-CSApiLog ('Asset maps skipped: ' + $_.Exception.Message) -Level Warning }
+    }
+    $converted = ConvertFrom-RegistryProblemsFormat -Data $registryVulns -AssetDetailMap $assetDetailMap -AssetMap $assetMap
+    Export-ConnectSecureDataToExcel -Data $converted -OutputPath $OutputPath -SheetName 'Registry Suppressed' -OnProgress $null
+}
+
+function New-NetworkVulnerabilitiesReportFromConnectSecure {
+    param([string]$OutputPath, [int]$CompanyId = 0, [string]$ClientName = 'Client', [scriptblock]$OnProgress = $null, [int]$DebugLimit = 0)
+    $limit = if ($DebugLimit -gt 0) { $DebugLimit } else { 5000 }
+    $fetchAll = ($DebugLimit -le 0)
+    $networkVulns = Get-ConnectSecureNetworkVulnerabilities -CompanyId $CompanyId -Limit $limit -FetchAll:$fetchAll
+    if ($null -eq $networkVulns) { $networkVulns = @() }
+    $converted = ConvertFrom-NetworkVulnerabilitiesFormat -Data $networkVulns
+    Export-ConnectSecureDataToExcel -Data $converted -OutputPath $OutputPath -SheetName 'Network Vulnerabilities' -OnProgress $null
 }
 
 function New-ExecutiveSummaryReportFromConnectSecure {
@@ -2357,6 +2855,7 @@ function Get-StandardReportIdForType {
         'external-vulnerabilities' = 'external scan'
         'executive-summary' = 'executive summary report'
         'pending-epss' = 'pending remediation epss score reports'
+        'network-vulnerabilities' = 'network scan findings'
     }
     $pattern = $categoryPatterns[$InternalReportType]
     $candidates = @()
@@ -2375,6 +2874,19 @@ function Get-StandardReportIdForType {
             if ($rt -ne $wantFormat) { continue }
             $cat = if ($r._category) { $r._category.ToString().ToLower() } else { '' }
             if ($cat -match ($pattern -replace '\s+', '.*')) {
+                $candidates += $r
+                break
+            }
+        }
+    }
+    if ($candidates.Count -eq 0 -and $pattern) {
+        foreach ($r in $reports) {
+            $rt = if ($r.reportType) { $r.reportType.ToString().ToLower() } else { '' }
+            if ($rt -ne $wantFormat) { continue }
+            $disp = ''
+            foreach ($p in @('displayReportName','displayName','description','name')) { if ($r.$p) { $disp = [string]$r.$p; break } }
+            $disp = $disp.ToLower()
+            if ($disp -like ('*' + $pattern + '*')) {
                 $candidates += $r
                 break
             }
@@ -2707,12 +3219,12 @@ function Invoke-ConnectSecureReportsBatch {
 
     function Update-Prog { param($m) if ($OnProgress) { & $OnProgress $m } }
 
-    # Report Builder only - no vulnerability fetch or local fallback
-    $standardTypes = @('all-vulnerabilities', 'suppressed-vulnerabilities', 'external-vulnerabilities', 'executive-summary', 'pending-epss')
+    $standardTypes = @('all-vulnerabilities', 'suppressed-vulnerabilities', 'external-vulnerabilities', 'executive-summary', 'pending-epss', 'registry-vulnerabilities', 'registry-remediated', 'registry-suppressed', 'network-vulnerabilities')
+    $localOnlyTypes = @('registry-vulnerabilities', 'registry-remediated', 'registry-suppressed')
     $reportsWithType = $Reports | Where-Object { $_.Type -and -not $_.ReportId }
     foreach ($r in $reportsWithType) {
         if ($r.Type -notin $standardTypes) {
-            throw ('Unknown report type: ' + $r.Type + '. Standard reports: all-vulnerabilities, suppressed-vulnerabilities, external-vulnerabilities, executive-summary, pending-epss')
+            throw ('Unknown report type: ' + $r.Type + '. Standard reports: all-vulnerabilities, suppressed-vulnerabilities, external-vulnerabilities, executive-summary, pending-epss, registry-vulnerabilities, registry-remediated, registry-suppressed, network-vulnerabilities')
         }
     }
 
@@ -2722,14 +3234,36 @@ function Invoke-ConnectSecureReportsBatch {
     $succeeded = [System.Collections.ArrayList]::new()
     $failed = [System.Collections.ArrayList]::new()
     $companyLabel = if ($CompanyId -eq 0) { 'All Companies' } else { ('company ' + $CompanyId) }
+
+    # Generate registry and network locally (no Report Builder support)
+    foreach ($report in $Reports) {
+        if ($report.Type -in $localOnlyTypes) {
+            $path = & $OutputPathTemplate $report
+            try {
+                Update-Prog ('Generating ' + $report.Name + ' from API...')
+                Invoke-LocalReportFallback -InternalReportType $report.Type -OutputPath $path -CompanyId $CompanyId -ClientName $ClientName -ScanDate $ScanDate -OnProgress $OnProgress -DebugLimit $DebugLimit
+                $null = $succeeded.Add($report)
+                Write-CSApiLog ('Generated: ' + $path) -Level Success
+            } catch {
+                $errText = if ($null -eq $_.Exception.Message) { 'Unknown error' } elseif ($_.Exception.Message -is [array]) { ($_.Exception.Message -join '; ') } else { [string]$_.Exception.Message }
+                Write-CSApiLog ('Local report failed (' + $report.Name + '): ' + $errText) -Level Error
+                $null = $failed.Add([PSCustomObject]@{ Report = $report; Path = $path; Error = $errText })
+            }
+        }
+    }
+    $reportBuilderReports = @($Reports | Where-Object { $_.Type -notin $localOnlyTypes })
+    if ($reportBuilderReports.Count -eq 0) {
+        return @{ Succeeded = [array]$succeeded; Failed = [array]$failed }
+    }
     $isGlobal = ($CompanyId -eq 0)
     $pollInterval = 2
     $maxWaitSeconds = 600
 
     # Phase 1: Create all report jobs in parallel (all start generating on server immediately)
+    # Skip local-only types (registry-*, network-vulnerabilities) - they use Invoke-LocalReportFallback above
     $pending = [System.Collections.ArrayList]::new()
-    Update-Prog ('Creating ' + $Reports.Count + ' report jobs for ' + $companyLabel + '...')
-    foreach ($report in $Reports) {
+    Update-Prog ('Creating ' + $reportBuilderReports.Count + ' report jobs for ' + $companyLabel + '...')
+    foreach ($report in $reportBuilderReports) {
         if ($script:CSReportBuilderUnavailable) { break }
         $path = & $OutputPathTemplate $report
         try {
@@ -2822,7 +3356,8 @@ function Invoke-ConnectSecureReportsBatch {
     if ($null -ne $vulnReport -and $vulnReport.Ext -eq 'xlsx') {
         $avPath = & $OutputPathTemplate $vulnReport
         if (Test-Path -LiteralPath $avPath) {
-            Update-Prog ('Generating Top ' + $TopCount + ' Vulnerabilities Report from ' + $vulnReport.Name + '...')
+            $topTitle = if ($TopCount -le 0) { 'Top Vulnerabilities Report' } elseif ($TopCount -eq 10) { 'Top Ten Vulnerabilities Report' } else { "Top $TopCount Vulnerabilities Report" }
+            Update-Prog ("Generating $topTitle from $($vulnReport.Name)...")
             try {
                 if ((Get-Command -Name 'Get-VulnerabilityData' -ErrorAction SilentlyContinue) -and
                     (Get-Command -Name 'Get-Top10Vulnerabilities' -ErrorAction SilentlyContinue) -and
@@ -2835,11 +3370,11 @@ function Invoke-ConnectSecureReportsBatch {
                         $outputDir = Split-Path -Path $avPath -Parent
                         $stem = [System.IO.Path]::GetFileNameWithoutExtension($avPath)
                         $reportNamePart = [regex]::Escape($vulnReport.Name)
-                        $topXStem = $stem -replace (' - ' + $reportNamePart + ' - '), (' - Top ' + $TopCount + ' Vulnerabilities Report - ')
+                        $topXStem = $stem -replace (' - ' + $reportNamePart + ' - '), (" - $topTitle - ")
                         $topXPath = Join-Path $outputDir ($topXStem + '.docx')
-                        New-WordReport -OutputPath $topXPath -ClientName $ClientName -ScanDate $ScanDate -Top10Data $top10 -TimeEstimates $null -IsRMITPlus $false -GeneralRecommendations @() -ReportTitle ('Top ' + $TopCount + ' Vulnerabilities Report')
+                        New-WordReport -OutputPath $topXPath -ClientName $ClientName -ScanDate $ScanDate -Top10Data $top10 -TimeEstimates $null -IsRMITPlus $false -GeneralRecommendations @() -ReportTitle $topTitle
                         Write-CSApiLog ('Generated: ' + $topXPath) -Level Success
-                        $null = $succeeded.Add([PSCustomObject]@{ Type = 'top-vulnerabilities'; Name = ('Top ' + $TopCount + ' Vulnerabilities Report'); Ext = 'docx' })
+                        $null = $succeeded.Add([PSCustomObject]@{ Type = 'top-vulnerabilities'; Name = $topTitle; Ext = 'docx' })
                     } else {
                         Write-CSApiLog ('No vulnerability data found in ' + $avPath + ' - skipping Top X generation') -Level Warning
                     }
@@ -2874,6 +3409,7 @@ $script:CSReportNameMap = @{
     'external-vulnerabilities' = 'External Scan'
     'executive-summary' = 'Executive Summary Report'
     'pending-epss' = 'Pending Remediation EPSS Score Reports'
+    'network-vulnerabilities' = 'Network Scan Findings'
 }
 
 # Report type mapping: our internal type -> possible ConnectSecure report_type/report_id values to try
@@ -2884,6 +3420,7 @@ $script:CSReportTypeMap = @{
     'all-vulnerabilities' = @('all_vulnerabilities_report','all_vulnerabilities','All Vulnerabilities Report')
     'external-vulnerabilities' = @('external_scan','external_vulnerabilities','External Scan')
     'suppressed-vulnerabilities' = @('suppressed_vulnerabilities','Suppressed Vulnerabilities')
+    'network-vulnerabilities' = @('network_scan_findings','network_vulnerabilities','Network Scan Findings')
 }
 
 function Invoke-ConnectSecureReportDownloadOrFallback {
@@ -2931,10 +3468,18 @@ function Invoke-LocalReportFallback {
     $t2 = 'all-vulnerabilities'
     $t3 = 'external-vulnerabilities'
     $t4 = 'suppressed-vulnerabilities'
+    $t5 = 'registry-vulnerabilities'
+    $t6 = 'network-vulnerabilities'
+    $t7 = 'registry-remediated'
+    $t8 = 'registry-suppressed'
     if ($rt -eq $t0) { New-PendingEPSSReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -VulnerabilityData $vulnDataToPass -OnProgress $OnProgress -DebugLimit $DebugLimit }
     elseif ($rt -eq $t1) { New-ExecutiveSummaryReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -ScanDate $ScanDate -VulnerabilityData $vulnDataToPass -TopCount $TopCount -DebugLimit $DebugLimit }
     elseif ($rt -eq $t2) { New-AllVulnerabilitiesReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -VulnerabilityData $vulnDataToPass -OnProgress $OnProgress -DebugLimit $DebugLimit }
     elseif ($rt -eq $t3) { New-ExternalVulnerabilitiesReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
     elseif ($rt -eq $t4) { New-SuppressedVulnerabilitiesReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
+    elseif ($rt -eq $t5) { New-RegistryVulnerabilitiesReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
+    elseif ($rt -eq $t6) { New-NetworkVulnerabilitiesReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
+    elseif ($rt -eq $t7) { New-RegistryRemediatedReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
+    elseif ($rt -eq $t8) { New-RegistrySuppressedReportFromConnectSecure -OutputPath $OutputPath -CompanyId $CompanyId -ClientName $ClientName -OnProgress $OnProgress -DebugLimit $DebugLimit }
     else { throw ('Unknown report type: ' + $InternalReportType) }
 }

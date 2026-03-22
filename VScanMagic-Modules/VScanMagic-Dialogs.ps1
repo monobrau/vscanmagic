@@ -76,7 +76,8 @@ function Show-GeneralRecommendationsDialog {
         }
         
         try {
-            $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix)) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $productName -OutputType 'Word' }
+            $fixIsPlaceholder = Test-IsPlaceholderFixText -RawFix $item.Fix
+            $recommendationsText = if ($matchingRec) { $matchingRec.Recommendations } elseif ($item.Fix -and -not [string]::IsNullOrWhiteSpace($item.Fix) -and -not $fixIsPlaceholder) { ConvertTo-ReadableFixText -RawFix $item.Fix } else { Get-RemediationGuidance -ProductName $productName -OutputType 'Word' }
         } catch {
             $recommendationsText = "Unable to load recommendation: $($_.Exception.Message)"
         }
@@ -126,20 +127,17 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $idx = 0
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
-                if (-not [string]::IsNullOrWhiteSpace($currentText)) {
-                    $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
-                    $row.Cells["Recommendations"].Value = $improved
-                    $idx++
-                    if ($idx -lt $rowsToImprove.Count) {
-                        Start-Sleep -Seconds 2
-                        [System.Windows.Forms.Application]::DoEvents()
-                    }
+                $hostContext = ""
+                if ($row.Tag -and $row.Tag.AffectedSystems -and $row.Tag.AffectedSystems.Count -gt 0) {
+                    $hosts = $row.Tag.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { $_ } | Select-Object -First 10 -Unique
+                    $hostContext = ($hosts -join ", ").Trim()
                 }
+                $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds -HostContext $hostContext
+                $row.Cells["Recommendations"].Value = $improved
             }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -166,18 +164,21 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
-            $idx = 0
+            $batchItems = @()
             foreach ($row in $rowsToImprove) {
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
-                $improved = Invoke-AIImproveRemediationText -Text $currentText -ProductName $productName -CveIdList $cveIds
-                $row.Cells["Recommendations"].Value = $improved
-                $idx++
-                if ($idx -lt $rowsToImprove.Count) {
-                    Start-Sleep -Seconds 2
-                    [System.Windows.Forms.Application]::DoEvents()
+                $hostContext = ""
+                if ($row.Tag -and $row.Tag.AffectedSystems -and $row.Tag.AffectedSystems.Count -gt 0) {
+                    $hosts = $row.Tag.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { $_ } | Select-Object -First 10 -Unique
+                    $hostContext = ($hosts -join ", ").Trim()
                 }
+                $batchItems += @{ Text = $currentText; ProductName = $productName; CveIdList = $cveIds; HostContext = $hostContext; Row = $row }
+            }
+            $improvedList = Invoke-AIImproveRemediationTextBatch -Items $batchItems
+            for ($i = 0; $i -lt [Math]::Min($batchItems.Count, $improvedList.Count); $i++) {
+                $batchItems[$i].Row.Cells["Recommendations"].Value = $improvedList[$i]
             }
         } finally {
             $recDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -272,10 +273,32 @@ function Show-SetClientTypesDialog {
     $colRMIT.HeaderText = "RMIT+"
     $colRMIT.FillWeight = 30
     $dgv.Columns.Add($colRMIT) | Out-Null
+    
+    # Load existing RMIT Plus settings from shared storage if available
+    $savedRMITPlusSettings = @{}
+    if (Get-Command Get-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $clientData = Get-VScanMagicClientData
+            if ($clientData -and $clientData.RMITPlusSettings) {
+                $savedRMITPlusSettings = $clientData.RMITPlusSettings
+            }
+        } catch {
+            # Ignore errors loading saved settings
+        }
+    }
+    
     foreach ($c in $CompaniesToProcess) {
         $clientName = if ($c.ClientName) { $c.ClientName } else { ($c.Company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
         $clientName = if ([string]::IsNullOrWhiteSpace($clientName)) { $c.Company.DisplayName } else { $clientName }
-        $defaultVal = if ($c.IsRMITPlus -ne $null) { $c.IsRMITPlus } else { $DefaultIsRMITPlus }
+        
+        # Try to get saved RMIT Plus setting, then fall back to existing value, then default
+        $defaultVal = $DefaultIsRMITPlus
+        if ($savedRMITPlusSettings.ContainsKey($clientName)) {
+            $defaultVal = $savedRMITPlusSettings[$clientName]
+        } elseif ($c.IsRMITPlus -ne $null) {
+            $defaultVal = $c.IsRMITPlus
+        }
+        
         $row = $dgv.Rows.Add($clientName, $defaultVal)
         $dgv.Rows[$row].Tag = $c
     }
@@ -309,6 +332,7 @@ function Show-SetClientTypesDialog {
     $form.CancelButton = $btnCancel
     if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     $result = @{}
+    $rmitPlusSettingsToSave = @{}
     $idx = 0
     foreach ($c in $CompaniesToProcess) {
         $val = $false
@@ -317,8 +341,35 @@ function Show-SetClientTypesDialog {
         }
         $key = if ($c.Company -and $c.Company.Id -ne $null) { $c.Company.Id } else { $idx }
         $result[$key] = $val
+        
+        # Store by client name for persistence (prefer ClientName, fallback to DisplayName)
+        $clientName = if ($c.ClientName) { $c.ClientName } else { ($c.Company.DisplayName -replace '\s*\(ID:\s*\d+\)\s*$', '').Trim() }
+        $clientName = if ([string]::IsNullOrWhiteSpace($clientName)) { $c.Company.DisplayName } else { $clientName }
+        if (-not [string]::IsNullOrWhiteSpace($clientName)) {
+            $rmitPlusSettingsToSave[$clientName] = $val
+        }
+        
         $idx++
     }
+    
+    # Save RMIT Plus settings to shared storage if MemberberryIntegration is available
+    if (Get-Command Save-VScanMagicClientData -ErrorAction SilentlyContinue) {
+        try {
+            $existingData = Get-VScanMagicClientData
+            $existingRMITPlus = if ($existingData -and $existingData.RMITPlusSettings) { $existingData.RMITPlusSettings } else { @{} }
+            $existingFolderMap = if ($existingData -and $existingData.CompanyFolderMap) { $existingData.CompanyFolderMap } else { @{} }
+            
+            # Merge new settings with existing
+            foreach ($key in $rmitPlusSettingsToSave.Keys) {
+                $existingRMITPlus[$key] = $rmitPlusSettingsToSave[$key]
+            }
+            
+            Save-VScanMagicClientData -RMITPlusSettings $existingRMITPlus -CompanyFolderMap $existingFolderMap | Out-Null
+        } catch {
+            Write-Warning "Could not save RMIT Plus settings: $($_.Exception.Message)"
+        }
+    }
+    
     return $result
 }
 
@@ -547,7 +598,6 @@ function Show-HostnameReviewDialog {
                     }
                 }
             }
-            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
@@ -594,7 +644,6 @@ function Show-HostnameReviewDialog {
                     }
                 }
             }
-            [System.Windows.Forms.MessageBox]::Show("Lookup complete. Filled $filled username(s) from ConnectWise Automate.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
         }
@@ -654,9 +703,6 @@ function Show-HostnameReviewDialog {
                         }
                     }
                 }
-            }
-            if ($filled -gt 0) {
-                [System.Windows.Forms.MessageBox]::Show("Auto-lookup complete. Filled $filled username(s) from ConnectSecure.", "Lookup Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
         } finally {
             $hostDialog.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -762,17 +808,34 @@ function Show-TimeEstimateEntryDialog {
         $dataGridView.Columns.Add($colTicketGenerated) | Out-Null
     }
 
-    # Populate grid with top 10 data
+    # Group by Get-TimeEstimateGroupKey (Visual C++, .NET Framework, .NET Core, .NET Runtime bundled)
+    $grouped = @{}
     foreach ($item in $Top10Data) {
+        $key = Get-TimeEstimateGroupKey -ProductName $item.Product
+        if (-not $grouped.ContainsKey($key)) {
+            $grouped[$key] = @{ Product = $key; Seen = @{} }
+        }
+        if ($item.AffectedSystems) {
+            foreach ($sys in $item.AffectedSystems) {
+                $hn = if ($sys.HostName) { $sys.HostName } else { $sys.IP }
+                $ip = if ($sys.IP) { $sys.IP } else { '' }
+                $uid = "$hn|$ip"
+                if (-not $grouped[$key].Seen[$uid]) {
+                    $grouped[$key].Seen[$uid] = $true
+                }
+            }
+        }
+    }
+    $groupedList = @($grouped.Values)
+    foreach ($grp in $groupedList) {
         $row = $dataGridView.Rows.Add()
-        $dataGridView.Rows[$row].Cells["Product"].Value = $item.Product
-        $hostnameCount = if ($item.AffectedSystems) { $item.AffectedSystems.Count } else { 0 }
+        $dataGridView.Rows[$row].Cells["Product"].Value = $grp.Product
+        $hostnameCount = if ($grp.Seen) { $grp.Seen.Count } else { 0 }
         $dataGridView.Rows[$row].Cells["Hostnames"].Value = $hostnameCount
         $dataGridView.Rows[$row].Cells["TimeEstimate"].Value = ""
         $dataGridView.Rows[$row].Cells["AfterHours"].Value = $false
         if ($IsRMITPlus) {
-            # Default 3rd party status: first-party vendors (SonicWall, Fortinet, Microsoft, HP, Duo) are covered; all others are 3rd party
-            $isThirdPartyDefault = -not (Test-IsFirstPartyVendor -ProductName $item.Product)
+            $isThirdPartyDefault = -not (Test-IsFirstPartyVendor -ProductName $grp.Product)
             $dataGridView.Rows[$row].Cells["ThirdParty"].Value = $isThirdPartyDefault
             $dataGridView.Rows[$row].Cells["TicketGenerated"].Value = $false
         }
@@ -856,7 +919,7 @@ function New-TimeEstimate {
         [void]$sb.AppendLine("=".PadRight(100, '='))
         [void]$sb.AppendLine()
 
-        [void]$sb.AppendLine("Vulnerability Time Estimates:")
+        [void]$sb.AppendLine("Remediation Time Estimates:")
         [void]$sb.AppendLine()
 
         $totalCovered = 0.0
@@ -874,17 +937,31 @@ function New-TimeEstimate {
                 if (-not [string]::IsNullOrWhiteSpace($rec.Product)) { $generalRecMap[$rec.Product] = $rec }
             }
         }
-        for ($i = 0; $i -lt $Top10Data.Count; $i++) {
-            $item = $Top10Data[$i]
-            $timeEstimate = $TimeEstimates[$i]
+        $timeEstimateMap = @{}
+        if ($null -ne $TimeEstimates) {
+            foreach ($te in $TimeEstimates) {
+                if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeEstimateMap[$te.Product] = $te }
+            }
+        }
+        $rank = 1
+        foreach ($item in $Top10Data) {
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
+            if ($null -eq $timeEstimate) {
+                $timeEstimate = [PSCustomObject]@{ TimeEstimate = 0.0; AfterHours = $false; ThirdParty = $false; TicketGenerated = $false }
+            }
 
-            [void]$sb.AppendLine("$($i + 1). $($item.Product)")
+            [void]$sb.AppendLine("$rank. $($item.Product)")
             
-            # Add hostnames/hosts CSV list (use hostname or IP so we include all systems)
+            # Add hostnames/hosts CSV list (use hostname or IP so we include all systems; append last ping when available)
             if ($item.AffectedSystems -and $item.AffectedSystems.Count -gt 0) {
-                $identifiers = $item.AffectedSystems | ForEach-Object { if ($_.HostName) { $_.HostName } else { $_.IP } } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-                if ($identifiers.Count -gt 0) {
-                    $identifiersList = $identifiers -join ", "
+                $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
+                $identifiersList = ($uniqueSystems | ForEach-Object {
+                    $line = if ($_.HostName) { $_.HostName } else { $_.IP }
+                    if (-not [string]::IsNullOrWhiteSpace($_.LastPingTime)) { $line += " (last seen $($_.LastPingTime))" }
+                    $line
+                } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
+                if (-not [string]::IsNullOrWhiteSpace($identifiersList)) {
                     [void]$sb.AppendLine("   Affected Hostnames: $identifiersList")
                 }
             }
@@ -972,6 +1049,7 @@ function New-TimeEstimate {
                 $grandTotal += $timeEstimate.TimeEstimate
             }
             [void]$sb.AppendLine()
+            $rank++
         }
 
         [void]$sb.AppendLine()
@@ -1018,7 +1096,8 @@ function New-TicketInstructions {
         [array]$TopTenData,
         [array]$TimeEstimates = $null,
         [bool]$IsRMITPlus = $false,
-        [array]$GeneralRecommendations = $null
+        [array]$GeneralRecommendations = $null,
+        [string]$ReportsPathPartial = $null
     )
 
     try {
@@ -1050,33 +1129,11 @@ function New-TicketInstructions {
             $item = $TopTenData[$i]
             $num = $i + 1
 
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
             # Generate ticket subject based on product type
-            $ticketSubject = "Vulnerability Remediation - "
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                $ticketSubject += "$($item.Product) - End of Support Migration Required"
-            } elseif ($item.Product -like "*Windows 10*") {
-                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
-            } elseif ($item.Product -like "*Windows 11*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows Server*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows*") {
-                $ticketSubject += "$($item.Product) - Patch Management Required"
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                $ticketSubject += "$($item.Product) - Firmware Update Required"
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Update Required"
-            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - This software updates automatically"
-            } else {
-                $ticketSubject += "$($item.Product) - Update Required"
-            }
+            $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
 
             # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
@@ -1110,14 +1167,19 @@ function New-TicketInstructions {
             [void]$sb.AppendLine(("Affected Systems Count:".PadRight(25)) + $item.AffectedSystems.Count)
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("NOTE: This remediation can go to any available technician.")
+            if (-not [string]::IsNullOrWhiteSpace($ReportsPathPartial)) {
+                [void]$sb.AppendLine()
+                [void]$sb.AppendLine("Reports location: ...\$ReportsPathPartial")
+            }
             [void]$sb.AppendLine()
             [void]$sb.AppendLine("Affected Systems:")
-            # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP" or "hostname - IP"
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            # Group by hostname, IP, and username to get unique systems, then format as "hostname (username) - IP (last seen ...)" or "hostname - IP"
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
                 $username = $sys.Username
+                $lastPing = $sys.LastPingTime
                 # Use hostname or IP as primary identifier so we list all systems
                 $systemLine = if ($hostname) { $hostname } else { $ip }
                 if (-not [string]::IsNullOrWhiteSpace($username)) {
@@ -1125,6 +1187,9 @@ function New-TicketInstructions {
                 }
                 if (-not [string]::IsNullOrWhiteSpace($ip)) {
                     $systemLine += " - $ip"
+                }
+                if (-not [string]::IsNullOrWhiteSpace($lastPing)) {
+                    $systemLine += " (last seen $lastPing)"
                 }
                 [void]$sb.AppendLine("  - $systemLine")
             }
@@ -1177,6 +1242,7 @@ function New-TicketInstructionsHtml {
         [array]$TimeEstimates = $null,
         [bool]$IsRMITPlus = $false,
         [array]$GeneralRecommendations = $null,
+        [string]$ReportsPathPartial = $null,
         [switch]$PassThru
     )
 
@@ -1206,32 +1272,10 @@ function New-TicketInstructionsHtml {
             $item = $TopTenData[$i]
             $num = $i + 1
             $sectionId = "vuln-$num"
-            $timeEstimate = if ($timeEstimateMap.ContainsKey($item.Product)) { $timeEstimateMap[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeEstimateMap.ContainsKey($lookupKey)) { $timeEstimateMap[$lookupKey] } else { $null }
 
-            $ticketSubject = "Vulnerability Remediation - "
-            if ($item.Product -like "*Windows Server 2012*" -or $item.Product -like "*end-of-life*" -or $item.Product -like "*out of support*") {
-                $ticketSubject += "$($item.Product) - End of Support Migration Required"
-            } elseif ($item.Product -like "*Windows 10*") {
-                $ticketSubject += "$($item.Product) - Windows 10 is End of Life"
-            } elseif ($item.Product -like "*Windows 11*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows Server*") {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ($item.Product -like "*Windows*") {
-                $ticketSubject += "$($item.Product) - Patch Management Required"
-            } elseif ($item.Product -like "*printer*" -or $item.Product -like "*Ripple20*") {
-                $ticketSubject += "$($item.Product) - Firmware Update Required"
-            } elseif ($item.Product -like "*Microsoft Teams*") {
-                $ticketSubject += "$($item.Product) - Application Update Required"
-            } elseif ((Test-IsMicrosoftApplication -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Updates Required"
-            } elseif ((Test-IsVMwareProduct -ProductName $item.Product) -and $IsRMITPlus) {
-                $ticketSubject += "$($item.Product) - Update Required"
-            } elseif (Test-IsAutoUpdatingSoftware -ProductName $item.Product) {
-                $ticketSubject += "$($item.Product) - This software updates automatically"
-            } else {
-                $ticketSubject += "$($item.Product) - Update Required"
-            }
+            $ticketSubject = "Vulnerability Remediation - $($item.Product)$(Get-ProductTypeSuffix -ProductName $item.Product -IsRMITPlus $IsRMITPlus)"
             # Append modifier text for subject (no ticket-generated text; subject IS the ticket)
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $afterHours = $timeEstimate.AfterHours
@@ -1266,17 +1310,21 @@ Total Vulnerabilities:   $($item.VulnCount)
 Affected Systems Count:  $($item.AffectedSystems.Count)
 
 NOTE: This remediation can go to any available technician.
-
-Affected Systems:
 "@
-            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username -Unique
+            if (-not [string]::IsNullOrWhiteSpace($ReportsPathPartial)) {
+                $sectionBody += "`n`nReports location: ...\$ReportsPathPartial`n"
+            }
+            $sectionBody += "`nAffected Systems:`n"
+            $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             foreach ($sys in $uniqueSystems) {
                 $hostname = $sys.HostName
                 $ip = $sys.IP
                 $username = $sys.Username
+                $lastPing = $sys.LastPingTime
                 $systemLine = if ($hostname) { $hostname } else { $ip }
                 if (-not [string]::IsNullOrWhiteSpace($username)) { $systemLine += " ($username)" }
                 if (-not [string]::IsNullOrWhiteSpace($ip)) { $systemLine += " - $ip" }
+                if (-not [string]::IsNullOrWhiteSpace($lastPing)) { $systemLine += " (last seen $lastPing)" }
                 $sectionBody += "`n  - $systemLine"
             }
             $sectionBody += "`n`nRemediation Instructions:`n"
@@ -1317,7 +1365,7 @@ Affected Systems:
     <div class="section-actions">
       <button type="button" onclick="copySubject(this)" data-subject="$subjectEscaped">Copy Subject</button>
       <button type="button" onclick="copySection('$sectionId')">Copy Section</button>
-      <button type="button" class="toggle-btn" onclick="toggleSection('$sectionId')">▸ Show details</button>
+      <button type="button" class="toggle-btn" onclick="toggleSection('$sectionId')">+ Show details</button>
     </div>
   </div>
   <div class="section-content">
@@ -1349,7 +1397,7 @@ Affected Systems:
     .section-actions .toggle-btn:hover { background: #5a6268; }
     .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
     .vuln-section.collapsed .section-content { display: none; }
-    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
     .third-party { color: #c00; font-weight: bold; }
     .header { margin-bottom: 20px; }
     .header h1 { margin: 0; font-size: 20px; }
@@ -1384,10 +1432,10 @@ Affected Systems:
       if (!el || !btn) return;
       if (el.classList.contains('collapsed')) {
         el.classList.remove('collapsed');
-        btn.textContent = '▾ Hide details';
+        btn.textContent = '- Hide details';
       } else {
         el.classList.add('collapsed');
-        btn.textContent = '▸ Show details';
+        btn.textContent = '+ Show details';
       }
     }
   </script>
@@ -1417,7 +1465,8 @@ function New-CombinedReportHtml {
         [bool]$IncludeEmailTemplate = $false,
         [bool]$IncludeTimeEstimate = $false,
         [string]$FilterTopN = $null,
-        [string]$CompanyName = $null
+        [string]$CompanyName = $null,
+        [string]$ReportsPathPartial = $null
     )
 
     try {
@@ -1429,7 +1478,7 @@ function New-CombinedReportHtml {
 
         # Tab 1: Ticket Instructions
         if ($IncludeTicketInstructions -and $TopTenData -and $TopTenData.Count -gt 0) {
-            $ticketHtml = New-TicketInstructionsHtml -OutputPath $null -TopTenData $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -PassThru
+            $ticketHtml = New-TicketInstructionsHtml -OutputPath $null -TopTenData $TopTenData -TimeEstimates $TimeEstimates -IsRMITPlus $IsRMITPlus -GeneralRecommendations $GeneralRecommendations -ReportsPathPartial $ReportsPathPartial -PassThru
             if ($ticketHtml -match '(?s)<body[^>]*>(.*)</body>') {
                 $ticketBody = $matches[1].Trim()
             } else {
@@ -1506,7 +1555,8 @@ function New-CombinedReportHtml {
     .tab-actions { margin-bottom: 12px; }
     .tab-actions .copy-btn { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
     .tab-actions .copy-btn:hover { background: #0052a3; }
-    .tab-pre { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; padding: 20px; background: #fff; border-radius: 8px; }
+    .tab-pre, .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; min-width: 80ch; }
+    .tab-pre { padding: 20px; background: #fff; border-radius: 8px; }
     .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
     .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
     .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
@@ -1517,7 +1567,7 @@ function New-CombinedReportHtml {
     .section-actions .toggle-btn:hover { background: #5a6268; }
     .section-content { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee; }
     .vuln-section.collapsed .section-content { display: none; }
-    .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
+    .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; }
     .third-party { color: #c00; font-weight: bold; }
     .header { margin-bottom: 20px; }
     .header h1 { margin: 0; font-size: 20px; }
@@ -1564,10 +1614,10 @@ function New-CombinedReportHtml {
       if (!el || !btn) return;
       if (el.classList.contains('collapsed')) {
         el.classList.remove('collapsed');
-        btn.textContent = '▾ Hide details';
+        btn.textContent = '- Hide details';
       } else {
         el.classList.add('collapsed');
-        btn.textContent = '▸ Show details';
+        btn.textContent = '+ Show details';
       }
     }
     function copyEmailSubject(btn) {
@@ -1643,7 +1693,8 @@ function New-TicketNotes {
         $timeByProduct = @{}
         foreach ($te in $TimeEstimates) { if (-not [string]::IsNullOrWhiteSpace($te.Product)) { $timeByProduct[$te.Product] = $te } }
         foreach ($item in $Top10Data) {
-            $timeEstimate = if ($timeByProduct.ContainsKey($item.Product)) { $timeByProduct[$item.Product] } else { $null }
+            $lookupKey = Get-TimeEstimateGroupKey -ProductName $item.Product
+            $timeEstimate = if ($timeByProduct.ContainsKey($lookupKey)) { $timeByProduct[$lookupKey] } else { $null }
             if ($null -ne $timeEstimate -and $IsRMITPlus) {
                 $autoTicketGenerated = $timeEstimate.ThirdParty -and $timeEstimate.AfterHours
                 $isTicketGenerated = $timeEstimate.TicketGenerated -or $autoTicketGenerated
@@ -1685,7 +1736,6 @@ $($script:Templates.TicketNotes.NextStepsText)
         try {
             $result | Out-File -FilePath $OutputPath -Encoding UTF8
             $script:TicketNotesPath = $OutputPath
-            [System.Windows.Forms.MessageBox]::Show("Ticket notes saved to:`n$OutputPath", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to save ticket notes: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
@@ -1693,7 +1743,6 @@ $($script:Templates.TicketNotes.NextStepsText)
         # Copy to clipboard (fallback for when called from button without file path)
         try {
             [System.Windows.Forms.Clipboard]::SetText($result)
-            [System.Windows.Forms.MessageBox]::Show("Ticket notes copied to clipboard!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to copy to clipboard: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
@@ -1783,11 +1832,12 @@ function Show-RemediationRulesDialog {
 
         $editForm = New-Object System.Windows.Forms.Form
         $editForm.Text = if ($isNew) { "Add New Rule" } else { "Edit Rule" }
-        $editForm.Size = New-Object System.Drawing.Size(700, 500)
+        $editForm.Size = New-Object System.Drawing.Size(700, 580)
         $editForm.StartPosition = "CenterParent"
         $editForm.FormBorderStyle = "FixedDialog"
         $editForm.MaximizeBox = $false
         $editForm.MinimizeBox = $false
+        $editForm.AutoScroll = $true
 
         $y = 20
 
@@ -1819,6 +1869,24 @@ function Show-RemediationRulesDialog {
         $txtWordText.Multiline = $true
         $txtWordText.ScrollBars = "Vertical"
         $txtWordText.Text = $rule.WordText
+        # Custom paste: preserve line breaks (normalize \n to \r\n for Windows)
+        $txtWordText.Add_KeyDown({
+            param($s, $e)
+            if ($e.Modifiers -eq [System.Windows.Forms.Keys]::Control -and $e.KeyCode -eq 'V') {
+                $e.Handled = $true
+                $e.SuppressKeyPress = $true
+                if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                    $text = [System.Windows.Forms.Clipboard]::GetText()
+                    $text = $text -replace "`r?`n", "`r`n"
+                    $txt = $s
+                    $selStart = $txt.SelectionStart
+                    $before = $txt.Text.Substring(0, [Math]::Min($selStart, $txt.Text.Length))
+                    $after = if ($selStart -lt $txt.Text.Length) { $txt.Text.Substring($selStart) } else { "" }
+                    $txt.Text = $before + $text + $after
+                    $txt.SelectionStart = $selStart + $text.Length
+                }
+            }
+        })
         $editForm.Controls.Add($txtWordText)
         $y += 160
 
@@ -1835,8 +1903,44 @@ function Show-RemediationRulesDialog {
         $txtTicketText.Multiline = $true
         $txtTicketText.ScrollBars = "Vertical"
         $txtTicketText.Text = $rule.TicketText
+        # Custom paste: preserve line breaks (normalize \n to \r\n for Windows)
+        $txtTicketText.Add_KeyDown({
+            param($s, $e)
+            if ($e.Modifiers -eq [System.Windows.Forms.Keys]::Control -and $e.KeyCode -eq 'V') {
+                $e.Handled = $true
+                $e.SuppressKeyPress = $true
+                if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                    $text = [System.Windows.Forms.Clipboard]::GetText()
+                    $text = $text -replace "`r?`n", "`r`n"
+                    $txt = $s
+                    $selStart = $txt.SelectionStart
+                    $before = $txt.Text.Substring(0, [Math]::Min($selStart, $txt.Text.Length))
+                    $after = if ($selStart -lt $txt.Text.Length) { $txt.Text.Substring($selStart) } else { "" }
+                    $txt.Text = $before + $text + $after
+                    $txt.SelectionStart = $selStart + $text.Length
+                }
+            }
+        })
+        # Format buttons: convert delimiters to line breaks (for pasted text that lost line breaks)
+        $btnFormatTicket = New-Object System.Windows.Forms.Button
+        $btnFormatTicket.Location = New-Object System.Drawing.Point(20, ($y + 148))
+        $btnFormatTicket.Size = New-Object System.Drawing.Size(130, 23)
+        $btnFormatTicket.Text = "Format | as newline"
+        $btnFormatTicket.Add_Click({
+            $txtTicketText.Text = $txtTicketText.Text -replace ' \| ', "`r`n"
+        })
+        $btnFormatTicketBullets = New-Object System.Windows.Forms.Button
+        $btnFormatTicketBullets.Location = New-Object System.Drawing.Point(155, ($y + 148))
+        $btnFormatTicketBullets.Size = New-Object System.Drawing.Size(130, 23)
+        $btnFormatTicketBullets.Text = "Format - as newline"
+        $btnFormatTicketBullets.Add_Click({
+            # Split "text- next bullet" into "text`r`n- next bullet" (when - is preceded by text)
+            $txtTicketText.Text = $txtTicketText.Text -replace '(?<=.)- ', "`r`n- "
+        })
         $editForm.Controls.Add($txtTicketText)
-        $y += 160
+        $editForm.Controls.Add($btnFormatTicket)
+        $editForm.Controls.Add($btnFormatTicketBullets)
+        $y += 180
 
         # IsDefault checkbox (only for new rules or if editing default)
         $chkIsDefault = New-Object System.Windows.Forms.CheckBox
@@ -1917,6 +2021,14 @@ function Show-RemediationRulesDialog {
         $editForm.ShowDialog() | Out-Null
     }
 
+    # Double-click to edit
+    $dataGridView.Add_CellDoubleClick({
+        param($sender, $e)
+        if ($e.RowIndex -ge 0) {
+            Show-EditRuleDialog -RuleIndex $e.RowIndex
+        }
+    })
+
     # Populate grid
     Refresh-RulesGrid
 
@@ -1982,6 +2094,79 @@ function Show-RemediationRulesDialog {
         }
     })
     $rulesForm.Controls.Add($btnDelete)
+
+    $btnReset = New-Object System.Windows.Forms.Button
+    $btnReset.Location = New-Object System.Drawing.Point(320, $y)
+    $btnReset.Size = New-Object System.Drawing.Size(100, 30)
+    $btnReset.Text = "Reset to Defaults"
+    $btnReset.Add_Click({
+        $result = [System.Windows.Forms.MessageBox]::Show("Replace all rules with app defaults? Unsaved changes will be lost.", "Reset to Defaults",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $script:RemediationRules = Get-DefaultRemediationRules
+            Refresh-RulesGrid
+        }
+    })
+    $rulesForm.Controls.Add($btnReset)
+
+    $btnExport = New-Object System.Windows.Forms.Button
+    $btnExport.Location = New-Object System.Drawing.Point(430, $y)
+    $btnExport.Size = New-Object System.Drawing.Size(75, 30)
+    $btnExport.Text = "Export..."
+    $btnExport.Add_Click({
+        $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDlg.Filter = "JSON (*.json)|*.json|All Files (*.*)|*.*"
+        $saveDlg.Title = "Export Remediation Rules"
+        $saveDlg.FileName = "VScanMagic_RemediationRules.json"
+        if ($saveDlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            try {
+                $script:RemediationRules | ConvertTo-Json -Depth 10 | Set-Content -Path $saveDlg.FileName -Encoding UTF8
+                [System.Windows.Forms.MessageBox]::Show("Rules exported to:`n$($saveDlg.FileName)", "Export Complete",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", "Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+    $rulesForm.Controls.Add($btnExport)
+
+    $btnImport = New-Object System.Windows.Forms.Button
+    $btnImport.Location = New-Object System.Drawing.Point(515, $y)
+    $btnImport.Size = New-Object System.Drawing.Size(75, 30)
+    $btnImport.Text = "Import..."
+    $btnImport.Add_Click({
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Filter = "JSON (*.json)|*.json|All Files (*.*)|*.*"
+        $dlg.Title = "Import Remediation Rules"
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            try {
+                $json = Get-Content $dlg.FileName -Raw -Encoding UTF8 | ConvertFrom-Json
+                $arr = if ($json -is [Array]) { @($json) } else { @($json) }
+                $imported = @()
+                foreach ($r in $arr) {
+                    $imported += @{ Pattern = $r.Pattern; WordText = $r.WordText; TicketText = $r.TicketText; IsDefault = $r.IsDefault }
+                }
+                if ($imported.Count -gt 0) {
+                    $result = [System.Windows.Forms.MessageBox]::Show("Replace current rules with imported rules ($($imported.Count) rules)?", "Import",
+                        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+                    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+                        $script:RemediationRules = $imported
+                        Refresh-RulesGrid
+                        [System.Windows.Forms.MessageBox]::Show("Imported $($imported.Count) rules. Click Save to persist.", "Import Complete",
+                            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                    }
+                } else {
+                    [System.Windows.Forms.MessageBox]::Show("No valid rules found in file.", "Import",
+                        [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                }
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Import failed: $($_.Exception.Message)", "Error",
+                    [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+    $rulesForm.Controls.Add($btnImport)
 
     $btnSave = New-Object System.Windows.Forms.Button
     $btnSave.Location = New-Object System.Drawing.Point(680, $y)
@@ -2132,16 +2317,16 @@ function Show-ConnectSecureSettingsDialog {
     $btnTest.ForeColor = [System.Drawing.Color]::White
     $btnTest.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTest.FlatAppearance.BorderSize = 0
-    $btnTest.Add_Click({
-        if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
-            [System.Windows.Forms.MessageBox]::Show("Please fill in all fields first.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-        $btnTest.Enabled = $false
-        $btnTest.Text = "Testing..."
-        $dlg.Refresh()
-        try {
-            $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text -TenantName $txtTenant.Text -ClientId $txtClientId.Text -ClientSecret $txtClientSecret.Text
+        $btnTest.Add_Click({
+            if ([string]::IsNullOrWhiteSpace($txtBaseUrl.Text) -or [string]::IsNullOrWhiteSpace($txtTenant.Text) -or [string]::IsNullOrWhiteSpace($txtClientId.Text) -or [string]::IsNullOrWhiteSpace($txtClientSecret.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Please fill in all fields first.", "Validation", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+                return
+            }
+            $btnTest.Enabled = $false
+            $btnTest.Text = "Testing..."
+            $dlg.Refresh()
+            try {
+                $connected = Connect-ConnectSecureAPI -BaseUrl $txtBaseUrl.Text.Trim() -TenantName $txtTenant.Text.Trim() -ClientId $txtClientId.Text.Trim() -ClientSecret $txtClientSecret.Text.Trim()
             if ($connected) {
                 [System.Windows.Forms.MessageBox]::Show("Credentials are valid!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             } else {
@@ -2286,7 +2471,7 @@ function Show-ConnectWiseAutomateSettingsDialog {
 function Show-FiltersDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Report Filters"
-    $dlg.Size = New-Object System.Drawing.Size(480, 220)
+    $dlg.Size = New-Object System.Drawing.Size(500, 260)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2307,6 +2492,13 @@ function Show-FiltersDialog {
     $numMinEPSS.Increment = 0.001
     $numMinEPSS.Value = $script:FilterMinEPSS
     $dlg.Controls.Add($numMinEPSS)
+    $lblMinEPSSHint = New-Object System.Windows.Forms.Label
+    $lblMinEPSSHint.Location = New-Object System.Drawing.Point(265, ($y - 2))
+    $lblMinEPSSHint.Size = New-Object System.Drawing.Size(200, 32)
+    $lblMinEPSSHint.Text = "Excludes items below this. Network vulns use synthetic 0.1."
+    $lblMinEPSSHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblMinEPSSHint.Font = New-Object System.Drawing.Font($lblMinEPSSHint.Font.FontFamily, 8)
+    $dlg.Controls.Add($lblMinEPSSHint)
     $y += 40
 
     $lblSeverity = New-Object System.Windows.Forms.Label
@@ -2330,7 +2522,7 @@ function Show-FiltersDialog {
     $chkMedium.Location = New-Object System.Drawing.Point(265, $y)
     $chkMedium.Size = New-Object System.Drawing.Size(70, 20)
     $chkMedium.Text = "Medium"
-    $chkMedium.Checked = $script:FilterIncludeMedium
+    $chkMedium.Checked = if ($null -ne $script:UserSettings.FilterIncludeMedium) { $script:UserSettings.FilterIncludeMedium } else { $script:FilterIncludeMedium }
     $dlg.Controls.Add($chkMedium)
     $chkLow = New-Object System.Windows.Forms.CheckBox
     $chkLow.Location = New-Object System.Drawing.Point(340, $y)
@@ -2338,7 +2530,19 @@ function Show-FiltersDialog {
     $chkLow.Text = "Low"
     $chkLow.Checked = $script:FilterIncludeLow
     $dlg.Controls.Add($chkLow)
-    $y += 35
+    $chkCriticalHighOnly = New-Object System.Windows.Forms.CheckBox
+    $chkCriticalHighOnly.Location = New-Object System.Drawing.Point(135, ($y + 22))
+    $chkCriticalHighOnly.Size = New-Object System.Drawing.Size(140, 20)
+    $chkCriticalHighOnly.Text = "Critical/High only"
+    $chkCriticalHighOnly.Checked = (-not $script:FilterIncludeMedium -and -not $script:FilterIncludeLow)
+    $chkCriticalHighOnly.Add_CheckedChanged({
+        if ($chkCriticalHighOnly.Checked) {
+            $chkMedium.Checked = $false
+            $chkLow.Checked = $false
+        }
+    })
+    $dlg.Controls.Add($chkCriticalHighOnly)
+    $y += 50
 
     $lblTopN = New-Object System.Windows.Forms.Label
     $lblTopN.Location = New-Object System.Drawing.Point(20, $y)
@@ -2352,6 +2556,13 @@ function Show-FiltersDialog {
     @("10", "20", "50", "100", "All") | ForEach-Object { [void]$comboTopN.Items.Add($_) }
     $idx = 0; foreach ($i in 0..4) { if ($comboTopN.Items[$i] -eq $script:FilterTopN) { $idx = $i; break } }; $comboTopN.SelectedIndex = $idx
     $dlg.Controls.Add($comboTopN)
+    $lblTopNHint = New-Object System.Windows.Forms.Label
+    $lblTopNHint.Location = New-Object System.Drawing.Point(205, ($y - 2))
+    $lblTopNHint.Size = New-Object System.Drawing.Size(260, 32)
+    $lblTopNHint.Text = "All = all items meeting min EPSS + severity (no limit)"
+    $lblTopNHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblTopNHint.Font = New-Object System.Drawing.Font($lblTopNHint.Font.FontFamily, 8)
+    $dlg.Controls.Add($lblTopNHint)
     $y += 45
 
     $btnOK = New-Object System.Windows.Forms.Button
@@ -2366,6 +2577,13 @@ function Show-FiltersDialog {
         $script:FilterIncludeMedium = $chkMedium.Checked
         $script:FilterIncludeLow = $chkLow.Checked
         $script:FilterTopN = $comboTopN.SelectedItem.ToString()
+        $script:UserSettings.FilterTopN = $script:FilterTopN
+        $script:UserSettings.FilterMinEPSS = $script:FilterMinEPSS
+        $script:UserSettings.FilterIncludeCritical = $script:FilterIncludeCritical
+        $script:UserSettings.FilterIncludeHigh = $script:FilterIncludeHigh
+        $script:UserSettings.FilterIncludeMedium = $script:FilterIncludeMedium
+        $script:UserSettings.FilterIncludeLow = $script:FilterIncludeLow
+        Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -2384,13 +2602,20 @@ function Show-FiltersDialog {
         $script:FilterIncludeMedium = $chkMedium.Checked
         $script:FilterIncludeLow = $chkLow.Checked
         $script:FilterTopN = $comboTopN.SelectedItem.ToString()
+        $script:UserSettings.FilterTopN = $script:FilterTopN
+        $script:UserSettings.FilterMinEPSS = $script:FilterMinEPSS
+        $script:UserSettings.FilterIncludeCritical = $script:FilterIncludeCritical
+        $script:UserSettings.FilterIncludeHigh = $script:FilterIncludeHigh
+        $script:UserSettings.FilterIncludeMedium = $script:FilterIncludeMedium
+        $script:UserSettings.FilterIncludeLow = $script:FilterIncludeLow
+        Save-UserSettings | Out-Null
     }
 }
 
 function Show-OutputOptionsDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "Output Options"
-    $dlg.Size = New-Object System.Drawing.Size(420, 290)
+    $dlg.Size = New-Object System.Drawing.Size(420, 330)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
@@ -2438,20 +2663,27 @@ function Show-OutputOptionsDialog {
     $chkAutoLookup.Checked = if ($script:UserSettings.HostnameReviewAutoLookupConnectSecure) { $true } else { $false }
     $dlg.Controls.Add($chkAutoLookup)
 
+    $chkAutoLookupLastPing = New-Object System.Windows.Forms.CheckBox
+    $chkAutoLookupLastPing.Location = New-Object System.Drawing.Point(20, 178)
+    $chkAutoLookupLastPing.Size = New-Object System.Drawing.Size(360, 20)
+    $chkAutoLookupLastPing.Text = "Reports - Look up last ping time from ConnectSecure for hostnames"
+    $chkAutoLookupLastPing.Checked = if ($script:UserSettings.HostnameReviewAutoLookupLastPing) { $true } else { $false }
+    $dlg.Controls.Add($chkAutoLookupLastPing)
+
     $chkAutoResize = New-Object System.Windows.Forms.CheckBox
-    $chkAutoResize.Location = New-Object System.Drawing.Point(20, 178)
+    $chkAutoResize.Location = New-Object System.Drawing.Point(20, 201)
     $chkAutoResize.Size = New-Object System.Drawing.Size(360, 20)
     $chkAutoResize.Text = "Downloaded reports - Auto-resize Excel columns (excludes Company, Proposed Remediations)"
     $chkAutoResize.Checked = if ($script:UserSettings.DownloadAutoResizeColumns) { $true } else { $false }
     $dlg.Controls.Add($chkAutoResize)
 
     $lblWin11Thresh = New-Object System.Windows.Forms.Label
-    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 203)
+    $lblWin11Thresh.Location = New-Object System.Drawing.Point(20, 224)
     $lblWin11Thresh.Size = New-Object System.Drawing.Size(280, 20)
     $lblWin11Thresh.Text = "Hostname Review - Windows 11 O/S vuln threshold (below = unselected):"
     $dlg.Controls.Add($lblWin11Thresh)
     $numWin11Thresh = New-Object System.Windows.Forms.NumericUpDown
-    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 201)
+    $numWin11Thresh.Location = New-Object System.Drawing.Point(300, 222)
     $numWin11Thresh.Size = New-Object System.Drawing.Size(80, 22)
     $numWin11Thresh.Minimum = 0
     $numWin11Thresh.Maximum = 9999
@@ -2459,7 +2691,7 @@ function Show-OutputOptionsDialog {
     $dlg.Controls.Add($numWin11Thresh)
 
     $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Location = New-Object System.Drawing.Point(210, 232)
+    $btnOK.Location = New-Object System.Drawing.Point(210, 253)
     $btnOK.Size = New-Object System.Drawing.Size(90, 28)
     $btnOK.Text = "OK"
     $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2470,13 +2702,14 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.HostnameReviewAutoLookupLastPing = $chkAutoLookupLastPing.Checked
         $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
     })
     $dlg.Controls.Add($btnOK)
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(305, 232)
+    $btnCancel.Location = New-Object System.Drawing.Point(305, 253)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 28)
     $btnCancel.Text = "Cancel"
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
@@ -2491,6 +2724,7 @@ function Show-OutputOptionsDialog {
         $script:OutputTicketInstructions = $chkTicket.Checked
         $script:OutputTimeEstimate = $chkTime.Checked
         $script:UserSettings.HostnameReviewAutoLookupConnectSecure = $chkAutoLookup.Checked
+        $script:UserSettings.HostnameReviewAutoLookupLastPing = $chkAutoLookupLastPing.Checked
         $script:UserSettings.DownloadAutoResizeColumns = $chkAutoResize.Checked
         $script:UserSettings.HostnameReviewWindows11Threshold = [int]$numWin11Thresh.Value
         Save-UserSettings | Out-Null
@@ -2674,22 +2908,12 @@ function Show-TemplatesDialog {
 function Show-AIApiKeysDialog {
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text = "AI API Keys"
-    $dlg.Size = New-Object System.Drawing.Size(480, 220)
+    $dlg.Size = New-Object System.Drawing.Size(480, 180)
     $dlg.StartPosition = "CenterParent"
     $dlg.FormBorderStyle = "FixedDialog"
     $dlg.MaximizeBox = $false
 
     $y = 20
-    $lblHint = New-Object System.Windows.Forms.Label
-    $lblHint.Location = New-Object System.Drawing.Point(20, $y)
-    $lblHint.Size = New-Object System.Drawing.Size(420, 48)
-    $lblHint.Text = "Store API keys for AI-assisted report generation. Future use: email templates, ticket notes, remediation instructions, remediation guidance, and time estimate guidance (factors + human input). Keys are saved locally."
-    $lblHint.ForeColor = [System.Drawing.Color]::Gray
-    $lblHint.AutoSize = $false
-    $lblHint.Font = New-Object System.Drawing.Font($lblHint.Font.FontFamily, 8.5)
-    $dlg.Controls.Add($lblHint)
-    $y += 52
-
     $providers = @(
         @{ Name = "Microsoft Copilot"; Key = "AIApiKeyCopilot" }
         @{ Name = "OpenAI (ChatGPT)"; Key = "AIApiKeyChatGPT" }
@@ -3341,7 +3565,8 @@ function Show-CompanyFolderMappingDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    $settingsForm.Size = New-Object System.Drawing.Size(500, 550)
+    # Increase form height to accommodate Memberberry integration section
+    $settingsForm.Size = New-Object System.Drawing.Size(480, 570)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
@@ -3358,7 +3583,7 @@ function Show-SettingsDialog {
 
     $txtPreparedBy = New-Object System.Windows.Forms.TextBox
     $txtPreparedBy.Location = New-Object System.Drawing.Point(180, $y)
-    $txtPreparedBy.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPreparedBy.Size = New-Object System.Drawing.Size(250, 20)
     $txtPreparedBy.Text = $script:UserSettings.PreparedBy
     $settingsForm.Controls.Add($txtPreparedBy)
     $y += 35
@@ -3372,7 +3597,7 @@ function Show-SettingsDialog {
 
     $txtCompanyName = New-Object System.Windows.Forms.TextBox
     $txtCompanyName.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyName.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyName.Size = New-Object System.Drawing.Size(250, 20)
     $txtCompanyName.Text = $script:UserSettings.CompanyName
     $settingsForm.Controls.Add($txtCompanyName)
     $y += 35
@@ -3386,7 +3611,7 @@ function Show-SettingsDialog {
 
     $txtCompanyAddress = New-Object System.Windows.Forms.TextBox
     $txtCompanyAddress.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyAddress.Size = New-Object System.Drawing.Size(280, 40)
+    $txtCompanyAddress.Size = New-Object System.Drawing.Size(250, 40)
     $txtCompanyAddress.Multiline = $true
     $txtCompanyAddress.Text = $script:UserSettings.CompanyAddress
     $settingsForm.Controls.Add($txtCompanyAddress)
@@ -3401,7 +3626,7 @@ function Show-SettingsDialog {
 
     $txtEmail = New-Object System.Windows.Forms.TextBox
     $txtEmail.Location = New-Object System.Drawing.Point(180, $y)
-    $txtEmail.Size = New-Object System.Drawing.Size(280, 20)
+    $txtEmail.Size = New-Object System.Drawing.Size(250, 20)
     $txtEmail.Text = $script:UserSettings.Email
     $settingsForm.Controls.Add($txtEmail)
     $y += 35
@@ -3415,7 +3640,7 @@ function Show-SettingsDialog {
 
     $txtPhoneNumber = New-Object System.Windows.Forms.TextBox
     $txtPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
-    $txtPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtPhoneNumber.Size = New-Object System.Drawing.Size(250, 20)
     $txtPhoneNumber.Text = $script:UserSettings.PhoneNumber
     $settingsForm.Controls.Add($txtPhoneNumber)
     $y += 35
@@ -3429,7 +3654,7 @@ function Show-SettingsDialog {
 
     $txtCompanyPhoneNumber = New-Object System.Windows.Forms.TextBox
     $txtCompanyPhoneNumber.Location = New-Object System.Drawing.Point(180, $y)
-    $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(280, 20)
+    $txtCompanyPhoneNumber.Size = New-Object System.Drawing.Size(250, 20)
     $txtCompanyPhoneNumber.Text = $script:UserSettings.CompanyPhoneNumber
     $settingsForm.Controls.Add($txtCompanyPhoneNumber)
     $y += 35
@@ -3482,7 +3707,6 @@ function Show-SettingsDialog {
     $txtSettingsDirectory = New-Object System.Windows.Forms.TextBox
     $txtSettingsDirectory.Location = New-Object System.Drawing.Point(180, $y)
     $txtSettingsDirectory.Size = New-Object System.Drawing.Size(200, 20)
-    $txtSettingsDirectory.ReadOnly = $true
     $displayDir = if ([string]::IsNullOrEmpty($script:UserSettings.SettingsDirectory)) {
         Join-Path $env:LOCALAPPDATA "VScanMagic"
     } else {
@@ -3497,7 +3721,7 @@ function Show-SettingsDialog {
     $btnBrowseSettingsDir.Text = "Browse..."
     $btnBrowseSettingsDir.Add_Click({
         $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-        $folderBrowser.Description = "Select directory for settings and rules configuration files"
+        $folderBrowser.Description = "Select directory for settings and rules configuration files. You can use a cloud folder (OneDrive, Google Drive) or network share."
         $folderBrowser.ShowNewFolderButton = $true
         if (-not [string]::IsNullOrEmpty($txtSettingsDirectory.Text)) {
             $folderBrowser.SelectedPath = $txtSettingsDirectory.Text
@@ -3509,22 +3733,118 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($btnBrowseSettingsDir)
     $y += 35
 
-    # Reset to Default button
-    $btnResetDir = New-Object System.Windows.Forms.Button
-    $btnResetDir.Location = New-Object System.Drawing.Point(180, $y)
-    $btnResetDir.Size = New-Object System.Drawing.Size(150, 25)
-    $btnResetDir.Text = "Reset to Default"
-    $btnResetDir.Add_Click({
-        $txtSettingsDirectory.Text = Join-Path $env:LOCALAPPDATA "VScanMagic"
-    })
-    $settingsForm.Controls.Add($btnResetDir)
-    $y += 40
+    # Memberberry Integration Status Section
+    if (Get-Command Get-VScanMagicStorageInfo -ErrorAction SilentlyContinue) {
+        $lblMemberberrySection = New-Object System.Windows.Forms.Label
+        $lblMemberberrySection.Text = "Memberberry Integration (Shared Storage):"
+        $lblMemberberrySection.Location = New-Object System.Drawing.Point(20, $y)
+        $lblMemberberrySection.Size = New-Object System.Drawing.Size(440, 20)
+        $lblMemberberrySection.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+        $settingsForm.Controls.Add($lblMemberberrySection)
+        $y += 25
 
-    # AI API Keys (for future expansion)
+        try {
+            $storageInfo = Get-VScanMagicStorageInfo
+            $isShared = $storageInfo.IsShared
+            $dataPath = $storageInfo.DataPath
+            $configPath = $storageInfo.MemberberryConfigPath
+
+            # Storage Status
+            $lblStorageStatus = New-Object System.Windows.Forms.Label
+            $lblStorageStatus.Location = New-Object System.Drawing.Point(20, $y)
+            $lblStorageStatus.Size = New-Object System.Drawing.Size(150, 20)
+            $lblStorageStatus.Text = "Storage Type:"
+            $lblStorageStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $settingsForm.Controls.Add($lblStorageStatus)
+
+            $lblStorageStatusValue = New-Object System.Windows.Forms.Label
+            $lblStorageStatusValue.Location = New-Object System.Drawing.Point(180, $y)
+            $lblStorageStatusValue.Size = New-Object System.Drawing.Size(280, 20)
+            if ($isShared) {
+                $lblStorageStatusValue.Text = "Shared Storage (Memberberry)"
+                $lblStorageStatusValue.ForeColor = [System.Drawing.Color]::Green
+            } else {
+                $lblStorageStatusValue.Text = "Local Storage"
+                $lblStorageStatusValue.ForeColor = [System.Drawing.Color]::Gray
+            }
+            $settingsForm.Controls.Add($lblStorageStatusValue)
+            $y += 25
+
+            # Data Path
+            $lblDataPathLabel = New-Object System.Windows.Forms.Label
+            $lblDataPathLabel.Location = New-Object System.Drawing.Point(20, $y)
+            $lblDataPathLabel.Size = New-Object System.Drawing.Size(150, 20)
+            $lblDataPathLabel.Text = "Data Path:"
+            $lblDataPathLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $settingsForm.Controls.Add($lblDataPathLabel)
+
+            $txtDataPathDisplay = New-Object System.Windows.Forms.TextBox
+            $txtDataPathDisplay.Location = New-Object System.Drawing.Point(180, $y)
+            $txtDataPathDisplay.Size = New-Object System.Drawing.Size(280, 20)
+            $txtDataPathDisplay.Text = $dataPath
+            $txtDataPathDisplay.ReadOnly = $true
+            $txtDataPathDisplay.BackColor = [System.Drawing.SystemColors]::Control
+            $settingsForm.Controls.Add($txtDataPathDisplay)
+            $y += 25
+
+            # Memberberry Config Path (if found)
+            if ($configPath) {
+                $lblConfigPathLabel = New-Object System.Windows.Forms.Label
+                $lblConfigPathLabel.Location = New-Object System.Drawing.Point(20, $y)
+                $lblConfigPathLabel.Size = New-Object System.Drawing.Size(150, 20)
+                $lblConfigPathLabel.Text = "Memberberry Config:"
+                $lblConfigPathLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                $settingsForm.Controls.Add($lblConfigPathLabel)
+
+                $txtConfigPathDisplay = New-Object System.Windows.Forms.TextBox
+                $txtConfigPathDisplay.Location = New-Object System.Drawing.Point(180, $y)
+                $txtConfigPathDisplay.Size = New-Object System.Drawing.Size(280, 20)
+                $txtConfigPathDisplay.Text = $configPath
+                $txtConfigPathDisplay.ReadOnly = $true
+                $txtConfigPathDisplay.BackColor = [System.Drawing.SystemColors]::Control
+                $settingsForm.Controls.Add($txtConfigPathDisplay)
+                $y += 25
+
+                # Hint about configuring in Memberberry
+                $lblMemberberryHint = New-Object System.Windows.Forms.Label
+                $lblMemberberryHint.Location = New-Object System.Drawing.Point(180, $y)
+                $lblMemberberryHint.Size = New-Object System.Drawing.Size(280, 35)
+                $lblMemberberryHint.Text = "To change the shared storage location, edit data_path in Memberberry's Settings (Settings button in Memberberry GUI)."
+                $lblMemberberryHint.Font = New-Object System.Drawing.Font("Segoe UI", 7)
+                $lblMemberberryHint.ForeColor = [System.Drawing.Color]::Gray
+                $settingsForm.Controls.Add($lblMemberberryHint)
+                $y += 40
+            } else {
+                # No config found
+                $lblNoConfig = New-Object System.Windows.Forms.Label
+                $lblNoConfig.Location = New-Object System.Drawing.Point(180, $y)
+                $lblNoConfig.Size = New-Object System.Drawing.Size(280, 35)
+                $lblNoConfig.Text = "Memberberry config.json not found. Using local storage. Configure Memberberry to enable shared storage."
+                $lblNoConfig.Font = New-Object System.Drawing.Font("Segoe UI", 7)
+                $lblNoConfig.ForeColor = [System.Drawing.Color]::Orange
+                $settingsForm.Controls.Add($lblNoConfig)
+                $y += 40
+            }
+        } catch {
+            $lblError = New-Object System.Windows.Forms.Label
+            $lblError.Location = New-Object System.Drawing.Point(180, $y)
+            $lblError.Size = New-Object System.Drawing.Size(280, 20)
+            $lblError.Text = "Error checking Memberberry integration: $($_.Exception.Message)"
+            $lblError.ForeColor = [System.Drawing.Color]::Red
+            $settingsForm.Controls.Add($lblError)
+            $y += 25
+        }
+    }
+
+    # AI API Keys
     $btnAIApiKeys = New-Object System.Windows.Forms.Button
     $btnAIApiKeys.Location = New-Object System.Drawing.Point(20, $y)
     $btnAIApiKeys.Size = New-Object System.Drawing.Size(120, 25)
     $btnAIApiKeys.Text = "AI API Keys..."
+    $btnAIApiKeys.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $btnAIApiKeys.ForeColor = [System.Drawing.Color]::White
+    $btnAIApiKeys.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnAIApiKeys.FlatAppearance.BorderSize = 0
     $btnAIApiKeys.Add_Click({ Show-AIApiKeysDialog })
     $settingsForm.Controls.Add($btnAIApiKeys)
 
@@ -3532,34 +3852,45 @@ function Show-SettingsDialog {
     $btnConnectWise.Location = New-Object System.Drawing.Point(150, $y)
     $btnConnectWise.Size = New-Object System.Drawing.Size(160, 25)
     $btnConnectWise.Text = "ConnectWise Automate..."
+    $btnConnectWise.BackColor = [System.Drawing.Color]::FromArgb(94, 53, 177)
+    $btnConnectWise.ForeColor = [System.Drawing.Color]::White
+    $btnConnectWise.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnConnectWise.FlatAppearance.BorderSize = 0
     $btnConnectWise.Add_Click({ Show-ConnectWiseAutomateSettingsDialog })
     $settingsForm.Controls.Add($btnConnectWise)
-    $lblAIApiHint = New-Object System.Windows.Forms.Label
-    $lblAIApiHint.Location = New-Object System.Drawing.Point(150, ($y + 4))
-    $lblAIApiHint.Size = New-Object System.Drawing.Size(320, 18)
-    $lblAIApiHint.Text = "Copilot, ChatGPT, Claude - for future AI features"
-    $lblAIApiHint.ForeColor = [System.Drawing.Color]::Gray
-    $lblAIApiHint.Font = New-Object System.Drawing.Font($lblAIApiHint.Font.FontFamily, 8.5)
-    $settingsForm.Controls.Add($lblAIApiHint)
-    $y += 40
+    $y += 35
 
-    # Backup / Restore Settings
+    # Backup / Restore Settings (All, Shared, or User scope)
+    $lblBackupScope = New-Object System.Windows.Forms.Label
+    $lblBackupScope.Location = [System.Drawing.Point]::new(20, $y + 6)
+    $lblBackupScope.Size = New-Object System.Drawing.Size(50, 18)
+    $lblBackupScope.Text = "Scope:"
+    $settingsForm.Controls.Add($lblBackupScope)
+
+    $cmbBackupScope = New-Object System.Windows.Forms.ComboBox
+    $cmbBackupScope.Location = [System.Drawing.Point]::new(70, $y + 2)
+    $cmbBackupScope.Size = New-Object System.Drawing.Size(90, 21)
+    $cmbBackupScope.DropDownStyle = "DropDownList"
+    [void]$cmbBackupScope.Items.AddRange(@("All", "Shared only", "User only"))
+    $cmbBackupScope.SelectedIndex = 0
+    $settingsForm.Controls.Add($cmbBackupScope)
+
     $btnBackup = New-Object System.Windows.Forms.Button
-    $btnBackup.Location = New-Object System.Drawing.Point(20, $y)
-    $btnBackup.Size = New-Object System.Drawing.Size(100, 30)
-    $btnBackup.Text = "Backup Settings"
+    $btnBackup.Location = New-Object System.Drawing.Point(170, $y)
+    $btnBackup.Size = New-Object System.Drawing.Size(90, 28)
+    $btnBackup.Text = "Backup..."
     $btnBackup.Add_Click({
-        $defaultName = "VScanMagic_Settings_Backup_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').zip"
+        $scope = switch ($cmbBackupScope.SelectedIndex) { 0 { "All" } 1 { "Shared" } default { "User" } }
+        $defaultName = "VScanMagic_Settings_Backup$(if($scope -ne 'All'){"_$scope"})_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').zip"
         $saveDlg = New-Object System.Windows.Forms.SaveFileDialog
         $saveDlg.Filter = "ZIP Archive (*.zip)|*.zip|All Files (*.*)|*.*"
-        $saveDlg.Title = "Save Settings Backup"
+        $saveDlg.Title = "Save Settings Backup ($scope)"
         $saveDlg.FileName = $defaultName
-        $saveDlg.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+        $initDir = if ($script:UserSettings.SettingsDirectory -and (Test-Path $script:UserSettings.SettingsDirectory)) { $script:UserSettings.SettingsDirectory } else { [Environment]::GetFolderPath("Desktop") }
+        $saveDlg.InitialDirectory = $initDir
         if ($saveDlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $outPath = Backup-Settings -OutputPath $saveDlg.FileName
-        } else {
-            $outPath = $null
-        }
+            $outPath = Backup-Settings -OutputPath $saveDlg.FileName -Scope $scope
+        } else { $outPath = $null }
         if ($outPath) {
             [System.Windows.Forms.MessageBox]::Show("Settings backed up to:`n$outPath", "Backup Complete",
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -3571,32 +3902,33 @@ function Show-SettingsDialog {
     $settingsForm.Controls.Add($btnBackup)
 
     $btnRestore = New-Object System.Windows.Forms.Button
-    $btnRestore.Location = New-Object System.Drawing.Point(130, $y)
-    $btnRestore.Size = New-Object System.Drawing.Size(100, 30)
-    $btnRestore.Text = "Restore Settings"
+    $btnRestore.Location = New-Object System.Drawing.Point(270, $y)
+    $btnRestore.Size = New-Object System.Drawing.Size(90, 28)
+    $btnRestore.Text = "Restore..."
     $btnRestore.Add_Click({
+        $scope = switch ($cmbBackupScope.SelectedIndex) { 0 { "All" } 1 { "Shared" } default { "User" } }
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
         $dlg.Filter = "Backup ZIP (*.zip)|*.zip|All Files (*.*)|*.*"
-        $dlg.Title = "Select VScanMagic Settings Backup"
+        $dlg.Title = "Select VScanMagic Settings Backup (will restore $scope)"
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $result = Restore-Settings -BackupPath $dlg.FileName
+            $result = Restore-Settings -BackupPath $dlg.FileName -Scope $scope
             if ($result) {
                 [System.Windows.Forms.MessageBox]::Show("Settings restored successfully. Restart the application for full effect.", "Restore Complete",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
                 $settingsForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
                 $settingsForm.Close()
             } else {
-                [System.Windows.Forms.MessageBox]::Show("Restore failed or backup contained no valid files.", "Restore Failed",
+                [System.Windows.Forms.MessageBox]::Show("Restore failed or backup contained no valid files for scope '$scope'.", "Restore Failed",
                     [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
             }
         }
     })
     $settingsForm.Controls.Add($btnRestore)
-    $y += 40
+    $y += 50
 
     # Save Button
     $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Location = New-Object System.Drawing.Point(280, $y)
+    $btnSave.Location = New-Object System.Drawing.Point(250, $y)
     $btnSave.Size = New-Object System.Drawing.Size(90, 30)
     $btnSave.Text = "Save"
     $btnSave.Add_Click({
@@ -3676,7 +4008,7 @@ function Show-SettingsDialog {
 
     # Cancel Button
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Location = New-Object System.Drawing.Point(380, $y)
+    $btnCancel.Location = New-Object System.Drawing.Point(350, $y)
     $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
     $btnCancel.Text = "Cancel"
     $btnCancel.Add_Click({
