@@ -25,12 +25,18 @@
     ConnectSecure API client secret.
 .PARAMETER UseSavedCredentials
     Load ConnectSecure credentials from VScanMagic saved settings (requires CompanyId).
+.PARAMETER SeedRemediation
+    When set, fills Remediation Steps from ConnectSecure Fix when present; otherwise fetches summaries from NVD (services.nvd.nist.gov) when CVE IDs are present. Requires CVE data in the source report.
+.PARAMETER NvdApiKey
+    Optional NVD API key for higher rate limits (50 req/30s vs 5 req/30s). Request a key at https://nvd.nist.gov/developers/request-an-api-key
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath "C:\Reports\Client All Vulnerabilities.xlsx" -OutputPath ".\baseline.csv"
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+.EXAMPLE
+    .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -NvdApiKey $env:NVD_API_KEY -OutputPath ".\baseline.csv"
 #>
 param(
     [string]$ExcelPath = "",
@@ -42,7 +48,9 @@ param(
     [string]$ConnectSecureTenant = "",
     [string]$ConnectSecureClientId = "",
     [string]$ConnectSecureClientSecret = "",
-    [switch]$UseSavedCredentials = $false
+    [switch]$UseSavedCredentials = $false,
+    [switch]$SeedRemediation = $false,
+    [string]$NvdApiKey = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +66,35 @@ if (-not (Test-Path $modulesDir)) {
 }
 . (Join-Path $modulesDir "VScanMagic-Core.ps1")
 . (Join-Path $modulesDir "VScanMagic-Data.ps1")
+if ($SeedRemediation) {
+    . (Join-Path $modulesDir "VScanMagic-NVD.ps1")
+}
+
+function Get-ExportPropertySafe {
+    param([object]$Obj, [string]$Name)
+    if ($null -eq $Obj) { return '' }
+    $p = $Obj.PSObject.Properties[$Name]
+    if ($null -eq $p) { return '' }
+    $v = $p.Value
+    if ($null -eq $v) { return '' }
+    return [string]$v
+}
+
+function Get-ExportRemediationSteps {
+    param(
+        [string]$Fix,
+        [string]$Cve,
+        [bool]$SeedRemediation,
+        [string]$NvdApiKey
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Fix)) {
+        return $Fix.Trim()
+    }
+    if ($SeedRemediation -and -not [string]::IsNullOrWhiteSpace($Cve)) {
+        return Get-NVDRemediationForCveList -CveListText $Cve -ApiKey $NvdApiKey
+    }
+    return ''
+}
 
 # Determine data source
 $tempExcelPath = $null
@@ -137,9 +174,9 @@ if (-not $vulnData -or $vulnData.Count -eq 0) {
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
         # Write empty CSV with headers
         $headers = if ($UniqueProductsOnly) {
-            "Product", "Critical", "High", "Medium", "Low", "Vulnerability Count", "Affected Hosts", "Remediation Steps"
+            "Product", "Critical", "High", "Medium", "Low", "Vulnerability Count", "Affected Hosts", "CVE", "Remediation Steps"
         } else {
-            "Host Name", "IP", "Username", "Product", "Critical", "High", "Medium", "Low", "Vulnerability Count", "EPSS Score"
+            "Host Name", "IP", "Username", "Product", "Critical", "High", "Medium", "Low", "Vulnerability Count", "EPSS Score", "CVE", "Remediation Steps"
         }
         $headers -join "," | Out-File -FilePath $OutputPath -Encoding UTF8
     }
@@ -158,6 +195,15 @@ if ($UniqueProductsOnly) {
         $low = ($g | Measure-Object -Property Low -Sum).Sum
         $vulnCount = ($g | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
         $hostCount = ($g | Group-Object -Property { "$($_.'Host Name')|$($_.IP)" }).Count
+
+        $cveParts = $g | ForEach-Object { Get-ExportPropertySafe $_ 'CVE' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+        $cveVal = if ($cveParts -and $cveParts.Count -gt 0) { ($cveParts -join '; ').Trim() } else { '' }
+
+        $fixParts = $g | ForEach-Object { Get-ExportPropertySafe $_ 'Fix' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+        $fixVal = if ($fixParts -and $fixParts.Count -gt 0) { ($fixParts -join '; ').Trim() } else { '' }
+
+        $remediation = Get-ExportRemediationSteps -Fix $fixVal -Cve $cveVal -SeedRemediation:$SeedRemediation -NvdApiKey $NvdApiKey
+
         [PSCustomObject]@{
             Product = $_.Name
             Critical = $critical
@@ -166,12 +212,45 @@ if ($UniqueProductsOnly) {
             Low = $low
             'Vulnerability Count' = $vulnCount
             'Affected Hosts' = $hostCount
-            'Remediation Steps' = ""  # Blank for technician to fill in
+            'CVE' = $cveVal
+            'Remediation Steps' = $remediation
         }
     } | Sort-Object -Property 'Vulnerability Count' -Descending
     Write-Host "Aggregated to $($exportData.Count) unique applications." -ForegroundColor Green
 } else {
-    $exportData = $vulnData
+    $exportData = $vulnData | ForEach-Object {
+        $fix = Get-ExportPropertySafe $_ 'Fix'
+        $cve = Get-ExportPropertySafe $_ 'CVE'
+        $remediation = Get-ExportRemediationSteps -Fix $fix -Cve $cve -SeedRemediation:$SeedRemediation -NvdApiKey $NvdApiKey
+
+        $crit = $_.Critical
+        $hi = $_.High
+        $med = $_.Medium
+        $lo = $_.Low
+        $vc = $_.'Vulnerability Count'
+        $epss = $_.'EPSS Score'
+        if ($null -eq $crit) { $crit = 0 }
+        if ($null -eq $hi) { $hi = 0 }
+        if ($null -eq $med) { $med = 0 }
+        if ($null -eq $lo) { $lo = 0 }
+        if ($null -eq $vc) { $vc = 0 }
+        if ($null -eq $epss) { $epss = 0.0 }
+
+        [PSCustomObject]@{
+            'Host Name' = Get-ExportPropertySafe $_ 'Host Name'
+            'IP' = Get-ExportPropertySafe $_ 'IP'
+            'Username' = Get-ExportPropertySafe $_ 'Username'
+            'Product' = Get-ExportPropertySafe $_ 'Product'
+            'Critical' = $crit
+            'High' = $hi
+            'Medium' = $med
+            'Low' = $lo
+            'Vulnerability Count' = $vc
+            'EPSS Score' = $epss
+            'CVE' = $cve
+            'Remediation Steps' = $remediation
+        }
+    }
     Write-Host "Exporting $($exportData.Count) vulnerability records." -ForegroundColor Green
 }
 
