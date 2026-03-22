@@ -38,7 +38,7 @@ The server binds to **loopback** by default: `http://127.0.0.1:8080/` (not reach
 
 | Setting | Purpose |
 |--------|---------|
-| `VSCANMAGIC_API_KEY` | If set, every request must send the same value in header **`X-VScanMagic-Api-Key`** or **`Authorization: Bearer &lt;key&gt;`**. OPTIONS preflight is exempt. |
+| `VSCANMAGIC_API_KEY` | If set, every request must send the same value in header `X-VScanMagic-Api-Key` or `Authorization: Bearer <key>`. OPTIONS preflight is exempt. |
 | `VSCANMAGIC_API_BIND` | Optional. Override bind host (default `127.0.0.1`). Do not expose this API to untrusted networks without authentication. |
 
 - **Do not pass** `ConnectSecureClientSecret` in the query string; **JSON body only** (query strings appear in logs and browser history).
