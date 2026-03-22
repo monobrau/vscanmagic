@@ -98,6 +98,12 @@ Output includes Product, severity counts, affected hosts, **CVE** (when present 
 - [Quick Start](QUICK_START.md) – Step-by-step guide
 - [Release Notes](https://github.com/monobrau/vscanmagic/releases) – Changelog and downloads
 
+### Development
+
+- **Tests (no COM):** `.\tests\Run-Tests.ps1`
+- **PSScriptAnalyzer:** `Install-Module PSScriptAnalyzer -Scope CurrentUser -Force` then `.\scripts\Invoke-ScriptAnalyzer.ps1` (use `-Severity Error` for CI-level strictness)
+- **ConnectSecure client** is split into `ConnectSecure-API.ps1` (loader) plus `ConnectSecure-API.Part1.ps1` … `Part3.ps1`.
+
 ---
 
 ## Contributing

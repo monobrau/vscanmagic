@@ -1,0 +1,26 @@
+name: PowerShell
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  analyze-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: ScriptAnalyzer (Errors only)
+        shell: pwsh
+        run: ./scripts/Invoke-ScriptAnalyzer.ps1 -Severity Error
+
+      - name: Tests
+        shell: powershell
+        run: ./tests/Run-Tests.ps1

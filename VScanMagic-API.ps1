@@ -23,10 +23,13 @@ Add-Type -AssemblyName System
 Add-Type -AssemblyName System.Web
 
 # --- Configuration ---
+# Bind to 127.0.0.1 by default (loopback only). Set $env:VSCANMAGIC_API_BIND to e.g. "localhost" or "+" if you need other bindings (not recommended).
+# If $env:VSCANMAGIC_API_KEY is set, all requests (except OPTIONS preflight) must send the same value in header X-VScanMagic-Api-Key or Authorization: Bearer <key>.
 $script:ApiConfig = @{
     Port = 8080
-    Host = "localhost"
+    Host = if ($env:VSCANMAGIC_API_BIND) { $env:VSCANMAGIC_API_BIND } else { '127.0.0.1' }
     TempDirectory = Join-Path $env:TEMP "VScanMagic-API"
+    ApiKey = if ($env:VSCANMAGIC_API_KEY) { $env:VSCANMAGIC_API_KEY } else { $null }
 }
 
 # --- Helper: Define Write-ApiLog before dot-sourcing (it is used below) ---
@@ -152,6 +155,36 @@ function Get-QueryParameter {
 
     $query = $Request.QueryString[$ParameterName]
     return $query
+}
+
+function Test-ApiRequestAuthorized {
+    <#
+    .SYNOPSIS
+        Returns $true if no API key is configured, or the request presents a matching key.
+        Use env VSCANMAGIC_API_KEY to require X-VScanMagic-Api-Key or Authorization: Bearer.
+    #>
+    param([System.Net.HttpListenerContext]$Context)
+
+    $expected = $script:ApiConfig.ApiKey
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        return $true
+    }
+
+    $req = $Context.Request
+    $provided = $req.Headers['X-VScanMagic-Api-Key']
+    if ([string]::IsNullOrWhiteSpace($provided)) {
+        $auth = [string]$req.Headers['Authorization']
+        if ($auth -match '^\s*[Bb]earer\s+(.+)$') {
+            $provided = $Matches[1].Trim()
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($provided) -and $provided -eq $expected) {
+        return $true
+    }
+
+    Send-JsonResponse -Context $Context -Data @{ error = 'Unauthorized. Set header X-VScanMagic-Api-Key or Authorization: Bearer to match VSCANMAGIC_API_KEY.' } -StatusCode 401
+    return $false
 }
 
 # --- Report Generation Functions ---
@@ -537,7 +570,8 @@ function Handle-ReportRequest {
         $connectSecureBaseUrl = if ($body.ConnectSecureBaseUrl) { $body.ConnectSecureBaseUrl } else { Get-QueryParameter -Request $request -ParameterName "connectSecureBaseUrl" }
         $connectSecureTenant = if ($body.ConnectSecureTenant) { $body.ConnectSecureTenant } else { Get-QueryParameter -Request $request -ParameterName "connectSecureTenant" }
         $connectSecureClientId = if ($body.ConnectSecureClientId) { $body.ConnectSecureClientId } else { Get-QueryParameter -Request $request -ParameterName "connectSecureClientId" }
-        $connectSecureClientSecret = if ($body.ConnectSecureClientSecret) { $body.ConnectSecureClientSecret } else { Get-QueryParameter -Request $request -ParameterName "connectSecureClientSecret" }
+        # Secrets must not be passed in query strings (logs, browser history, Referer). JSON body only.
+        $connectSecureClientSecret = if ($body.ConnectSecureClientSecret) { $body.ConnectSecureClientSecret } else { $null }
         $companyId = if ($body.CompanyId) { [int]$body.CompanyId } else { 0 }
 
         # Set defaults
@@ -694,7 +728,7 @@ function Handle-HealthCheck {
 function Start-ApiServer {
     param(
         [int]$Port = 8080,
-        [string]$BindHost = "localhost"
+        [string]$BindHost = "127.0.0.1"
     )
 
     $listener = New-Object System.Net.HttpListener
@@ -721,13 +755,17 @@ function Start-ApiServer {
 
                 Write-ApiLog "$method $path" -Level Info
 
-                # Handle CORS preflight
+                # Handle CORS preflight (no API key required)
                 if ($method -eq "OPTIONS") {
                     $context.Response.Headers.Add("Access-Control-Allow-Origin", "*")
                     $context.Response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                    $context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type")
+                    $context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VScanMagic-Api-Key")
                     $context.Response.StatusCode = 200
                     $context.Response.OutputStream.Close()
+                    continue
+                }
+
+                if (-not (Test-ApiRequestAuthorized -Context $context)) {
                     continue
                 }
 
@@ -767,4 +805,9 @@ function Start-ApiServer {
 
 # --- Start Server ---
 Write-ApiLog "Starting VScanMagic API Server..." -Level Info
+if (-not [string]::IsNullOrWhiteSpace($script:ApiConfig.ApiKey)) {
+    Write-ApiLog "API key authentication enabled (set VSCANMAGIC_API_KEY). Use header X-VScanMagic-Api-Key or Authorization: Bearer." -Level Info
+} else {
+    Write-ApiLog "No VSCANMAGIC_API_KEY — requests are not authenticated (loopback only recommended)." -Level Warning
+}
 Start-ApiServer -Port $script:ApiConfig.Port -BindHost $script:ApiConfig.Host
