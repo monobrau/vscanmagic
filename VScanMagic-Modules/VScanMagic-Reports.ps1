@@ -1592,7 +1592,7 @@ function New-EmailTemplate {
         if ($IsRMITPlus) {
             $noteText = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
         } else {
-            $noteText = "Note: We will not generate remediation tickets without your approval. To schedule a discussion of these findings, please use the scheduling link above."
+            $noteText = "Note: Items will not be remediated unless we discuss them first. To schedule a discussion, please use the scheduling link above."
         }
 
         $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
