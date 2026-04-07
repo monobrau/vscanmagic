@@ -49,25 +49,25 @@ function Write-ApiLog {
     }
 }
 
-# --- Import Functions from VScanMagic-GUI.ps1 ---
-# Note: This assumes VScanMagic-GUI.ps1 is in the same directory
+# --- Import minimal report stack (Core + Data + Reports only; no Dialogs/Form/Memberberry) ---
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$guiScriptPath = Join-Path $scriptPath "VScanMagic-GUI.ps1"
+$bootstrapPath = Join-Path $scriptPath "VScanMagic-ApiBootstrap.ps1"
 $connectSecurePath = Join-Path $scriptPath "ConnectSecure-API.ps1"
 
-if (Test-Path $guiScriptPath) {
-    Write-ApiLog "Loading functions from VScanMagic-GUI.ps1..." -Level Info
-    
-    # Set a flag BEFORE dot-sourcing to prevent GUI from starting
-    # This must be in script scope to match what VScanMagic-GUI.ps1 checks
-    $script:IsApiMode = $true
-    
-    # Dot-source the script to import functions
-    # The GUI script will check $script:IsApiMode and skip GUI initialization if true
-    . $guiScriptPath
+$script:IsApiMode = $true
+
+if (Test-Path $bootstrapPath) {
+    Write-ApiLog "Loading VScanMagic API bootstrap (Core, Data, Reports)..." -Level Info
+    . $bootstrapPath
 } else {
-    Write-ApiLog "VScanMagic-GUI.ps1 not found at: $guiScriptPath" -Level Error
-    exit 1
+    Write-ApiLog "VScanMagic-ApiBootstrap.ps1 not found at: $bootstrapPath" -Level Error
+    Write-ApiLog "Fallback: loading full VScanMagic-GUI.ps1 (slower, includes unused Dialogs/Form)." -Level Warning
+    $guiScriptPath = Join-Path $scriptPath "VScanMagic-GUI.ps1"
+    if (-not (Test-Path $guiScriptPath)) {
+        Write-ApiLog "VScanMagic-GUI.ps1 also not found. Cannot start API." -Level Error
+        exit 1
+    }
+    . $guiScriptPath
 }
 
 # --- Import ConnectSecure API Functions ---

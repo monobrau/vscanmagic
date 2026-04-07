@@ -24,7 +24,7 @@ Reports can be generated from two data sources:
 - Windows PowerShell 5.1 or later
 - Microsoft Excel installed
 - Microsoft Word installed (for Executive Summary)
-- VScanMagic-GUI.ps1 in the same directory
+- `VScanMagic-ApiBootstrap.ps1` in the same directory (loads Core, Data, Reports). If it is missing, the server falls back to dot-sourcing `VScanMagic-GUI.ps1` (full GUI stack).
 
 ## Starting the Server
 

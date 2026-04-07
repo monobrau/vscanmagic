@@ -103,6 +103,7 @@ Output includes Product, severity counts, affected hosts, **CVE** (when present 
 - **Tests (no COM):** `.\tests\Run-Tests.ps1`
 - **PSScriptAnalyzer:** `Install-Module PSScriptAnalyzer -Scope CurrentUser -Force` then `.\scripts\Invoke-ScriptAnalyzer.ps1` (use `-Severity Error` for CI-level strictness)
 - **ConnectSecure client** is split into `ConnectSecure-API.ps1` (loader) plus `ConnectSecure-API.Part1.ps1` … `Part3.ps1`.
+- **REST API** (`VScanMagic-API.ps1`) loads `VScanMagic-ApiBootstrap.ps1` (Core + Data + Reports only), not the full GUI stack.
 
 ---
 
