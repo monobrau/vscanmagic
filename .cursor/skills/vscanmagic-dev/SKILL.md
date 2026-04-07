@@ -45,6 +45,10 @@ Main GUI loads modules in this order (do not change):
 
 Paths: `Join-Path $script:ScriptDirectory "VScanMagic-Modules"` then `Join-Path $modulesDir "VScanMagic-Core.ps1"` etc.
 
+## REST API (`VScanMagic-API.ps1`)
+
+Dot-sources **`VScanMagic-ApiBootstrap.ps1`** (Core → Data → Reports only). Does **not** load Dialogs, Form, or Memberberry. If bootstrap is missing, falls back to `VScanMagic-GUI.ps1`. Sets `$script:IsApiMode = $true` and `$script:ScriptDirectory` before loading modules.
+
 ## PowerShell: Single-Item Array Unwrapping
 
 PowerShell unwraps single-element arrays. A function returning `@($singleObject)` may be received as the object, not an array.
