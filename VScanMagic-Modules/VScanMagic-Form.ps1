@@ -377,7 +377,7 @@ function Show-VScanMagicGUI {
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $standardReports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -SkipPostDownloadTopX -OnProgress $onProgress
                     if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                        Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                     }
                     break
                 } catch {
@@ -475,7 +475,7 @@ function Show-VScanMagicGUI {
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
                     if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                        Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                     }
                     break
                 } catch {
@@ -552,7 +552,7 @@ function Show-VScanMagicGUI {
             $form.Refresh()
             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId 0 -ClientName "Global" -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
             if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
             }
             $successCount = if ($batchResult.Succeeded) { $batchResult.Succeeded.Count } else { 0 }
             $failCount = if ($batchResult.Failed) { $batchResult.Failed.Count } else { 0 }
@@ -1068,7 +1068,7 @@ function Show-VScanMagicGUI {
                             $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -TopCount $topCount -MinEPSS $script:FilterMinEPSS -IncludeCritical $script:FilterIncludeCritical -IncludeHigh $script:FilterIncludeHigh -IncludeMedium $script:FilterIncludeMedium -IncludeLow $script:FilterIncludeLow -SkipPostDownloadTopX -OnProgress $onProgress
                             if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                                Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                             }
                             break
                         } catch {

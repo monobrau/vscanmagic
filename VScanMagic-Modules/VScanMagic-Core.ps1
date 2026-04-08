@@ -1581,6 +1581,83 @@ function Clear-ComObject {
     }
 }
 
+<#
+.SYNOPSIS
+Opens an Excel workbook with retries and a fresh Excel.Application per attempt.
+Fixes intermittent "Unable to get the Open property of the Workbooks class" after
+rapid COM use (e.g. auto-resize on many downloads) or OneDrive/sync latency.
+#>
+function Open-ExcelWorkbookWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [bool]$ReadOnly = $true,
+        [int]$MaxAttempts = 5
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $fullPath)) {
+        throw "File not found: $fullPath"
+    }
+
+    $lastErr = $null
+    for ($a = 1; $a -le $MaxAttempts; $a++) {
+        if ($a -gt 1) {
+            Start-Sleep -Milliseconds (500 + 450 * ($a - 1))
+        }
+
+        $excel = $null
+        $wb = $null
+        try {
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            $excel.ScreenUpdating = $false
+
+            if ($ReadOnly) {
+                try {
+                    $wb = $excel.Workbooks.Open($fullPath, 0, $true)
+                } catch {
+                    $wb = $excel.Workbooks.Open($fullPath)
+                }
+            } else {
+                try {
+                    $wb = $excel.Workbooks.Open($fullPath)
+                } catch {
+                    $wb = $excel.Workbooks.Open($fullPath, 0, $false)
+                }
+            }
+
+            if ($null -eq $wb) {
+                throw "Workbooks.Open returned null for: $fullPath"
+            }
+
+            return [pscustomobject]@{
+                ExcelApp = $excel
+                Workbook = $wb
+            }
+        } catch {
+            $lastErr = $_
+            if ($null -ne $wb) {
+                try { $wb.Close($false) } catch { }
+                Clear-ComObject $wb
+            }
+            if ($null -ne $excel) {
+                try { $excel.Quit() } catch { }
+                Clear-ComObject $excel
+            }
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+
+            if ($a -lt $MaxAttempts) {
+                Write-Log "Excel open attempt $a/$MaxAttempts failed: $($_.Exception.Message)" -Level Warning
+            }
+        }
+    }
+
+    throw $lastErr
+}
+
 function Invoke-OperationWithRetry {
     param(
         [Parameter(Mandatory=$true)]

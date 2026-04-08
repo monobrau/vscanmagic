@@ -474,10 +474,6 @@ function Get-VulnerabilityData {
             Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
         }
 
-        $excel = New-Object -ComObject Excel.Application
-        $excel.Visible = $false
-        $excel.DisplayAlerts = $false
-
         # Check for file lock before opening (proactive temp copy if locked)
         if (Test-FileLocked $pathToOpen) {
             if (-not $tempPath) {
@@ -493,11 +489,15 @@ function Get-VulnerabilityData {
             }
         }
 
-        # UpdateLinks:=0, ReadOnly:=true - helps avoid lock issues
+        if ($tempPath) {
+            Start-Sleep -Milliseconds 350
+        }
+
         try {
-            $workbook = $excel.Workbooks.Open($pathToOpen, 0, $true)
+            $opened = Open-ExcelWorkbookWithRetry -Path $pathToOpen -ReadOnly $true -MaxAttempts 5
+            $excel = $opened.ExcelApp
+            $workbook = $opened.Workbook
         } catch {
-            # Fallback: if open fails (e.g. sync lock), copy to temp and retry
             if (-not $tempPath) {
                 $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($ExcelPath)
@@ -505,7 +505,10 @@ function Get-VulnerabilityData {
                 $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
                 Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
                 Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
-                $workbook = $excel.Workbooks.Open($tempPath, 0, $true)
+                Start-Sleep -Milliseconds 450
+                $opened = Open-ExcelWorkbookWithRetry -Path $tempPath -ReadOnly $true -MaxAttempts 5
+                $excel = $opened.ExcelApp
+                $workbook = $opened.Workbook
             } else {
                 throw
             }

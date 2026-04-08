@@ -766,6 +766,29 @@ function New-WordReport {
     }
 }
 
+# Auto-resize downloaded XLSX reports: process smaller workbooks first, All Vulnerabilities last (largest / OneDrive-sensitive).
+function Invoke-AutoResizeDownloadedXlsx {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [array]$Succeeded,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$OutputPathResolver
+    )
+    if (-not $Succeeded) { return }
+    $ordered = @(
+        $Succeeded |
+            Where-Object { $_.Ext -eq 'xlsx' } |
+            Sort-Object { if ($_.Type -eq 'all-vulnerabilities') { 1 } else { 0 } }
+    )
+    foreach ($r in $ordered) {
+        $p = & $OutputPathResolver $r
+        if (Test-Path -LiteralPath $p) {
+            Invoke-AutoResizeExcelColumns -ExcelPath $p
+        }
+    }
+}
+
 # Auto-resize columns on Excel workbook. Excludes Company and Proposed Remediations (all) sheets.
 function Invoke-AutoResizeExcelColumns {
     param([string]$ExcelPath)
@@ -782,12 +805,11 @@ function Invoke-AutoResizeExcelColumns {
             $tempCopyPath = Join-Path $tempDir ("VScanMagic_Resize_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
             Copy-Item -LiteralPath $ExcelPath -Destination $tempCopyPath -Force
             $pathToOpen = [System.IO.Path]::GetFullPath($tempCopyPath)
+            Start-Sleep -Milliseconds 450
         }
-        $excel = New-Object -ComObject Excel.Application
-        $excel.Visible = $false
-        $excel.DisplayAlerts = $false
-        $excel.ScreenUpdating = $false
-        $workbook = $excel.Workbooks.Open($pathToOpen)
+        $opened = Open-ExcelWorkbookWithRetry -Path $pathToOpen -ReadOnly $false -MaxAttempts 5
+        $excel = $opened.ExcelApp
+        $workbook = $opened.Workbook
         $excludeSheets = @('Company', 'Proposed Remediations (all)')
         foreach ($ws in $workbook.Worksheets) {
             $name = [string]$ws.Name
@@ -814,6 +836,7 @@ function Invoke-AutoResizeExcelColumns {
         if ($tempCopyPath -and (Test-Path -LiteralPath $tempCopyPath)) { Remove-Item -LiteralPath $tempCopyPath -Force -ErrorAction SilentlyContinue }
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 350
     }
 }
 
