@@ -75,7 +75,12 @@ $script:Config = @{
 
     # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
     AIBatchChunkSize = 2
-    AIBatchChunkDelaySeconds = 20
+    AIBatchChunkDelaySeconds = 35
+    # Cap strings sent to AI (ConnectSecure Solution text and merged CVE lists can be huge; avoids input TPM spikes)
+    AIFixTextMaxChars = 4500
+    AICveListMaxChars = 1200
+    AIProductNameMaxChars = 400
+    AIHostContextMaxChars = 500
 }
 
 # --- User Settings Persistence ---
@@ -1273,6 +1278,25 @@ function Save-GeneralRecommendations {
 
 # --- Templates Persistence (Email, Ticket Notes) ---
 
+function ConvertTo-StrictBool {
+    <#
+    Converts GUI/JSON-ish values to [bool]. PowerShell's [bool]"false" is $true (non-empty string);
+    this helper treats common false/true string spellings correctly.
+    #>
+    param(
+        $InputObject,
+        [bool]$IfNullOrUnknown = $false
+    )
+    if ($null -eq $InputObject) { return $IfNullOrUnknown }
+    if ($InputObject -is [bool]) { return $InputObject }
+    if ($InputObject -is [int] -or $InputObject -is [long] -or $InputObject -is [double]) { return $InputObject -ne 0 }
+    $t = ([string]$InputObject).Trim()
+    if ([string]::IsNullOrEmpty($t)) { return $IfNullOrUnknown }
+    if ($t -match '^(?i)(true|yes|y|on|1)$') { return $true }
+    if ($t -match '^(?i)(false|no|n|off|0)$') { return $false }
+    return $IfNullOrUnknown
+}
+
 function Get-DefaultTemplates {
     return @{
         EmailTemplate = @{
@@ -1760,6 +1784,23 @@ function ConvertTo-ReadableFixText {
     return $result
 }
 
+function Limit-AIPromptString {
+    <#
+    .SYNOPSIS
+    Truncates strings sent to AI APIs. ConnectSecure Solution text and merged CVE lists can be very large and exhaust org TPM limits.
+    #>
+    param(
+        [string]$Value,
+        [int]$MaxLength,
+        [string]$Suffix = ' [truncated]'
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    if ($MaxLength -lt 8) { $MaxLength = 8 }
+    if ($Value.Length -le $MaxLength) { return $Value }
+    $take = [Math]::Max(1, $MaxLength - $Suffix.Length)
+    return $Value.Substring(0, $take).TrimEnd() + $Suffix
+}
+
 function Test-AIApiKeyConfigured {
     <#
     .SYNOPSIS
@@ -1789,11 +1830,15 @@ function Invoke-AIImproveRemediationText {
     }
 
     $cleaned = ConvertTo-ReadableFixText -RawFix $Text
+    $cleaned = Limit-AIPromptString -Value $cleaned -MaxLength $script:Config.AIFixTextMaxChars
+    $cveLine = Limit-AIPromptString -Value $CveIdList -MaxLength $script:Config.AICveListMaxChars
+    $productLine = Limit-AIPromptString -Value $ProductName -MaxLength $script:Config.AIProductNameMaxChars
+    $hostLine = Limit-AIPromptString -Value $HostContext -MaxLength $script:Config.AIHostContextMaxChars
     $vulnContext = ""
     $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
-    if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product/OS: $ProductName" }
-    if (-not [string]::IsNullOrWhiteSpace($HostContext)) { $parts += "Affected hosts: $HostContext" }
+    if (-not [string]::IsNullOrWhiteSpace($cveLine)) { $parts += "CVE ID(s): $cveLine" }
+    if (-not [string]::IsNullOrWhiteSpace($productLine)) { $parts += "Product/OS: $productLine" }
+    if (-not [string]::IsNullOrWhiteSpace($hostLine)) { $parts += "Affected hosts: $hostLine" }
     if ($parts.Count -gt 0) { $vulnContext = ($parts -join "`n") + "`n`n" }
 
     $cveOnlyHint = ""
@@ -1962,19 +2007,9 @@ function Invoke-AIImproveRemediationTextBatch {
     $chunkSize = $script:Config.AIBatchChunkSize
     $chunkDelay = $script:Config.AIBatchChunkDelaySeconds
     $rulesHeader = @"
-You are rephrasing SPECIFIC remediation steps for MULTIPLE vulnerabilities. Below are N items. For EACH item, output the improved text, then the exact delimiter '$delim' (including the delimiter line).
+Rephrase remediation text for each item below. Output improved text only (no item labels), then a line exactly: $delim
 
-RULES (apply to EACH item):
-- Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
-- Do NOT output things like 'Prioritize remediation', 'Patch management', 'Vulnerability scanning' - those are generic.
-- Output ONLY a clear, professional rewrite of the SPECIFIC fix. One short paragraph or a few sentences max.
-- If the input is already specific (e.g. 'Apply KB5077181'), just make it slightly more readable.
-- NEVER respond with 'I don't have specific information'. Use CVE IDs to provide CVE-specific remediation when given.
-- When investigating CVEs: determine what the device/software is (Product/OS, Affected hosts), review manufacturer security advisories and vulnerability data, check for firmware updates, consider configuration mitigations. Provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT/embedded, vendor patch for software).
-- CRITICAL: Remediation MUST match the Product/OS. Windows 11/Server = Windows KB numbers only, never Chrome/Firefox versions. Google Chrome = Chrome versions only. Do NOT mix product types.
-- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates from manufacturer, network segmentation.
-
-OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 2', or numbering), then a line with exactly: $delim
+Rules (each item): rephrase ONLY the given fix text; no generic security advice; one short paragraph; match Product/OS (Windows=KB only, Chrome=Chrome versions only); use CVE context when present; never "no specific information".
 
 --- INPUT ITEMS ---
 "@
@@ -1990,7 +2025,7 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                 return $resp.choices[0].message.content.Trim()
             }
             if ($provider -eq 'Claude') {
-                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, $maxTokens); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
+                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, [Math]::Max(256, $maxTokens)); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
                 $headers = @{ "x-api-key" = $key; "anthropic-version" = "2023-06-01"; "Content-Type" = "application/json" }
                 $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
                 $content = @($resp.content)
@@ -2032,15 +2067,20 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                 if (-not [string]::IsNullOrWhiteSpace($fallback)) { $textToUse = $fallback }
             }
             $cleaned = ConvertTo-ReadableFixText -RawFix $textToUse
+            $cleaned = Limit-AIPromptString -Value $cleaned -MaxLength $script:Config.AIFixTextMaxChars
+            $cveLine = Limit-AIPromptString -Value $i.CveIdList -MaxLength $script:Config.AICveListMaxChars
+            $productLine = Limit-AIPromptString -Value $i.ProductName -MaxLength $script:Config.AIProductNameMaxChars
+            $hostLine = Limit-AIPromptString -Value $i.HostContext -MaxLength $script:Config.AIHostContextMaxChars
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("--- ITEM $($idx + 1) ---")
-            if (-not [string]::IsNullOrWhiteSpace($i.CveIdList)) { [void]$sb.AppendLine("CVE ID(s): $($i.CveIdList)") }
-            if (-not [string]::IsNullOrWhiteSpace($i.ProductName)) { [void]$sb.AppendLine("Product/OS: $($i.ProductName)") }
-            if (-not [string]::IsNullOrWhiteSpace($i.HostContext)) { [void]$sb.AppendLine("Affected hosts: $($i.HostContext)") }
+            if (-not [string]::IsNullOrWhiteSpace($cveLine)) { [void]$sb.AppendLine("CVE ID(s): $cveLine") }
+            if (-not [string]::IsNullOrWhiteSpace($productLine)) { [void]$sb.AppendLine("Product/OS: $productLine") }
+            if (-not [string]::IsNullOrWhiteSpace($hostLine)) { [void]$sb.AppendLine("Affected hosts: $hostLine") }
             [void]$sb.AppendLine("Text to rephrase: $cleaned")
         }
         $chunkPrompt = $sb.ToString()
-        $chunkMaxTokens = [Math]::Min(8192, 1024 + ($chunk.Count * 400))
+        # Short outputs only; keeps requests lean vs reserving large completion budgets
+        $chunkMaxTokens = [Math]::Min(4096, 384 + ($chunk.Count * 220))
 
         $raw = $null
         $claudeRetries = 1
@@ -2071,8 +2111,8 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                     if ($is429) {
                         $script:AIBatch429Count++
                         if ($attempt -lt $claudeRetries) {
-                            $waitSec = 30
-                            Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
+                            $waitSec = 60
+                            Write-Log "$provider batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
                             for ($w = 0; $w -lt $waitSec; $w++) {
                                 Start-Sleep -Seconds 1
                                 try { [System.Windows.Forms.Application]::DoEvents() } catch { }

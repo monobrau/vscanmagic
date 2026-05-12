@@ -1123,7 +1123,8 @@ function Show-VScanMagicGUI {
                             $clientName = $companyData.ClientName
                             $scanDate = $companyData.ScanDate
                             $outputDir = if ($companyData.OutputDir) { $companyData.OutputDir } else { $textBoxOutputDir.Text }
-                            $isRMITPlus = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $script:IsRMITPlus }
+                            $rawRmit = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $checkBoxRMITPlus.Checked }
+                            $isRMITPlus = ConvertTo-StrictBool $rawRmit -IfNullOrUnknown:([bool]$checkBoxRMITPlus.Checked)
                             $companyId = if ($companyData.Company -and $companyData.Company.Id -ne $null) { $companyData.Company.Id } else { if ($companyData.Id -ne $null) { $companyData.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
@@ -1417,7 +1418,7 @@ function Show-VScanMagicGUI {
                 $scanDate = $datePickerScanDate.Value.ToShortDateString()
                 $inputPath = $company.InputPath
                 $outputDir = if ($company.OutputDir) { $company.OutputDir } else { $textBoxOutputDir.Text }
-                $isRMITPlus = $script:IsRMITPlus
+                $isRMITPlus = ConvertTo-StrictBool $checkBoxRMITPlus.Checked
                 $companyId = if ($company.Company -and $company.Company.Id -ne $null) { $company.Company.Id } else { if ($company.Id -ne $null) { $company.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info

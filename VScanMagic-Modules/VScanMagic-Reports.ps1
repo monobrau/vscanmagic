@@ -1581,23 +1581,58 @@ function Open-EmailDraftInOutlook {
     }
 }
 
+function Format-EmailTemplateParagraphPreserveLists {
+    <# Within one double-newline paragraph: join prose lines with spaces; keep bullet / numbered lines on their own row. #>
+    param([string]$Paragraph)
+    if ([string]::IsNullOrWhiteSpace($Paragraph)) { return '' }
+    $lines = @($Paragraph -split "`r?`n")
+    [System.Collections.ArrayList]$outLines = @()
+    [System.Collections.ArrayList]$proseBuf = @()
+    foreach ($raw in $lines) {
+        $line = $raw.TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            if ($proseBuf.Count -gt 0) {
+                $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+                [void]$outLines.Add([string]$joined.Trim())
+                $proseBuf.Clear()
+            }
+            continue
+        }
+        $trimmed = $line.Trim()
+        $isListLine = ($trimmed -match '^[•\u2022\u2023]\s') -or ($trimmed -match '^[-*]\s') -or ($trimmed -match '^\d+\.\s')
+        if ($isListLine) {
+            if ($proseBuf.Count -gt 0) {
+                $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+                [void]$outLines.Add([string]$joined.Trim())
+                $proseBuf.Clear()
+            }
+            [void]$outLines.Add($trimmed)
+        } else {
+            [void]$proseBuf.Add($trimmed)
+        }
+    }
+    if ($proseBuf.Count -gt 0) {
+        $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+        [void]$outLines.Add([string]$joined.Trim())
+    }
+    return ($outLines -join "`r`n")
+}
+
 function Format-EmailTemplateSpacing {
-    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks; preserve paragraph breaks (double newline). #>
+    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks in prose; preserve list lines (bullets, numbered); preserve paragraph breaks (double newline). #>
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
     $paragraphs = $Text -split "`r?`n`r?`n"
-    $result = ($paragraphs | ForEach-Object {
-        $para = ($_ -split "`r?`n") -join " "
-        $para = $para -replace '[ \t]+', ' '
-        $para.Trim()
-    }) -join "`r`n`r`n"
-    return $result.Trim()
+    $result = @($paragraphs | ForEach-Object {
+        (Format-EmailTemplateParagraphPreserveLists $_).Trim()
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    return ($result -join "`r`n`r`n").Trim()
 }
 
 function New-EmailTemplate {
     param(
         [string]$OutputPath,
-        [bool]$IsRMITPlus = $false,
+        [object]$IsRMITPlus = $false,
         [switch]$PassThru,
         [string]$FilterTopN = $null
     )
@@ -1607,6 +1642,8 @@ function New-EmailTemplate {
 
         if ($null -eq $script:Templates) { Load-Templates }
 
+        $IsRMITPlus = ConvertTo-StrictBool $IsRMITPlus -IfNullOrUnknown:$false
+
         $year = (Get-Date).Year
         $quarter = Get-CurrentQuarter
         $greeting = Get-TimeOfDayGreeting
@@ -1615,8 +1652,10 @@ function New-EmailTemplate {
         if ($IsRMITPlus) {
             $noteText = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
         } else {
-            $noteText = "Note: We will not generate remediation tickets without your approval. To schedule a discussion of these findings, please use the scheduling link above."
+            $noteText = "Note: No remediation will begin without your approval. To schedule a discussion, please use the scheduling link above."
         }
+
+        $bakedInRmitNote = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
 
         $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
         if ([string]::IsNullOrWhiteSpace($topNLabel)) { $topNLabel = "10" }
@@ -1624,6 +1663,9 @@ function New-EmailTemplate {
         $bodyTemplate = $script:Templates.EmailTemplate.Body
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
         $emailContent = Format-EmailTemplateSpacing -Text $emailContent
+        if (-not $IsRMITPlus -and $emailContent.Contains($bakedInRmitNote)) {
+            $emailContent = $emailContent.Replace($bakedInRmitNote, $noteText)
+        }
 
         if ($OutputPath) {
             $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8

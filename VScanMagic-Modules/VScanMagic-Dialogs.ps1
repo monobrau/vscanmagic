@@ -127,7 +127,13 @@ function Show-GeneralRecommendationsDialog {
         }
         $recDialog.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
         try {
+            $selIdx = 0
             foreach ($row in $rowsToImprove) {
+                if ($selIdx -gt 0) {
+                    Start-Sleep -Milliseconds 800
+                    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+                }
+                $selIdx++
                 $currentText = [string]$row.Cells["Recommendations"].Value
                 $productName = [string]$row.Cells["Product"].Value
                 $cveIds = if ($row.Tag -and $row.Tag.CveIds) { [string]$row.Tag.CveIds } else { "" }
@@ -337,7 +343,7 @@ function Show-SetClientTypesDialog {
     foreach ($c in $CompaniesToProcess) {
         $val = $false
         if ($idx -lt $dgv.Rows.Count -and -not $dgv.Rows[$idx].IsNewRow) {
-            $val = [bool]$dgv.Rows[$idx].Cells["IsRMITPlus"].Value
+            $val = ConvertTo-StrictBool $dgv.Rows[$idx].Cells["IsRMITPlus"].Value -IfNullOrUnknown:$false
         }
         $key = if ($c.Company -and $c.Company.Id -ne $null) { $c.Company.Id } else { $idx }
         $result[$key] = $val
@@ -1459,7 +1465,7 @@ function New-CombinedReportHtml {
         [string]$OutputPath,
         [array]$TopTenData,
         [array]$TimeEstimates = $null,
-        [bool]$IsRMITPlus = $false,
+        [object]$IsRMITPlus = $false,
         [array]$GeneralRecommendations = $null,
         [bool]$IncludeTicketInstructions = $true,
         [bool]$IncludeEmailTemplate = $false,
@@ -1471,6 +1477,8 @@ function New-CombinedReportHtml {
 
     try {
         Write-Log "Generating combined report (HTML)..."
+
+        $IsRMITPlus = ConvertTo-StrictBool $IsRMITPlus
 
         $tabButtons = [System.Collections.ArrayList]::new()
         $tabPanels = [System.Collections.ArrayList]::new()
@@ -1493,13 +1501,13 @@ function New-CombinedReportHtml {
         # Tab 2: Email Template
         if ($IncludeEmailTemplate) {
             $emailContent = New-EmailTemplate -OutputPath $null -IsRMITPlus $IsRMITPlus -FilterTopN $FilterTopN -PassThru
-            $firstLine = ($emailContent -split "`r?`n")[0]
+            $firstLine = (@($emailContent -split "`r?`n")[0])
             $emailSubject = $firstLine -replace '^Subject:\s*', ''
             $emailSubjectEscaped = [System.Net.WebUtility]::HtmlEncode($emailSubject)
             $emailEscaped = [System.Net.WebUtility]::HtmlEncode($emailContent)
             $activeClass = if ($firstTab) { ' active' } else { '' }
             $null = $tabButtons.Add("<button class=`"tab-btn$activeClass`" data-tab=`"email`">Email Template</button>")
-            $emailPanelHtml = "<div id=`"panel-email`" class=`"tab-panel$activeClass`" data-email-subject=`"$emailSubjectEscaped`"><div class=`"tab-actions`"><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailSubject(this)`">Copy Subject</button><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailBody()`">Copy Body</button></div><pre id=`"email-content`" class=`"tab-pre`">$emailEscaped</pre></div>"
+            $emailPanelHtml = "<div id=`"panel-email`" class=`"tab-panel$activeClass`" data-email-subject=`"$emailSubjectEscaped`"><div class=`"tab-actions`"><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailSubject(this)`">Copy Subject</button><button type=`"button`" class=`"copy-btn`" onclick=`"copyEmailBody()`">Copy Body</button></div><textarea id=`"email-content`" class=`"tab-pre email-template-text`" readonly spellcheck=`"false`">$emailEscaped</textarea></div>"
             $null = $tabPanels.Add($emailPanelHtml)
             $firstTab = $false
         }
@@ -1557,6 +1565,7 @@ function New-CombinedReportHtml {
     .tab-actions .copy-btn:hover { background: #0052a3; }
     .tab-pre, .section-text { white-space: pre; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; min-width: 80ch; }
     .tab-pre { padding: 20px; background: #fff; border-radius: 8px; }
+    textarea.tab-pre.email-template-text { display: block; width: 100%; box-sizing: border-box; min-height: 22rem; white-space: pre-wrap; word-break: break-word; resize: vertical; border: 1px solid #ddd; overflow-wrap: anywhere; }
     .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
     .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
     .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
@@ -1626,11 +1635,15 @@ function New-CombinedReportHtml {
       if (subject) navigator.clipboard.writeText(subject).catch(function() { prompt('Copy this:', subject); });
     }
     function copyEmailBody() {
-      var pre = document.getElementById('email-content');
-      if (!pre) return;
-      var full = pre.innerText || pre.textContent;
-      var bodyStart = full.indexOf('\n\n');
-      var body = bodyStart >= 0 ? full.substring(bodyStart + 2) : full;
+      var ta = document.getElementById('email-content');
+      if (!ta || typeof ta.value !== 'string') return;
+      var full = ta.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      var lines = full.split('\n');
+      var body = full;
+      if (lines.length > 0 && /^Subject:\s*/i.test(lines[0])) {
+        body = lines.slice(1).join('\n').replace(/^\n+/, '');
+      }
+      body = body.replace(/\n/g, '\r\n');
       navigator.clipboard.writeText(body).catch(function() { prompt('Copy this:', body); });
     }
     function copyTimeEstimate() {
@@ -1665,7 +1678,7 @@ function New-TicketNotes {
         [array]$Top10Data = $null,
         [array]$TimeEstimates = $null,
         [string]$OutputPath = $null,
-        [bool]$IsRMITPlus = $false,
+        [object]$IsRMITPlus = $false,
         [switch]$PassThru,
         [string]$FilterTopN = $null
     )
@@ -1674,11 +1687,12 @@ function New-TicketNotes {
     if ($null -eq $Top10Data) {
         $Top10Data = $script:CurrentTop10Data
         $TimeEstimates = $script:CurrentTimeEstimates
-        $IsRMITPlus = $script:IsRMITPlus
+        $IsRMITPlus = ConvertTo-StrictBool $script:IsRMITPlus -IfNullOrUnknown:$false
         if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $FilterTopN = $script:FilterTopN }
     } elseif ([string]::IsNullOrWhiteSpace($FilterTopN)) {
         $FilterTopN = $script:FilterTopN
     }
+    $IsRMITPlus = ConvertTo-StrictBool $IsRMITPlus -IfNullOrUnknown:$false
     if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $FilterTopN = "10" }
     $topNLabel = if ($FilterTopN -eq "All") { "Top" } elseif ($FilterTopN -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($FilterTopN)) { "Top $FilterTopN" } else { "Top Ten" }
     $reportStepLine = "Produced $topNLabel vulnerabilities docx report"
