@@ -3579,12 +3579,12 @@ function Show-CompanyFolderMappingDialog {
 function Show-SettingsDialog {
     $settingsForm = New-Object System.Windows.Forms.Form
     $settingsForm.Text = "User Settings"
-    # Increase form height to accommodate Memberberry integration section
-    $settingsForm.Size = New-Object System.Drawing.Size(480, 570)
     $settingsForm.StartPosition = "CenterParent"
     $settingsForm.FormBorderStyle = "FixedDialog"
     $settingsForm.MaximizeBox = $false
     $settingsForm.MinimizeBox = $false
+    # Client height must clear Save/Cancel (~y=545 + 30px) when Memberberry status is shown; outer Size alone was too short.
+    $settingsForm.ClientSize = New-Object System.Drawing.Size(464, 640)
 
     $y = 20
 
