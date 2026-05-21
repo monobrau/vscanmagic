@@ -14,6 +14,11 @@ if (-not $script:IsApiMode) {
     $script:IsApiMode = $true
 }
 
+$versionPath = Join-Path $apiRoot 'VScanMagic-Version.ps1'
+if (Test-Path -LiteralPath $versionPath) {
+    . $versionPath
+}
+
 # Reports use Application.DoEvents during long COM work; same as VScanMagic-GUI.ps1
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue

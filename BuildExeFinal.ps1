@@ -2,6 +2,13 @@
 
 $ErrorActionPreference = 'Stop'
 
+$versionPath = Join-Path $PSScriptRoot 'VScanMagic-Version.ps1'
+if (-not (Test-Path -LiteralPath $versionPath)) {
+    throw "VScanMagic-Version.ps1 not found at: $versionPath"
+}
+. $versionPath
+$appVersion = Get-VScanMagicVersion
+
 # Create Modules directory if needed
 $modulesDir = Join-Path $PSScriptRoot "Modules"
 if (-not (Test-Path $modulesDir)) {
@@ -41,11 +48,11 @@ if (Test-Path $modulePath) {
         $params = @{
             inputFile = $inputScript
             outputFile = $outputExe
-            title = "VScanMagic v4.0.11"
+            title = "VScanMagic v$appVersion"
             description = "Vulnerability Report Generator"
             company = "River Run MSP"
             product = "VScanMagic"
-            version = "4.0.11"
+            version = $appVersion
             copyright = "Copyright (c) 2025 Chris Knospe"
         }
         
@@ -103,7 +110,7 @@ if (Test-Path $modulePath) {
             Write-Host "Creating deployment ZIP..."
             $zipPath = Join-Path $PSScriptRoot "VScanMagic.zip"
             if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-            $zipItems = @($outputExe, (Join-Path $PSScriptRoot "VScanMagic-Modules"), (Join-Path $PSScriptRoot "ConnectSecure-API.ps1"))
+            $zipItems = @($outputExe, (Join-Path $PSScriptRoot "VScanMagic-Modules"), (Join-Path $PSScriptRoot "ConnectSecure-API.ps1"), (Join-Path $PSScriptRoot "VScanMagic-Version.ps1"))
             $zipItems = $zipItems | Where-Object { Test-Path $_ }
             Compress-Archive -Path $zipItems -DestinationPath $zipPath -Force
             Write-Host "Created ZIP: $zipPath (includes EXE + VScanMagic-Modules + ConnectSecure-API.ps1)" -ForegroundColor Green

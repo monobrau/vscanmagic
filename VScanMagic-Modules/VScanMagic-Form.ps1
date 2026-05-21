@@ -43,7 +43,7 @@ function Show-VScanMagicGUI {
 
     # Create main form
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
+    $form.Text = "VScanMagic v$($script:Config.Version) - Vulnerability Report Generator"
     $form.Size = New-Object System.Drawing.Size(750, 945)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"

@@ -13,7 +13,7 @@ This script provides a GUI interface for:
 - Providing actionable remediation guidance
 
 .NOTES
-Version: 4.0.11
+Version: see VScanMagic-Version.ps1 (single source of truth)
 Requires: Microsoft Excel and Microsoft Word installed.
 Author: River Run MSP
 Modular: Core, Data, Reports, Dialogs, Form loaded from VScanMagic-Modules/
@@ -34,6 +34,13 @@ if ([string]::IsNullOrEmpty($PSScriptRoot)) {
 } else {
     $script:ScriptDirectory = $PSScriptRoot
 }
+
+$versionPath = Join-Path $script:ScriptDirectory 'VScanMagic-Version.ps1'
+if (-not (Test-Path -LiteralPath $versionPath)) {
+    Write-Error "VScanMagic-Version.ps1 not found at: $versionPath"
+    exit 1
+}
+. $versionPath
 
 $modulesDir = Join-Path $script:ScriptDirectory "VScanMagic-Modules"
 if (-not (Test-Path $modulesDir)) {

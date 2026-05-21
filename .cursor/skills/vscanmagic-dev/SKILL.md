@@ -107,7 +107,7 @@ VScanMagic vX.Y.Z - [Brief tagline].
 - Bump version to X.Y.Z
 ```
 
-Update version in `VScanMagic-GUI.ps1` (header) and `BuildExeFinal.ps1` (title, version).
+Update version in `VScanMagic-Version.ps1` only (loaded by GUI, Core, and `BuildExeFinal.ps1`). Do not duplicate in other files.
 
 ## Build
 
