@@ -646,9 +646,10 @@ function New-WordReport {
             $selection.ParagraphFormat.LeftIndent = 36
             $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             $systemsList = ($uniqueSystems | ForEach-Object {
-                $systemLine = if ($_.HostName) { $_.HostName } else { $_.IP }
+                $systemLine = Get-AffectedSystemIdentifier -System $_
+                if ([string]::IsNullOrWhiteSpace($systemLine)) { return $null }
                 if (-not [string]::IsNullOrWhiteSpace($_.Username)) { $systemLine += " ($($_.Username))" }
-                if (-not [string]::IsNullOrWhiteSpace($_.IP)) { $systemLine += " - $($_.IP)" }
+                if (-not [string]::IsNullOrWhiteSpace($_.IP) -and $systemLine -ne $_.IP.Trim()) { $systemLine += " - $($_.IP)" }
                 if (-not [string]::IsNullOrWhiteSpace($_.LastPingTime)) { $systemLine += " (last seen $($_.LastPingTime))" }
                 $systemLine
             } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
@@ -1581,6 +1582,34 @@ function Open-EmailDraftInOutlook {
     }
 }
 
+function Expand-EmailTemplateInlineBullets {
+    <# Older Format-EmailTemplateSpacing joined list lines onto one row; restore one bullet per line. #>
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
+    $bulletClass = '[\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·]'
+    # Intro ending with colon then first inline bullet -> newline before bullet
+    $Text = [regex]::Replace($Text, ":(\s*)($bulletClass)\s*", ":$1`r`n`$2 ")
+    # Additional inline bullets mid-line -> newline before each bullet
+    $Text = [regex]::Replace($Text, "(\S)\s+($bulletClass)\s*", "`$1`r`n`$2 ")
+    return $Text
+}
+
+function Normalize-EmailTemplateListLine {
+    param([string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $Line }
+    $trimmed = $Line.Trim()
+    if ($trimmed -match '^([\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·])\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    if ($trimmed -match '^([-*–—])\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    if ($trimmed -match '^(\d+\.)\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    return $trimmed
+}
+
 function Format-EmailTemplateParagraphPreserveLists {
     <# Within one double-newline paragraph: join prose lines with spaces; keep bullet / numbered lines on their own row. #>
     param([string]$Paragraph)
@@ -1599,14 +1628,15 @@ function Format-EmailTemplateParagraphPreserveLists {
             continue
         }
         $trimmed = $line.Trim()
-        $isListLine = ($trimmed -match '^[•\u2022\u2023]\s') -or ($trimmed -match '^[-*]\s') -or ($trimmed -match '^\d+\.\s')
+        $isListLine = ($trimmed -match '^[\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·]\s*') -or
+            ($trimmed -match '^[-*–—]\s+') -or ($trimmed -match '^\d+\.\s')
         if ($isListLine) {
             if ($proseBuf.Count -gt 0) {
                 $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
                 [void]$outLines.Add([string]$joined.Trim())
                 $proseBuf.Clear()
             }
-            [void]$outLines.Add($trimmed)
+            [void]$outLines.Add((Normalize-EmailTemplateListLine $trimmed))
         } else {
             [void]$proseBuf.Add($trimmed)
         }
@@ -1662,6 +1692,7 @@ function New-EmailTemplate {
         $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
         $bodyTemplate = $script:Templates.EmailTemplate.Body
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
+        $emailContent = Expand-EmailTemplateInlineBullets -Text $emailContent
         $emailContent = Format-EmailTemplateSpacing -Text $emailContent
         if (-not $IsRMITPlus -and $emailContent.Contains($bakedInRmitNote)) {
             $emailContent = $emailContent.Replace($bakedInRmitNote, $noteText)

@@ -558,7 +558,7 @@ function Get-VulnerabilityData {
             Write-Log "All Vulnerabilities headers: $($headers.Keys -join ', ')"
             $columnMappings = @{
                 'Source' = @('Source', 'Section', 'Vulnerability Source')
-                'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Device')
+                'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine', 'Asset', 'Host', 'Endpoint', 'Target')
                 'IP' = @('IP Address', 'IP', 'Address')
                 'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name', 'OS Name', 'OS Full Name', 'Name', 'Problem Name')
                 'Severity' = @('Severity')
@@ -1144,6 +1144,46 @@ function Get-CompositeRiskScore {
     return [Math]::Round($riskScore, 2)
 }
 
+function Get-AffectedSystemIdentifier {
+    param($System)
+    if ($null -eq $System) { return $null }
+    foreach ($prop in @('HostName', 'IP')) {
+        $val = $System.$prop
+        if (-not [string]::IsNullOrWhiteSpace($val)) { return [string]$val.Trim() }
+    }
+    return $null
+}
+
+function Add-AffectedSystemToTop10Item {
+    param(
+        $Item,
+        [string]$HostName,
+        [string]$IP,
+        [string]$Username,
+        [int]$VulnCount
+    )
+    $hn = if ($HostName) { [string]$HostName.Trim() } else { '' }
+    $ipVal = if ($IP) { [string]$IP.Trim() } else { '' }
+    $userVal = if ($Username) { [string]$Username.Trim() } else { '' }
+    $hostKey = "$hn`t$ipVal"
+    $systems = @($Item.AffectedSystems)
+    $existing = $systems | Where-Object { "$($_.HostName)`t$($_.IP)" -eq $hostKey } | Select-Object -First 1
+    if ($existing) {
+        $existing.VulnCount = [int]$existing.VulnCount + $VulnCount
+        if ([string]::IsNullOrWhiteSpace($existing.Username) -and -not [string]::IsNullOrWhiteSpace($userVal)) {
+            $existing.Username = $userVal
+        }
+        return
+    }
+    $newSys = [PSCustomObject]@{
+        HostName = $hn
+        IP       = $ipVal
+        Username = $userVal
+        VulnCount = $VulnCount
+    }
+    $Item.AffectedSystems = if ($systems.Count -eq 0) { @($newSys) } else { $systems + @($newSys) }
+}
+
 function Get-Top10Vulnerabilities {
     param(
         [array]$VulnData,
@@ -1220,18 +1260,13 @@ function Get-Top10Vulnerabilities {
                 }
             }
 
-            # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
-            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
+            # Add affected systems (array-safe append; PowerShell unwraps single-element arrays on +=)
             $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
             foreach ($hostGroup in $hostKeyGroups) {
                 $hostItem = $hostGroup.Group[0]
                 $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
-                $existing.AffectedSystems += [PSCustomObject]@{
-                    HostName = $hostItem.'Host Name'
-                    IP = $hostItem.'IP'
-                    Username = $hostItem.'Username'
-                    VulnCount = $hostVulnCount
-                }
+                Add-AffectedSystemToTop10Item -Item $existing `
+                    -HostName $hostItem.'Host Name' -IP $hostItem.IP -Username $hostItem.Username -VulnCount $hostVulnCount
             }
         } else {
             # Create new entry
@@ -1252,22 +1287,7 @@ function Get-Top10Vulnerabilities {
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
 
-            # Create affected systems array with hostname, IP, username, and vulnerability count
-            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
-            $affectedSystems = @()
-            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
-            foreach ($hostGroup in $hostKeyGroups) {
-                $hostItem = $hostGroup.Group[0]
-                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
-                $affectedSystems += [PSCustomObject]@{
-                    HostName = $hostItem.'Host Name'
-                    IP = $hostItem.'IP'
-                    Username = $hostItem.'Username'
-                    VulnCount = $hostVulnCount
-                }
-            }
-
-            $aggregated += [PSCustomObject]@{
+            $newEntry = [PSCustomObject]@{
                 Source = $sourceVal
                 Product = $consolidatedProduct
                 Critical = $critical
@@ -1278,10 +1298,18 @@ function Get-Top10Vulnerabilities {
                 EPSSScore = $epssScore
                 AvgCVSS = $avgCVSS
                 RiskScore = $riskScore
-                AffectedSystems = $affectedSystems
+                AffectedSystems = @()
                 Fix = $fixVal
                 CveIds = $cveIds
             }
+            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
+            foreach ($hostGroup in $hostKeyGroups) {
+                $hostItem = $hostGroup.Group[0]
+                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
+                Add-AffectedSystemToTop10Item -Item $newEntry `
+                    -HostName $hostItem.'Host Name' -IP $hostItem.IP -Username $hostItem.Username -VulnCount $hostVulnCount
+            }
+            $aggregated += $newEntry
         }
     }
 
@@ -1372,6 +1400,10 @@ function Get-Top10Vulnerabilities {
     }
 
     Write-Log "Identified $($topVulns.Count) vulnerabilities ($countMsg)" -Level Success
+
+    foreach ($item in $topVulns) {
+        $item.AffectedSystems = if ($null -eq $item.AffectedSystems) { @() } else { @($item.AffectedSystems) }
+    }
 
     return $topVulns
 }

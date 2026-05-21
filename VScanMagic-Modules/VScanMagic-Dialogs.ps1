@@ -413,7 +413,7 @@ function Show-HostnameReviewDialog {
             EPSSScore = $item.EPSSScore
             AvgCVSS = $item.AvgCVSS
             RiskScore = $item.RiskScore
-            AffectedSystems = $item.AffectedSystems | ForEach-Object { $_ }  # Clone array
+            AffectedSystems = @($item.AffectedSystems | ForEach-Object { $_ })
         }
     }
 
@@ -738,7 +738,7 @@ function Show-HostnameReviewDialog {
                 }
             }
             
-            $filteredData[$i].AffectedSystems = $filteredSystems
+            $filteredData[$i].AffectedSystems = @($filteredSystems)
             # Note: Count property is read-only and automatically reflects array length
         }
         
@@ -1187,7 +1187,8 @@ function New-TicketInstructions {
                 $username = $sys.Username
                 $lastPing = $sys.LastPingTime
                 # Use hostname or IP as primary identifier so we list all systems
-                $systemLine = if ($hostname) { $hostname } else { $ip }
+                $systemLine = Get-AffectedSystemIdentifier -System $sys
+                if ([string]::IsNullOrWhiteSpace($systemLine)) { continue }
                 if (-not [string]::IsNullOrWhiteSpace($username)) {
                     $systemLine += " ($username)"
                 }
@@ -1327,7 +1328,8 @@ NOTE: This remediation can go to any available technician.
                 $ip = $sys.IP
                 $username = $sys.Username
                 $lastPing = $sys.LastPingTime
-                $systemLine = if ($hostname) { $hostname } else { $ip }
+                $systemLine = Get-AffectedSystemIdentifier -System $sys
+                if ([string]::IsNullOrWhiteSpace($systemLine)) { continue }
                 if (-not [string]::IsNullOrWhiteSpace($username)) { $systemLine += " ($username)" }
                 if (-not [string]::IsNullOrWhiteSpace($ip)) { $systemLine += " - $ip" }
                 if (-not [string]::IsNullOrWhiteSpace($lastPing)) { $systemLine += " (last seen $lastPing)" }
