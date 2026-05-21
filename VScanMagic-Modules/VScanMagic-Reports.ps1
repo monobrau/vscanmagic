@@ -716,10 +716,9 @@ function New-WordReport {
         $pathToSave = $OutputPath
         $wordSaveTempPath = $null
         if ($OutputPath.Length -gt 255 -or $OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($OutputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_Word_Report.docx" }
-            $wordSaveTempPath = Join-Path $tempDir ("VScanMagic_Word_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $wordSaveTempPath = New-VScanMagicTempFile -Prefix 'WordSave' -BaseName $baseName -Subfolder 'word'
             $pathToSave = [System.IO.Path]::GetFullPath($wordSaveTempPath)
             Write-Log "Saving to temp first (path length or cloud sync workaround): $pathToSave" -Level Info
         }
@@ -801,9 +800,8 @@ function Invoke-AutoResizeExcelColumns {
     try {
         # Workaround: copy to temp when path is in OneDrive/sync folder (Excel COM can fail to open)
         if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($ExcelPath)
-            $tempCopyPath = Join-Path $tempDir ("VScanMagic_Resize_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempCopyPath = New-VScanMagicTempFile -Prefix 'Resize' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $ExcelPath -Destination $tempCopyPath -Force
             $pathToOpen = [System.IO.Path]::GetFullPath($tempCopyPath)
             Start-Sleep -Milliseconds 450
@@ -903,10 +901,9 @@ function New-ExcelReport {
         $tempPath = $null  # Used by OneDrive workaround (input) and finally cleanup
         $saveTempPath = $null  # Used by OneDrive workaround (output save) and finally cleanup
         if ($InputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($InputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-            $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempPath = New-VScanMagicTempFile -Prefix 'ExcelWrite' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
             $pathToOpen = $tempPath
             Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
@@ -927,10 +924,9 @@ function New-ExcelReport {
             $workbook = $excel.Workbooks.Open($pathToOpen)
         } catch {
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($InputPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelWrite' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
                 $pathToOpen = [System.IO.Path]::GetFullPath($tempPath)
                 Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
@@ -1454,10 +1450,9 @@ function New-ExcelReport {
         # Save to temp first, then copy to final destination.
         $pathToSave = $OutputPath
         if ($OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($OutputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_report.xlsx" }
-            $saveTempPath = Join-Path $tempDir ("VScanMagic_Save_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $saveTempPath = New-VScanMagicTempFile -Prefix 'ExcelSave' -BaseName $baseName -Subfolder 'excel'
             $pathToSave = [System.IO.Path]::GetFullPath($saveTempPath)
             Write-Log "Saving to temp first (OneDrive workaround): $pathToSave" -Level Info
         }

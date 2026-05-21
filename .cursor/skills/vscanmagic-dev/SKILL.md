@@ -13,6 +13,12 @@ description: Guides development for the VScanMagic PowerShell vulnerability mana
 - One-off utilities and debug scripts: `archive/Capture-*.ps1`, etc.
 - Do not create test scripts in the project root or other tracked directories.
 
+## Temp and scratch files
+
+Runtime temp/work files must go under **`%TEMP%\VScanMagic`** (use `Get-VScanMagicTempDirectory`, `New-VScanMagicTempFile`, or `New-VScanMagicTempDirectory` from Core). Never write temp Excel copies, export defaults, or test HTML under the repo/script directory.
+
+Standalone scripts that do not load Core should use `$env:TEMP\VScanMagic\` with the same subfolder convention (`excel`, `exports`, `word`, etc.).
+
 ## Archive Script Pattern
 
 Scripts in `archive/` that need project modules must:

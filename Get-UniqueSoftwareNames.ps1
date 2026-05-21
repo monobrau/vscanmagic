@@ -20,6 +20,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function New-VScanMagicTempFileStandalone {
+    param([string]$Prefix, [string]$BaseName)
+    $dir = Join-Path $env:TEMP 'VScanMagic'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -LiteralPath $dir -ItemType Directory -Force | Out-Null
+    }
+    $safeBase = if ([string]::IsNullOrWhiteSpace($BaseName)) { 'file' } else { [System.IO.Path]::GetFileName($BaseName) }
+    return Join-Path $dir ("${Prefix}_$([Guid]::NewGuid().ToString('N'))_$safeBase")
+}
+
 if (-not (Test-Path -LiteralPath $ExcelPath)) {
     Write-Error "File not found: $ExcelPath"
     exit 1
@@ -29,7 +39,7 @@ if (-not (Test-Path -LiteralPath $ExcelPath)) {
 $pathToOpen = $ExcelPath
 $tempPath = $null
 if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-    $tempPath = Join-Path $env:TEMP ("UniqueSoftware_" + [Guid]::NewGuid().ToString("N") + "_" + [System.IO.Path]::GetFileName($ExcelPath))
+    $tempPath = New-VScanMagicTempFileStandalone -Prefix 'UniqueSoftware' -BaseName ([System.IO.Path]::GetFileName($ExcelPath))
     Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
     $pathToOpen = $tempPath
 }

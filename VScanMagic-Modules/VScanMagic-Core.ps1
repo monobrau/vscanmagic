@@ -167,6 +167,41 @@ function Ensure-SettingsDirectory {
     try { New-Item -Path $Path -ItemType Directory -Force | Out-Null; return $true } catch { return $false }
 }
 
+function Get-VScanMagicTempDirectory {
+    <# All runtime temp/work files go under %TEMP%\VScanMagic — never the script/repo directory. #>
+    param([string]$Subfolder = '')
+    $base = Join-Path ([System.IO.Path]::GetTempPath()) 'VScanMagic'
+    if (-not [string]::IsNullOrWhiteSpace($Subfolder)) {
+        $base = Join-Path $base $Subfolder
+    }
+    if (-not (Test-Path -LiteralPath $base)) {
+        New-Item -LiteralPath $base -ItemType Directory -Force | Out-Null
+    }
+    return [System.IO.Path]::GetFullPath($base)
+}
+
+function New-VScanMagicTempFile {
+    param(
+        [string]$Prefix = 'work',
+        [string]$BaseName = 'file',
+        [string]$Subfolder = ''
+    )
+    $dir = Get-VScanMagicTempDirectory -Subfolder $Subfolder
+    $safeBase = if ([string]::IsNullOrWhiteSpace($BaseName)) { 'file' } else { [System.IO.Path]::GetFileName($BaseName) }
+    return Join-Path $dir ("${Prefix}_$([Guid]::NewGuid().ToString('N'))_$safeBase")
+}
+
+function New-VScanMagicTempDirectory {
+    param(
+        [string]$Prefix = 'work',
+        [string]$Subfolder = ''
+    )
+    $parent = Get-VScanMagicTempDirectory -Subfolder $Subfolder
+    $path = Join-Path $parent ("${Prefix}_$([Guid]::NewGuid().ToString('N').Substring(0, 8))")
+    New-Item -LiteralPath $path -ItemType Directory -Force | Out-Null
+    return $path
+}
+
 function Get-JsonFile {
     param([Parameter(Mandatory=$true)][string]$Path)
     if (-not (Test-Path $Path)) { return $null }
@@ -260,7 +295,7 @@ function Backup-Settings {
     } elseif ([System.IO.Directory]::Exists($OutputPath)) {
         $OutputPath = Join-Path $OutputPath $defaultName
     }
-    $tempDir = Join-Path $env:TEMP "VScanMagic_Backup_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+    $tempDir = New-VScanMagicTempDirectory -Prefix 'Backup'
     try {
         New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
         $copied = 0
@@ -308,7 +343,7 @@ function Restore-Settings {
     }
     try {
         Ensure-SettingsDirectory -Path $script:SettingsDirectory | Out-Null
-        $tempDir = Join-Path $env:TEMP "VScanMagic_Restore_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+        $tempDir = New-VScanMagicTempDirectory -Prefix 'Restore'
         Expand-Archive -Path $BackupPath -DestinationPath $tempDir -Force
         $allowedFiles = switch ($Scope) {
             "Shared" { $script:BackupSharedFiles }

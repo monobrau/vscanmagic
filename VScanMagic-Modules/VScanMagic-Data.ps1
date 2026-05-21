@@ -465,10 +465,9 @@ function Get-VulnerabilityData {
         # Excel COM can fail with "Unable to get the Open property" on cloud-synced paths
         $pathToOpen = $ExcelPath
         if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($ExcelPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-            $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
             $pathToOpen = $tempPath
             Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
@@ -477,10 +476,9 @@ function Get-VulnerabilityData {
         # Check for file lock before opening (proactive temp copy if locked)
         if (Test-FileLocked $pathToOpen) {
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($ExcelPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
                 $pathToOpen = $tempPath
                 Write-Log "File is in use - copied to temp: $tempPath" -Level Info
@@ -499,10 +497,9 @@ function Get-VulnerabilityData {
             $workbook = $opened.Workbook
         } catch {
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($ExcelPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
                 Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
                 Start-Sleep -Milliseconds 450
