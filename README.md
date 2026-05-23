@@ -2,6 +2,18 @@
 
 A PowerShell tool for vulnerability management and report generation from ConnectSecure.
 
+## .NET 8 Rebuild (cross-platform)
+
+A new **.NET 8** implementation lives under [`src/`](src/README.md). It centers on **Client Review Sessions** (presenter web UI, read-only client view, post-review editable DOCX/PDF export) and does **not** require Microsoft Office.
+
+```bash
+cd src
+dotnet run --project VScanMagic.Web
+# Open http://127.0.0.1:8080
+```
+
+The legacy PowerShell + WinForms + Office COM application remains in this repo until full cutover.
+
 ## Tools Included
 
 ### VScanMagic v4 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`)

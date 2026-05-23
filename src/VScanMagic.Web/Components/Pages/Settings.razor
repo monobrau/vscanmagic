@@ -1,0 +1,358 @@
+@page "/settings"
+@rendermode InteractiveServer
+@using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Services
+@inject SettingsService SettingsSvc
+@inject ConnectSecureClient ConnectSecure
+@inject AppRestartService RestartSvc
+@inject IJSRuntime Js
+
+<PageTitle>Settings</PageTitle>
+
+<h1>Settings</h1>
+
+<div class="card mb-3">
+    <div class="card-header">Report Output Paths</div>
+    <div class="card-body">
+        <div class="mb-2">
+            <label class="form-label">Reports Base Path</label>
+            <input class="form-control" @bind="_user.ReportsBasePath" placeholder="/path/to/client documentation root" />
+            <div class="form-text">
+                Parent folder that contains each client (e.g. folders named after clients, not this app&apos;s download folder).
+                Exports go under <code>[client]\Network Documentation\Vulnerability Scans\[year-quarter]\</code> with text/HTML in <code>Misc\</code>.
+            </div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Last Output Directory</label>
+            <input class="form-control" @bind="_user.LastOutputDirectory" placeholder="Fallback when base path is unset or client folder cannot be matched" />
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Report Identity</div>
+    <div class="card-body">
+        <div class="mb-2"><label class="form-label">Prepared By</label><input class="form-control" @bind="_user.PreparedBy" /></div>
+        <div class="mb-2"><label class="form-label">Company Name</label><input class="form-control" @bind="_user.CompanyName" /></div>
+        <div class="mb-2"><label class="form-label">Email</label><input class="form-control" @bind="_user.Email" /></div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Report Filters</div>
+    <div class="card-body">
+        <div class="mb-2"><label class="form-label">Min EPSS</label><input class="form-control" type="number" step="0.01" @bind="_user.FilterMinEpss" /></div>
+        <div class="mb-2">
+            <label class="form-label">Top N vulnerabilities</label>
+            <select class="form-select" @bind="_topNPreset" @bind:after="SyncTopNFromPreset">
+                <option value="10">Top 10</option>
+                <option value="20">Top 20</option>
+                <option value="50">Top 50</option>
+                <option value="100">Top 100</option>
+                <option value="All">All (no limit)</option>
+                <option value="Custom">Custom…</option>
+            </select>
+        </div>
+        @if (_topNPreset == "Custom")
+        {
+            <div class="mb-2">
+                <label class="form-label">Custom count</label>
+                <input class="form-control" type="number" min="1" max="500" @bind="_customTopN" @bind:after="ApplyCustomTopN" />
+            </div>
+        }
+        <div class="form-text mb-2">Controls how many vulnerabilities are in the export set. Additional reserves are loaded for promotion when you exclude an item during review.</div>
+        <div class="form-check"><input type="checkbox" class="form-check-input" checked="@_user.FilterIncludeCritical" @onclick="e => OnSeverityCheckboxClick(0, e)" @onclick:preventDefault id="c" /><label for="c">Critical</label></div>
+        <div class="form-check"><input type="checkbox" class="form-check-input" checked="@_user.FilterIncludeHigh" @onclick="e => OnSeverityCheckboxClick(1, e)" @onclick:preventDefault id="h" /><label for="h">High</label></div>
+        <div class="form-check"><input type="checkbox" class="form-check-input" checked="@_user.FilterIncludeMedium" @onclick="e => OnSeverityCheckboxClick(2, e)" @onclick:preventDefault id="m" /><label for="m">Medium</label></div>
+        <div class="form-check"><input type="checkbox" class="form-check-input" checked="@_user.FilterIncludeLow" @onclick="e => OnSeverityCheckboxClick(3, e)" @onclick:preventDefault id="l" /><label for="l">Low</label></div>
+        <p class="form-text mb-0">Shift-click to toggle a range of severity levels.</p>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">OS host selection</div>
+    <div class="card-body">
+        <p class="form-text mb-3">
+            For <strong>operating-system</strong> findings from the Application scan only, hosts with fewer vulnerabilities than the threshold start unchecked.
+            Registry findings, network findings, and third-party applications are never auto-filtered.
+            Set to <strong>0</strong> to include all hosts for that OS category.
+        </p>
+        <div class="mb-2">
+            <label class="form-label">Windows 11 — minimum host vuln count</label>
+            <input class="form-control" type="number" min="0" max="9999" @bind="_user.HostVulnThresholdWindows11" />
+            <div class="form-text">Default 350 (matches legacy VScanMagic). Hosts below this are unselected for Windows 11 tabs.</div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Other Windows — minimum host vuln count</label>
+            <input class="form-control" type="number" min="0" max="9999" @bind="_user.HostVulnThresholdWindowsOther" />
+            <div class="form-text">Windows 10, Windows Server, etc. 0 = include all hosts.</div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Other operating systems — minimum host vuln count</label>
+            <input class="form-control" type="number" min="0" max="9999" @bind="_user.HostVulnThresholdOtherOs" />
+            <div class="form-text">Linux, macOS, ESXi, etc. 0 = include all hosts.</div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">ConnectSecure API</div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            Copy all four values from the same screen: <strong>Global → Settings → Users → API Key</strong>.
+            The Client Secret is usually a long base64 string (<code>Z0FB…</code>) — paste it exactly as shown.
+        </p>
+        <div class="mb-2">
+            <label class="form-label">Base URL</label>
+            <input class="form-control" @bind="_creds.BaseUrl" placeholder="https://pod104.myconnectsecure.com" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Tenant</label>
+            <input class="form-control" @bind="_creds.TenantName" placeholder="river-run" />
+            <div class="form-text">Must match the tenant name you use to log in (case-sensitive).</div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Client ID</label>
+            <input class="form-control" @bind="_creds.ClientId" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Client Secret</label>
+            <input class="form-control" type="password" @bind="_creds.ClientSecret" autocomplete="off" />
+        </div>
+        @if (_secretLooksEncoded)
+        {
+            <div class="alert alert-info py-2">
+                Client Secret format looks normal for ConnectSecure. It is sent as-is to <code>/w/authorize</code>.
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(_creds.BaseUrl))
+        {
+            <p class="small mb-2">
+                Swagger: <a href="@ConnectSecureCredentialsHelper.GetSwaggerUrl(_creds)" target="_blank" rel="noopener">@ConnectSecureCredentialsHelper.GetSwaggerUrl(_creds)</a>
+            </p>
+        }
+        @if (_showSwaggerToken)
+        {
+            <div class="mb-2">
+                <label class="form-label">Client-Auth-Token (for Swagger POST /w/authorize)</label>
+                <textarea class="form-control font-monospace small" rows="3" readonly>@_swaggerToken</textarea>
+                <button type="button" class="btn btn-sm btn-outline-secondary mt-1" @onclick="CopySwaggerToken">Copy token</button>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Application</div>
+    <div class="card-body">
+        <p class="mb-2">
+            Restart the web UI after updating the app or when you want a clean reload of in-memory state.
+            The page will reconnect automatically after a few seconds.
+        </p>
+        @if (!_restartAllowed)
+        {
+            <div class="alert alert-warning py-2 mb-2">
+                Restart is disabled because the server is not bound to loopback.
+                Set <code>VSCANMAGIC_API_BIND=127.0.0.1</code> (default) to enable it.
+            </div>
+        }
+        <button type="button" class="btn btn-outline-warning" disabled="@(_busy || _restarting || !_restartAllowed)" @onclick="RestartApp">
+            @if (_restarting)
+            {
+                <span>Restarting…</span>
+            }
+            else
+            {
+                <span>Restart application</span>
+            }
+        </button>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<button class="btn btn-primary me-2" disabled="@_busy" @onclick="Save">Save Settings</button>
+<button class="btn btn-outline-primary me-2" disabled="@_busy" @onclick="TestCredentials">Test Credentials</button>
+<button class="btn btn-outline-secondary" disabled="@_busy" @onclick="ShowSwaggerToken">Show Swagger token</button>
+
+@code {
+    private UserSettings _user = new();
+    private ConnectSecureCredentials _creds = new();
+    private string? _message;
+    private string? _error;
+    private bool _busy;
+    private bool _restarting;
+    private readonly bool _restartAllowed = AppRestartService.IsRestartPermitted();
+    private bool _secretLooksEncoded;
+    private bool _showSwaggerToken;
+    private string _swaggerToken = "";
+    private string _topNPreset = "10";
+    private string _customTopN = "10";
+    private readonly CheckboxRangeColumn _severityRange = new();
+
+    protected override void OnInitialized()
+    {
+        _user = SettingsSvc.LoadUserSettings();
+        _creds = SettingsSvc.LoadConnectSecureCredentials();
+        LoadTopNPreset();
+        UpdateSecretHint();
+    }
+
+    private void LoadTopNPreset()
+    {
+        var value = _user.FilterTopN?.Trim() ?? "10";
+        if (value is "10" or "20" or "50" or "100" or "All")
+        {
+            _topNPreset = value;
+            _customTopN = "10";
+        }
+        else
+        {
+            _topNPreset = "Custom";
+            _customTopN = value;
+        }
+    }
+
+    private void SyncTopNFromPreset()
+    {
+        if (_topNPreset == "Custom")
+            _user.FilterTopN = _customTopN;
+        else
+            _user.FilterTopN = _topNPreset;
+    }
+
+    private void ApplyCustomTopN()
+    {
+        if (_topNPreset == "Custom")
+            _user.FilterTopN = _customTopN;
+    }
+
+    private bool GetSeverityFilter(int index) => index switch
+    {
+        0 => _user.FilterIncludeCritical,
+        1 => _user.FilterIncludeHigh,
+        2 => _user.FilterIncludeMedium,
+        3 => _user.FilterIncludeLow,
+        _ => false
+    };
+
+    private void SetSeverityFilter(int index, bool value)
+    {
+        switch (index)
+        {
+            case 0: _user.FilterIncludeCritical = value; break;
+            case 1: _user.FilterIncludeHigh = value; break;
+            case 2: _user.FilterIncludeMedium = value; break;
+            case 3: _user.FilterIncludeLow = value; break;
+        }
+    }
+
+    private void OnSeverityCheckboxClick(int index, MouseEventArgs e)
+    {
+        var newValue = !GetSeverityFilter(index);
+        _severityRange.Click(index, newValue, e, SetSeverityFilter);
+    }
+
+    private void UpdateSecretHint()
+    {
+        _secretLooksEncoded = ConnectSecureCredentialsHelper.IsConnectSecureEncodedSecret(_creds.ClientSecret);
+    }
+
+    private void Save()
+    {
+        _error = null;
+        _message = null;
+        UpdateSecretHint();
+
+        var issues = ConnectSecureCredentialsHelper.Validate(_creds);
+        if (issues.Count > 0)
+        {
+            _error = string.Join(" ", issues);
+            return;
+        }
+
+        SettingsSvc.SaveUserSettings(_user);
+        SettingsSvc.SaveConnectSecureCredentials(_creds);
+        ConnectSecure.Configure(_creds);
+        _message = "Settings saved.";
+    }
+
+    private async Task TestCredentials()
+    {
+        _error = null;
+        _message = null;
+        UpdateSecretHint();
+
+        var issues = ConnectSecureCredentialsHelper.Validate(_creds);
+        if (issues.Count > 0)
+        {
+            _error = string.Join(" ", issues);
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            ConnectSecure.Configure(_creds);
+            await ConnectSecure.TestAuthenticationAsync();
+            var companies = await ConnectSecure.GetCompaniesAsync();
+            _message = $"Credentials are valid. Loaded {companies.Count} company/companies.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ShowSwaggerToken()
+    {
+        _error = null;
+        var issues = ConnectSecureCredentialsHelper.Validate(_creds);
+        if (issues.Count > 0)
+        {
+            _error = string.Join(" ", issues);
+            return;
+        }
+
+        _swaggerToken = ConnectSecureCredentialsHelper.BuildClientAuthToken(_creds);
+        _showSwaggerToken = true;
+    }
+
+    private async Task CopySwaggerToken()
+    {
+        if (string.IsNullOrWhiteSpace(_swaggerToken))
+            ShowSwaggerToken();
+        await Js.InvokeVoidAsync("navigator.clipboard.writeText", _swaggerToken);
+        _message = "Client-Auth-Token copied. Paste it into Swagger POST /w/authorize.";
+    }
+
+    private async Task RestartApp()
+    {
+        _error = null;
+        _message = null;
+        _restarting = true;
+
+        try
+        {
+            await RestartSvc.ScheduleRestartAsync();
+            _message = "Restarting… this page will reload automatically.";
+            await Js.InvokeVoidAsync("eval", "setTimeout(() => { location.reload(); }, 5000)");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _restarting = false;
+        }
+    }
+}

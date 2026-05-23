@@ -1,0 +1,32 @@
+@page "/sessions"
+@rendermode InteractiveServer
+@inject IReviewSessionRepository SessionRepo
+@inject NavigationManager Nav
+
+<PageTitle>Sessions</PageTitle>
+
+<h1>Review Sessions</h1>
+
+<table class="table">
+    <thead><tr><th>Client</th><th>Scan</th><th>Updated</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var s in _sessions)
+        {
+            <tr>
+                <td>@s.ClientName</td>
+                <td>@s.ScanDate</td>
+                <td>@s.UpdatedAt.LocalDateTime.ToString("g")</td>
+                <td><a href="/review/@s.Id">Open</a></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<ReviewSession> _sessions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sessions = await SessionRepo.ListAsync();
+    }
+}

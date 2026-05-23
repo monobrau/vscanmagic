@@ -1685,7 +1685,7 @@ function New-EmailTemplate {
         $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
         if ([string]::IsNullOrWhiteSpace($topNLabel)) { $topNLabel = "10" }
         $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
-        $bodyTemplate = $script:Templates.EmailTemplate.Body
+        $bodyTemplate = if ($IsRMITPlus) { $script:Templates.EmailTemplateRmitPlus.Body } else { $script:Templates.EmailTemplate.Body }
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
         $emailContent = Expand-EmailTemplateInlineBullets -Text $emailContent
         $emailContent = Format-EmailTemplateSpacing -Text $emailContent

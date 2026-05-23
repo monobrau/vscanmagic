@@ -1,0 +1,1085 @@
+@page "/company-review"
+@rendermode InteractiveServer
+@using VScanMagic.ConnectSecure
+@inject ConnectSecureClient ConnectSecure
+@inject ConnectSecureCompanyReviewService ReviewService
+@inject ConnectSecureAgentService AgentService
+@inject ConnectSecureDiscoverySettingsService DiscoverySettingsService
+@inject SettingsService Settings
+
+<PageTitle>Company Review</PageTitle>
+
+<h1>Company Review</h1>
+    <p class="text-muted">Tenant configuration checks, probe subnets, external targets, and offline agents. Set probe nmap interface from reported NICs when the API allows. Manage credentials and probe mappings on <a href="probe-config">Probe & Credentials</a>.</p>
+
+@if (!ConnectSecure.IsConfigured)
+{
+    <div class="alert alert-warning">Configure ConnectSecure credentials on <a href="settings">Settings</a> first.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label">Company</label>
+                    <div class="input-group">
+                        <select class="form-select" @bind="_selectedCompanyId">
+                            <option value="">-- Select company --</option>
+                            @foreach (var c in _companies)
+                            {
+                                <option value="@c.Id">@c.Name</option>
+                            }
+                        </select>
+                        <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary w-100" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="RunReview">
+                        Run Company Review
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_data is not null)
+{
+    <div class="card mb-3">
+        <div class="card-header"><strong>@(_data.CompanyName) — configuration checks</strong></div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+                <tbody>
+                    @foreach (var check in ConnectSecureCompanyReviewService.BuildChecks(_data))
+                    {
+                        <tr>
+                            <td class="fw-semibold" style="width: 40%;">@check.Label</td>
+                            <td class="@(check.Ok ? "text-success" : "text-warning")">@check.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Internal Subnets to Scan</span>
+                    <span class="badge text-bg-secondary">@_data.InternalSubnets.Count</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-text">
+                        Probe-mapped CIDR subnets for internal nmap scanning. Same usable-IP rules apply:
+                        skip network (1st), ISP gateway (2nd), and broadcast (last).
+                    </p>
+                    @if (_data.InternalSubnets.Count == 0 && _editingInternalId is null)
+                    {
+                        <p class="text-muted">No internal subnets mapped to probe agents yet.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-3">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Probe</th>
+                                        <th>Subnet / CIDR</th>
+                                        <th class="text-end">IPs</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var subnet in _data.InternalSubnets)
+                                    {
+                                        var editing = _editingInternalId == subnet.DiscoverySettingId;
+                                        <tr>
+                                            <td>
+                                                @if (editing)
+                                                {
+                                                    <input class="form-control form-control-sm" @bind="_editInternalName" />
+                                                }
+                                                else
+                                                {
+                                                    @subnet.Name
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (editing)
+                                                {
+                                                    <select class="form-select form-select-sm" @bind="_editInternalProbeId">
+                                                        @foreach (var probe in GetProbeOptions())
+                                                        {
+                                                            <option value="@probe.AgentId">@probe.Label</option>
+                                                        }
+                                                    </select>
+                                                }
+                                                else
+                                                {
+                                                    @subnet.ProbeHostName
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (editing)
+                                                {
+                                                    <input class="form-control form-control-sm font-monospace"
+                                                           value="@_editInternalAddress"
+                                                           @oninput="OnEditInternalAddressChanged" />
+                                                    @if (!string.IsNullOrWhiteSpace(_editInternalPreview))
+                                                    {
+                                                        <div class="form-text">@_editInternalPreview</div>
+                                                    }
+                                                    @foreach (var issue in _editInternalValidationErrors)
+                                                    {
+                                                        <div class="form-text text-danger">@issue</div>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <code>@subnet.Address</code>
+                                                    @if (!string.IsNullOrWhiteSpace(subnet.TargetIp) &&
+                                                         !string.Equals(subnet.TargetIp, subnet.Address, StringComparison.OrdinalIgnoreCase))
+                                                    {
+                                                        <div class="form-text mb-0">@FormatTargetPreview(subnet.TargetIp)</div>
+                                                    }
+                                                }
+                                            </td>
+                                            <td class="text-end">@subnet.ScanIpCount</td>
+                                            <td class="text-end text-nowrap">
+                                                @if (editing)
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-primary me-1"
+                                                            disabled="@IsInternalSaving(subnet.DiscoverySettingId)"
+                                                            @onclick="() => SaveInternalSubnet(subnet)">
+                                                        @(IsInternalSaving(subnet.DiscoverySettingId) ? "Saving…" : "Save")
+                                                    </button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                            disabled="@IsInternalSaving(subnet.DiscoverySettingId)"
+                                                            @onclick="CancelEditInternal">
+                                                        Cancel
+                                                    </button>
+                                                }
+                                                else if (subnet.DiscoverySettingId is > 0)
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-outline-primary me-1"
+                                                            @onclick="() => BeginEditInternal(subnet)">
+                                                        Edit
+                                                    </button>
+                                                    <button type="button" class="btn btn-sm btn-outline-danger"
+                                                            disabled="@IsInternalSaving(subnet.DiscoverySettingId)"
+                                                            @onclick="() => DeleteInternalSubnet(subnet)">
+                                                        Delete
+                                                    </button>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+
+                    <div class="border rounded p-3 bg-light">
+                        <div class="fw-semibold mb-2">Add internal subnet</div>
+                        @if (GetProbeOptions().Count == 0)
+                        {
+                            <p class="text-warning mb-2">No probe agents found for this company. Add a probe before mapping internal subnets.</p>
+                        }
+                        <div class="row g-2">
+                            <div class="col-md-3">
+                                <input class="form-control form-control-sm" placeholder="Name"
+                                       @bind="_newInternalName" />
+                            </div>
+                            <div class="col-md-3">
+                                <select class="form-select form-select-sm" @bind="_newInternalProbeId">
+                                    @foreach (var probe in GetProbeOptions())
+                                    {
+                                        <option value="@probe.AgentId">@probe.Label</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <input class="form-control form-control-sm font-monospace"
+                                       placeholder="10.0.0.0/24"
+                                       value="@_newInternalAddress"
+                                       @oninput="OnNewInternalAddressChanged" />
+                            </div>
+                            <div class="col-md-2">
+                                <button type="button" class="btn btn-sm btn-success w-100"
+                                        disabled="@(_busy || _addingInternal || GetProbeOptions().Count == 0 || string.IsNullOrWhiteSpace(_newInternalName) || string.IsNullOrWhiteSpace(_newInternalAddress) || _newInternalProbeId <= 0)"
+                                        @onclick="AddInternalSubnet">
+                                    @(_addingInternal ? "Adding…" : "Add")
+                                </button>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_newInternalPreview))
+                        {
+                            <div class="form-text mt-2">@_newInternalPreview</div>
+                        }
+                        @foreach (var issue in _newInternalValidationErrors)
+                        {
+                            <div class="form-text text-danger">@issue</div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>External Scan Targets</span>
+                    <span class="badge text-bg-secondary">@_data.ExternalAssets.Count</span>
+                </div>
+                <div class="card-body">
+                    <p class="form-text">
+                        CIDR subnets expand to usable addresses only: skip network (1st), ISP gateway (2nd), and broadcast (last).
+                        All saved targets are queued for external scanning.
+                    </p>
+                    @if (_data.ExternalAssets.Count == 0 && _editingExternalId is null)
+                    {
+                        <p class="text-muted">No external scan targets yet.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-3">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Address / CIDR</th>
+                                        <th class="text-end">IPs</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var asset in _data.ExternalAssets)
+                                    {
+                                        var editing = _editingExternalId == asset.Id;
+                                        <tr>
+                                            <td>
+                                                @if (editing)
+                                                {
+                                                    <input class="form-control form-control-sm" @bind="_editExternalName" />
+                                                }
+                                                else
+                                                {
+                                                    @asset.Name
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (editing)
+                                                {
+                                                    <input class="form-control form-control-sm font-monospace"
+                                                           value="@_editExternalAddress"
+                                                           @oninput="OnEditExternalAddressChanged" />
+                                                    @if (!string.IsNullOrWhiteSpace(_editPreview))
+                                                    {
+                                                        <div class="form-text">@_editPreview</div>
+                                                    }
+                                                    @foreach (var issue in _editValidationErrors)
+                                                    {
+                                                        <div class="form-text text-danger">@issue</div>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <code>@asset.Address</code>
+                                                    @if (!string.IsNullOrWhiteSpace(asset.TargetIp) &&
+                                                         !string.Equals(asset.TargetIp, asset.Address, StringComparison.OrdinalIgnoreCase))
+                                                    {
+                                                        <div class="form-text mb-0">@FormatTargetPreview(asset.TargetIp)</div>
+                                                    }
+                                                }
+                                            </td>
+                                            <td class="text-end">@asset.ScanIpCount</td>
+                                            <td class="text-end text-nowrap">
+                                                @if (editing)
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-primary me-1"
+                                                            disabled="@IsExternalSaving(asset.Id)"
+                                                            @onclick="() => SaveExternalTarget(asset)">
+                                                        @(IsExternalSaving(asset.Id) ? "Saving…" : "Save")
+                                                    </button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                                                            disabled="@IsExternalSaving(asset.Id)"
+                                                            @onclick="CancelEditExternal">
+                                                        Cancel
+                                                    </button>
+                                                }
+                                                else if (asset.Id is > 0)
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-outline-primary me-1"
+                                                            @onclick="() => BeginEditExternal(asset)">
+                                                        Edit
+                                                    </button>
+                                                    <button type="button" class="btn btn-sm btn-outline-danger"
+                                                            disabled="@IsExternalSaving(asset.Id)"
+                                                            @onclick="() => DeleteExternalTarget(asset)">
+                                                        Delete
+                                                    </button>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+
+                    <div class="border rounded p-3 bg-light">
+                        <div class="fw-semibold mb-2">Add external scan target</div>
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <input class="form-control form-control-sm" placeholder="Name"
+                                       @bind="_newExternalName" />
+                            </div>
+                            <div class="col-md-5">
+                                <input class="form-control form-control-sm font-monospace"
+                                       placeholder="203.0.113.0/29 or 203.0.113.5"
+                                       value="@_newExternalAddress"
+                                       @oninput="OnNewExternalAddressChanged" />
+                            </div>
+                            <div class="col-md-3">
+                                <button type="button" class="btn btn-sm btn-success w-100"
+                                        disabled="@(_busy || _addingExternal || string.IsNullOrWhiteSpace(_newExternalName) || string.IsNullOrWhiteSpace(_newExternalAddress))"
+                                        @onclick="AddExternalTarget">
+                                    @(_addingExternal ? "Adding…" : "Add & scan")
+                                </button>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_newPreview))
+                        {
+                            <div class="form-text mt-2">@_newPreview</div>
+                        }
+                        @foreach (var issue in _newValidationErrors)
+                        {
+                            <div class="form-text text-danger">@issue</div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">Probe Agent(s) — Nmap Interface</div>
+                <div class="card-body">
+                    @if (_data.ProbeAgentsNmapInfo.Count == 0)
+                    {
+                        <p class="text-muted mb-0">(none — no probe agents)</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Host</th>
+                                        <th>Agent IP</th>
+                                        <th>Port</th>
+                                        <th style="min-width: 16rem;">Nmap interface</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var probe in _data.ProbeAgentsNmapInfo)
+                                    {
+                                        var key = GetProbeKey(probe);
+                                        var options = ProbeInterfaceHelper.BuildDropdownOptions(
+                                            probe.AvailableInterfaces,
+                                            GetSelectedNmap(probe));
+                                        <tr>
+                                            <td>@probe.HostName</td>
+                                            <td><code>@probe.Ip</code></td>
+                                            <td>@(probe.Port ?? "—")</td>
+                                            <td>
+                                                @if (probe.AgentId is null or <= 0)
+                                                {
+                                                    <span class="text-muted">@probe.NmapInterface</span>
+                                                }
+                                                else if (options.Count <= 1 && string.IsNullOrWhiteSpace(options[0].Value))
+                                                {
+                                                    <span class="text-muted">No interfaces reported — current: @probe.NmapInterface</span>
+                                                }
+                                                else
+                                                {
+                                                    <select class="form-select form-select-sm"
+                                                            value="@GetSelectedNmap(probe)"
+                                                            @onchange="e => SetSelectedNmap(probe, e.Value?.ToString())">
+                                                        @foreach (var opt in options)
+                                                        {
+                                                            <option value="@opt.Value">@opt.Label</option>
+                                                        }
+                                                    </select>
+                                                }
+                                            </td>
+                                            <td class="text-end">
+                                                @if (probe.AgentId is > 0 && HasPendingChange(probe))
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-primary"
+                                                            disabled="@IsSaving(key)"
+                                                            @onclick="() => SaveNmapInterface(probe)">
+                                                        @(IsSaving(key) ? "Saving…" : "Save")
+                                                    </button>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="form-text mb-0 mt-2">
+                            Options come from each probe&apos;s <code>interfaces</code> list reported to ConnectSecure.
+                            Saving tries the standard agent update API; if it fails, capture the portal network request and we can add the exact endpoint.
+                        </p>
+                    }
+                </div>
+            </div>
+        </div>
+        @if (_data.SubnetIssues.Count > 0)
+        {
+            <div class="col-12">
+                <div class="card border-danger">
+                    <div class="card-header text-danger">Subnet Configuration Issues</div>
+                    <div class="card-body">
+                        <pre class="small mb-0 text-danger review-pre">@string.Join(Environment.NewLine, _data.SubnetIssues)</pre>
+                    </div>
+                </div>
+            </div>
+        }
+        @if (_data.AgentsOffline30PlusNames.Count > 0)
+        {
+            <div class="col-12">
+                <div class="card border-warning">
+                    <div class="card-header text-warning">Offline 30+ days (@_data.AgentsOffline30PlusNames.Count)</div>
+                    <div class="card-body">
+                        <pre class="small mb-0 review-pre">@string.Join(Environment.NewLine, _data.AgentsOffline30PlusNames)</pre>
+                    </div>
+                </div>
+            </div>
+        }
+        @if (_data.QuickWins.Count > 0)
+        {
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">Recommendations</div>
+                    <ul class="list-group list-group-flush">
+                        @foreach (var item in _data.QuickWins)
+                        {
+                            <li class="list-group-item">@item</li>
+                        }
+                    </ul>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<style>
+    .review-pre {
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        max-height: 280px;
+        overflow-y: auto;
+    }
+</style>
+
+@code {
+    private List<CompanyInfo> _companies = [];
+    private string _selectedCompanyId = "";
+    private CompanyReviewData? _data;
+    private string? _error;
+    private string? _message;
+    private bool _busy;
+    private readonly Dictionary<int, string> _nmapSelections = new();
+    private readonly HashSet<int> _savingAgentIds = [];
+    private readonly HashSet<int> _savingExternalIds = [];
+    private readonly HashSet<int> _savingInternalIds = [];
+    private int? _editingExternalId;
+    private string _editExternalName = "";
+    private string _editExternalAddress = "";
+    private string _newExternalName = "";
+    private string _newExternalAddress = "";
+    private string? _editPreview;
+    private string? _newPreview;
+    private List<string> _editValidationErrors = [];
+    private List<string> _newValidationErrors = [];
+    private bool _addingExternal;
+    private int? _editingInternalId;
+    private string _editInternalName = "";
+    private string _editInternalAddress = "";
+    private int _editInternalProbeId;
+    private string _newInternalName = "";
+    private string _newInternalAddress = "";
+    private int _newInternalProbeId;
+    private string? _editInternalPreview;
+    private string? _newInternalPreview;
+    private List<string> _editInternalValidationErrors = [];
+    private List<string> _newInternalValidationErrors = [];
+    private bool _addingInternal;
+
+    protected override void OnInitialized()
+    {
+        var creds = Settings.LoadConnectSecureCredentials();
+        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
+            ConnectSecure.Configure(creds);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ConnectSecure.IsConfigured)
+            await LoadCompanies();
+    }
+
+    private async Task LoadCompanies()
+    {
+        _error = null;
+        _message = null;
+        _busy = true;
+        try
+        {
+            _companies = (await ConnectSecure.GetCompaniesAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RunReview()
+    {
+        if (!int.TryParse(_selectedCompanyId, out var companyId))
+            return;
+
+        _error = null;
+        _message = null;
+        _data = null;
+        _nmapSelections.Clear();
+        ResetExternalEditor();
+        ResetInternalFieldsOnly();
+        _busy = true;
+        try
+        {
+            var name = _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
+            _data = await ReviewService.GetReviewDataAsync(companyId, name);
+            foreach (var probe in _data.ProbeAgentsNmapInfo)
+                SeedSelection(probe);
+            SeedInternalProbeSelection();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SeedSelection(ProbeNmapInfo probe)
+    {
+        if (probe.AgentId is not > 0)
+            return;
+
+        var current = probe.NmapInterface.Equals("(not set)", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : probe.NmapInterface;
+        _nmapSelections[probe.AgentId.Value] = current;
+    }
+
+    private static int GetProbeKey(ProbeNmapInfo probe) => probe.AgentId ?? probe.HostName.GetHashCode();
+
+    private string GetSelectedNmap(ProbeNmapInfo probe)
+    {
+        if (probe.AgentId is > 0 && _nmapSelections.TryGetValue(probe.AgentId.Value, out var selected))
+            return selected;
+
+        return probe.NmapInterface.Equals("(not set)", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : probe.NmapInterface;
+    }
+
+    private void SetSelectedNmap(ProbeNmapInfo probe, string? value)
+    {
+        if (probe.AgentId is not > 0)
+            return;
+
+        _nmapSelections[probe.AgentId.Value] = value ?? "";
+        _message = null;
+        _error = null;
+    }
+
+    private bool HasPendingChange(ProbeNmapInfo probe)
+    {
+        if (probe.AgentId is not > 0)
+            return false;
+
+        var current = probe.NmapInterface.Equals("(not set)", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : probe.NmapInterface;
+        return !string.Equals(current, GetSelectedNmap(probe), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsSaving(int key) => _savingAgentIds.Contains(key);
+
+    private async Task SaveNmapInterface(ProbeNmapInfo probe)
+    {
+        if (probe.AgentId is not > 0 || _data is null)
+            return;
+
+        var agentId = probe.AgentId.Value;
+        var selected = GetSelectedNmap(probe);
+        _error = null;
+        _message = null;
+        _savingAgentIds.Add(agentId);
+
+        try
+        {
+            await AgentService.UpdateNmapInterfaceAsync(agentId, selected);
+            probe = probe with { NmapInterface = string.IsNullOrWhiteSpace(selected) ? "(not set)" : selected };
+            ReplaceProbe(probe);
+            _nmapSelections[agentId] = selected;
+            _message = $"Updated nmap interface for {probe.HostName}.";
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingAgentIds.Remove(agentId);
+        }
+    }
+
+    private void ReplaceProbe(ProbeNmapInfo updated)
+    {
+        if (_data is null || updated.AgentId is not > 0)
+            return;
+
+        var index = _data.ProbeAgentsNmapInfo.FindIndex(p => p.AgentId == updated.AgentId);
+        if (index >= 0)
+            _data.ProbeAgentsNmapInfo[index] = updated;
+    }
+
+    private static string FormatLines(IReadOnlyList<string> lines) =>
+        lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "(none)";
+
+    private static string FormatTargetPreview(string targetIp)
+    {
+        var ips = targetIp.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        if (ips.Count == 0)
+            return "";
+        if (ips.Count == 1)
+            return $"Scans {ips[0]}";
+        return $"Scans {ips.Count} IPs: {ips[0]} – {ips[^1]}";
+    }
+
+    private void ResetExternalEditor()
+    {
+        _editingExternalId = null;
+        _editExternalName = "";
+        _editExternalAddress = "";
+        _newExternalName = "";
+        _newExternalAddress = "";
+        _editPreview = null;
+        _newPreview = null;
+        _editValidationErrors = [];
+        _newValidationErrors = [];
+    }
+
+    private void ResetInternalEditor() => ResetInternalFieldsOnly();
+
+    private void ResetInternalFieldsOnly()
+    {
+        _editingInternalId = null;
+        _editInternalName = "";
+        _editInternalAddress = "";
+        _editInternalPreview = null;
+        _newInternalPreview = null;
+        _editInternalValidationErrors = [];
+        _newInternalValidationErrors = [];
+        _newInternalName = "";
+        _newInternalAddress = "";
+    }
+
+    private void SeedInternalProbeSelection()
+    {
+        var probes = GetProbeOptions();
+        var first = probes.FirstOrDefault();
+        _newInternalProbeId = first?.AgentId ?? 0;
+        if (_editInternalProbeId <= 0 && first is not null)
+            _editInternalProbeId = first.AgentId;
+    }
+
+    private sealed record ProbeOption(int AgentId, string Label);
+
+    private List<ProbeOption> GetProbeOptions()
+    {
+        if (_data is null)
+            return [];
+
+        return _data.ProbeAgentsNmapInfo
+            .Where(p => p.AgentId is > 0)
+            .Select(p => new ProbeOption(
+                p.AgentId!.Value,
+                string.IsNullOrWhiteSpace(p.Ip) || p.Ip == "(none)"
+                    ? p.HostName
+                    : $"{p.HostName} ({p.Ip})"))
+            .ToList();
+    }
+
+    private void BeginEditExternal(ExternalAssetEntry asset)
+    {
+        _editingExternalId = asset.Id;
+        _editExternalName = asset.Name;
+        _editExternalAddress = asset.Address;
+        _editPreview = ExternalSubnetHelper.DescribeExpandedRange(_editExternalAddress);
+        _editValidationErrors = ValidateExternalInput(_editExternalAddress);
+        _error = null;
+        _message = null;
+    }
+
+    private void CancelEditExternal() => ResetExternalEditor();
+
+    private void OnEditExternalAddressChanged(ChangeEventArgs e)
+    {
+        _editExternalAddress = e.Value?.ToString() ?? "";
+        RefreshEditPreview();
+    }
+
+    private void OnNewExternalAddressChanged(ChangeEventArgs e)
+    {
+        _newExternalAddress = e.Value?.ToString() ?? "";
+        RefreshNewPreview();
+    }
+
+    private void RefreshEditPreview()
+    {
+        _editPreview = ExternalSubnetHelper.DescribeExpandedRange(_editExternalAddress);
+        _editValidationErrors = ValidateExternalInput(_editExternalAddress);
+    }
+
+    private void RefreshNewPreview()
+    {
+        _newPreview = ExternalSubnetHelper.DescribeExpandedRange(_newExternalAddress);
+        _newValidationErrors = ValidateExternalInput(_newExternalAddress);
+    }
+
+    private static List<string> ValidateExternalInput(string input)
+    {
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(input);
+        return validation.IsValid ? [] : validation.Errors.ToList();
+    }
+
+    private bool IsExternalSaving(int? id) => id is > 0 && _savingExternalIds.Contains(id.Value);
+
+    private async Task AddExternalTarget()
+    {
+        if (_data is null)
+            return;
+
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_newExternalAddress);
+        _newValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
+        if (!validation.IsValid)
+            return;
+
+        _error = null;
+        _message = null;
+        _addingExternal = true;
+        try
+        {
+            var id = await DiscoverySettingsService.CreateExternalScanTargetAsync(
+                _data.CompanyId,
+                _newExternalName,
+                _newExternalAddress);
+
+            _data.ExternalAssets.Add(new ExternalAssetEntry(
+                id,
+                _newExternalName.Trim(),
+                validation.Address,
+                validation.TargetIp,
+                validation.ScanIps.Count));
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            _newExternalName = "";
+            _newExternalAddress = "";
+            _newPreview = null;
+            _newValidationErrors = [];
+            _message = $"Added external scan target ({validation.ScanIps.Count} IP(s)) and queued scan.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _addingExternal = false;
+        }
+    }
+
+    private async Task SaveExternalTarget(ExternalAssetEntry asset)
+    {
+        if (_data is null || asset.Id is not > 0)
+            return;
+
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_editExternalAddress);
+        _editValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
+        if (!validation.IsValid)
+            return;
+
+        _error = null;
+        _message = null;
+        _savingExternalIds.Add(asset.Id.Value);
+        try
+        {
+            await DiscoverySettingsService.UpdateExternalScanTargetAsync(
+                asset.Id.Value,
+                _data.CompanyId,
+                _editExternalName,
+                _editExternalAddress);
+
+            var updated = new ExternalAssetEntry(
+                asset.Id,
+                _editExternalName.Trim(),
+                validation.Address,
+                validation.TargetIp,
+                validation.ScanIps.Count);
+            var index = _data.ExternalAssets.FindIndex(a => a.Id == asset.Id);
+            if (index >= 0)
+                _data.ExternalAssets[index] = updated;
+
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            ResetExternalEditor();
+            _message = $"Updated external scan target ({validation.ScanIps.Count} IP(s)) and queued scan.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingExternalIds.Remove(asset.Id.Value);
+        }
+    }
+
+    private async Task DeleteExternalTarget(ExternalAssetEntry asset)
+    {
+        if (_data is null || asset.Id is not > 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _savingExternalIds.Add(asset.Id.Value);
+        try
+        {
+            await DiscoverySettingsService.DeleteExternalScanTargetAsync(asset.Id.Value);
+            _data.ExternalAssets.RemoveAll(a => a.Id == asset.Id);
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            if (_editingExternalId == asset.Id)
+                ResetExternalEditor();
+            _message = $"Deleted external scan target {asset.Name}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingExternalIds.Remove(asset.Id.Value);
+        }
+    }
+
+    private void BeginEditInternal(InternalSubnetEntry subnet)
+    {
+        _editingInternalId = subnet.DiscoverySettingId;
+        _editInternalName = subnet.Name;
+        _editInternalAddress = subnet.Address;
+        _editInternalProbeId = subnet.ProbeAgentId ?? GetProbeOptions().FirstOrDefault()?.AgentId ?? 0;
+        if (_editInternalProbeId <= 0)
+        {
+            var probes = GetProbeOptions();
+            if (probes.Count > 0)
+                _editInternalProbeId = probes[0].AgentId;
+        }
+        _editInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_editInternalAddress);
+        _editInternalValidationErrors = ValidateExternalInput(_editInternalAddress);
+        _error = null;
+        _message = null;
+    }
+
+    private void CancelEditInternal() => ResetInternalEditor();
+
+    private void OnEditInternalAddressChanged(ChangeEventArgs e)
+    {
+        _editInternalAddress = e.Value?.ToString() ?? "";
+        _editInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_editInternalAddress);
+        _editInternalValidationErrors = ValidateExternalInput(_editInternalAddress);
+    }
+
+    private void OnNewInternalAddressChanged(ChangeEventArgs e)
+    {
+        _newInternalAddress = e.Value?.ToString() ?? "";
+        _newInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_newInternalAddress);
+        _newInternalValidationErrors = ValidateExternalInput(_newInternalAddress);
+    }
+
+    private bool IsInternalSaving(int? id) => id is > 0 && _savingInternalIds.Contains(id.Value);
+
+    private async Task AddInternalSubnet()
+    {
+        if (_data is null || _newInternalProbeId <= 0)
+            return;
+
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_newInternalAddress);
+        _newInternalValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
+        if (!validation.IsValid)
+            return;
+
+        _error = null;
+        _message = null;
+        _addingInternal = true;
+        try
+        {
+            var (discoverySettingId, mappingId) = await DiscoverySettingsService.CreateInternalSubnetAsync(
+                _data.CompanyId,
+                _newInternalProbeId,
+                _newInternalName,
+                _newInternalAddress);
+
+            var probeLabel = GetProbeOptions().FirstOrDefault(p => p.AgentId == _newInternalProbeId)?.Label
+                ?? $"Agent #{_newInternalProbeId}";
+
+            _data.InternalSubnets.Add(new InternalSubnetEntry(
+                discoverySettingId,
+                mappingId,
+                _newInternalProbeId,
+                probeLabel,
+                _newInternalName.Trim(),
+                validation.Address,
+                validation.TargetIp,
+                validation.ScanIps.Count));
+
+            if (!string.IsNullOrWhiteSpace(validation.Address) && !_data.ProbesSubnets.Contains(validation.Address))
+                _data.ProbesSubnets.Add(validation.Address);
+
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            _newInternalName = "";
+            _newInternalAddress = "";
+            _newInternalPreview = null;
+            _newInternalValidationErrors = [];
+            _message = $"Added internal subnet ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _addingInternal = false;
+        }
+    }
+
+    private async Task SaveInternalSubnet(InternalSubnetEntry subnet)
+    {
+        if (_data is null || subnet.DiscoverySettingId is not > 0 || _editInternalProbeId <= 0)
+            return;
+
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_editInternalAddress);
+        _editInternalValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
+        if (!validation.IsValid)
+            return;
+
+        _error = null;
+        _message = null;
+        _savingInternalIds.Add(subnet.DiscoverySettingId.Value);
+        try
+        {
+            await DiscoverySettingsService.UpdateInternalSubnetAsync(
+                subnet.DiscoverySettingId.Value,
+                subnet.MappingId,
+                _data.CompanyId,
+                _editInternalProbeId,
+                _editInternalName,
+                _editInternalAddress);
+
+            var probeLabel = GetProbeOptions().FirstOrDefault(p => p.AgentId == _editInternalProbeId)?.Label
+                ?? $"Agent #{_editInternalProbeId}";
+
+            var updated = new InternalSubnetEntry(
+                subnet.DiscoverySettingId,
+                subnet.MappingId,
+                _editInternalProbeId,
+                probeLabel,
+                _editInternalName.Trim(),
+                validation.Address,
+                validation.TargetIp,
+                validation.ScanIps.Count);
+
+            var index = _data.InternalSubnets.FindIndex(s => s.DiscoverySettingId == subnet.DiscoverySettingId);
+            if (index >= 0)
+                _data.InternalSubnets[index] = updated;
+
+            _data.ProbesSubnets.Remove(subnet.Address);
+            if (!string.IsNullOrWhiteSpace(validation.Address) && !_data.ProbesSubnets.Contains(validation.Address))
+                _data.ProbesSubnets.Add(validation.Address);
+
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            ResetInternalEditor();
+            _message = $"Updated internal subnet ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingInternalIds.Remove(subnet.DiscoverySettingId.Value);
+        }
+    }
+
+    private async Task DeleteInternalSubnet(InternalSubnetEntry subnet)
+    {
+        if (_data is null || subnet.DiscoverySettingId is not > 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _savingInternalIds.Add(subnet.DiscoverySettingId.Value);
+        try
+        {
+            await DiscoverySettingsService.DeleteInternalSubnetAsync(
+                subnet.DiscoverySettingId.Value,
+                subnet.MappingId);
+
+            _data.InternalSubnets.RemoveAll(s => s.DiscoverySettingId == subnet.DiscoverySettingId);
+            _data.ProbesSubnets.Remove(subnet.Address);
+            ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
+            if (_editingInternalId == subnet.DiscoverySettingId)
+                ResetInternalEditor();
+            _message = $"Deleted internal subnet {subnet.Name}.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _savingInternalIds.Remove(subnet.DiscoverySettingId.Value);
+        }
+    }
+}

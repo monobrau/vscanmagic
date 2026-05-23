@@ -1,0 +1,409 @@
+@page "/hostname-review"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Models
+@using VScanMagic.Core.Paths
+@using VScanMagic.Core.Services
+@using VScanMagic.Data
+@using VScanMagic.Reports
+@inject VulnerabilityPipeline Pipeline
+@inject IReviewSessionRepository SessionRepo
+@inject HostVulnerabilityReportExporter HostExporter
+@inject SettingsService Settings
+@inject ReportPathResolver PathResolver
+@inject ReportFolderHistoryService FolderHistory
+
+<PageTitle>Host Vulnerability Counts</PageTitle>
+
+<h1>Host Vulnerability Counts</h1>
+<p class="text-muted">
+    Per-host totals from the All Vulnerabilities report help distinguish patch-cycle noise (often moderate Windows counts spread across pending updates)
+    from hosts with unusually high counts or many distinct products.
+</p>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-8">
+                <label class="form-label">All Vulnerabilities XLSX</label>
+                <input class="form-control" @bind="_sourcePath" placeholder="/path/to/All Vulnerabilities Report.xlsx" />
+                @if (!string.IsNullOrWhiteSpace(_loadedFrom))
+                {
+                    <div class="form-text">Loaded from @_loadedFrom</div>
+                }
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary w-100" disabled="@_busy" @onclick="LoadSummary">Load</button>
+            </div>
+        </div>
+        <div class="mt-3">
+            <InputFile OnChange="OnFileSelected" accept=".xlsx,.xls" class="form-control" />
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_hosts.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-4">
+                    <input class="form-control form-control-sm" @bind="_search" @bind:event="oninput" placeholder="Search hostname or IP..." />
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" @bind="_windowsOnly" id="winOnly" />
+                        <label class="form-check-label" for="winOnly">Windows vulns only (&gt; 0)</label>
+                    </div>
+                </div>
+                <div class="col-md-4 text-md-end small text-muted">
+                    @FilteredHostList.Count of @_hosts.Count hosts
+                    @if (_highCountHosts > 0)
+                    {
+                        <span class="ms-2">· @_highCountHosts above @_highCountThreshold</span>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-striped table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th role="button" @onclick='() => SetSort("host")'>Host @SortIcon("host")</th>
+                    <th role="button" @onclick='() => SetSort("ip")'>IP @SortIcon("ip")</th>
+                    <th class="text-end" role="button" @onclick='() => SetSort("total")'>Total @SortIcon("total")</th>
+                    <th class="text-end" role="button" @onclick='() => SetSort("windows")'>Windows @SortIcon("windows")</th>
+                    <th class="text-end" role="button" @onclick='() => SetSort("products")'>Products @SortIcon("products")</th>
+                    <th class="text-end">Crit</th>
+                    <th class="text-end">High</th>
+                    <th class="text-end">Med</th>
+                    <th class="text-end">Low</th>
+                    <th>Top products on host</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var h in FilteredHostList)
+                {
+                    <tr class="@RowClass(h)">
+                        <td><strong>@h.DisplayName</strong></td>
+                        <td>@h.Ip</td>
+                        <td class="text-end fw-semibold">@h.TotalVulnCount</td>
+                        <td class="text-end">@h.WindowsVulnCount</td>
+                        <td class="text-end">@h.ProductCount</td>
+                        <td class="text-end">@h.Critical</td>
+                        <td class="text-end">@h.High</td>
+                        <td class="text-end">@h.Medium</td>
+                        <td class="text-end">@h.Low</td>
+                        <td class="small text-muted">@h.TopProducts</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <p class="small text-muted mb-0">
+        Rows highlighted when total vulnerabilities ≥ @_highCountThreshold (often worth a deeper look).
+        Moderate Windows-heavy counts with few other products may reflect pending patch cycles.
+    </p>
+
+    <div class="card mt-4">
+        <div class="card-header">Export</div>
+        <div class="card-body">
+            <p class="small text-muted">Export the current filtered view (@FilteredHostList.Count hosts).</p>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-5">
+                    <label class="form-label">Output directory</label>
+                    <input class="form-control" @bind="_exportDir" />
+                    @if (!string.IsNullOrWhiteSpace(_exportPathHint))
+                    {
+                        <div class="form-text">@_exportPathHint</div>
+                    }
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" checked="@_exportPdf"
+                               @onclick="e => OnExportFormatClick(0, e)" @onclick:preventDefault id="exportPdf" />
+                        <label class="form-check-label" for="exportPdf">PDF</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" checked="@_exportXlsx"
+                               @onclick="e => OnExportFormatClick(1, e)" @onclick:preventDefault id="exportXlsx" />
+                        <label class="form-check-label" for="exportXlsx">Excel (XLSX)</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" checked="@_exportCsv"
+                               @onclick="e => OnExportFormatClick(2, e)" @onclick:preventDefault id="exportCsv" />
+                        <label class="form-check-label" for="exportCsv">CSV</label>
+                    </div>
+                    <p class="form-text mb-0">Shift-click to toggle a range of formats.</p>
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-outline-primary w-100" disabled="@(_busy || (!_exportPdf && !_exportXlsx && !_exportCsv))" @onclick="RunExport">
+                        Export
+                    </button>
+                </div>
+            </div>
+            @if (!string.IsNullOrEmpty(_exportMessage))
+            {
+                <div class="alert alert-success mt-3 mb-0 py-2">@_exportMessage</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? SessionId { get; set; }
+
+    private string _sourcePath = "";
+    private string? _loadedFrom;
+    private string? _error;
+    private bool _busy;
+    private bool _windowsOnly;
+    private string _search = "";
+    private string _sortColumn = "total";
+    private bool _sortDesc = true;
+    private const int _highCountThreshold = 350;
+
+    private List<HostVulnerabilitySummary> _hosts = [];
+    private string _exportDir = "";
+    private bool _exportPdf = true;
+    private bool _exportXlsx = true;
+    private bool _exportCsv;
+    private string? _exportMessage;
+    private readonly CheckboxRangeColumn _exportFormatRange = new();
+    private string? _clientName;
+    private string? _exportPathHint;
+    private int _companyId;
+    private UserSettings _userSettings = new();
+
+    private int _highCountHosts => _hosts.Count(h => h.TotalVulnCount >= _highCountThreshold);
+
+    private List<HostVulnerabilitySummary> FilteredHostList
+    {
+        get
+        {
+            IEnumerable<HostVulnerabilitySummary> q = _hosts;
+            if (_windowsOnly)
+                q = q.Where(h => h.WindowsVulnCount > 0);
+
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                q = q.Where(h =>
+                    h.DisplayName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                    h.Ip.Contains(_search, StringComparison.OrdinalIgnoreCase));
+            }
+
+            q = _sortColumn switch
+            {
+                "host" => _sortDesc ? q.OrderByDescending(h => h.DisplayName, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.DisplayName, StringComparer.OrdinalIgnoreCase),
+                "ip" => _sortDesc ? q.OrderByDescending(h => h.Ip, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.Ip, StringComparer.OrdinalIgnoreCase),
+                "windows" => _sortDesc ? q.OrderByDescending(h => h.WindowsVulnCount) : q.OrderBy(h => h.WindowsVulnCount),
+                "products" => _sortDesc ? q.OrderByDescending(h => h.ProductCount) : q.OrderBy(h => h.ProductCount),
+                _ => _sortDesc ? q.OrderByDescending(h => h.TotalVulnCount) : q.OrderBy(h => h.TotalVulnCount)
+            };
+
+            return q.ToList();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _userSettings = Settings.LoadUserSettings();
+        _exportDir = _userSettings.LastOutputDirectory;
+        if (string.IsNullOrWhiteSpace(_exportDir))
+            _exportDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Exports");
+
+        if (string.IsNullOrWhiteSpace(SessionId) || !string.IsNullOrWhiteSpace(_sourcePath))
+        {
+            RefreshExportPathHint();
+            return;
+        }
+
+        var session = await SessionRepo.GetAsync(SessionId);
+        if (!string.IsNullOrWhiteSpace(session?.SourceFilePath) && File.Exists(session.SourceFilePath))
+        {
+            _sourcePath = session.SourceFilePath;
+            _loadedFrom = $"review session {session.ClientName}";
+            _clientName = session.ClientName;
+            _companyId = int.TryParse(session.CompanyId, out var id) ? id : 0;
+            RefreshExportPathHint();
+            await LoadSummary();
+        }
+    }
+
+    private void RefreshExportPathHint()
+    {
+        var clientName = _clientName;
+        if (string.IsNullOrWhiteSpace(clientName))
+            clientName = Path.GetFileNameWithoutExtension(_sourcePath) ?? "Client";
+
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            _companyId,
+            clientName,
+            DateTime.Today.ToString("yyyy-MM-dd"),
+            _exportDir);
+
+        if (layout.UsesStructuredPaths)
+        {
+            _exportDir = layout.OutputDirectory;
+            _exportPathHint = layout.ReportsPathPartial is not null
+                ? $"Resolved: ...\\{layout.ReportsPathPartial}"
+                : $"Resolved under Reports Base Path: {layout.OutputDirectory}";
+        }
+        else if (!string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath))
+        {
+            _exportPathHint = "No client folder match — using output directory above.";
+        }
+        else
+        {
+            _exportPathHint = null;
+        }
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        var temp = Core.Paths.VScanMagicPaths.GetTempFile("uploads", e.File.Name);
+        await using var stream = e.File.OpenReadStream(100 * 1024 * 1024);
+        await using var fs = File.Create(temp);
+        await stream.CopyToAsync(fs);
+        _sourcePath = temp;
+        _loadedFrom = $"uploaded {e.File.Name}";
+        await LoadSummary();
+    }
+
+    private async Task LoadSummary()
+    {
+        _error = null;
+        _hosts = [];
+
+        if (string.IsNullOrWhiteSpace(_sourcePath) || !File.Exists(_sourcePath))
+        {
+            _error = "Specify a valid All Vulnerabilities XLSX path.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Task.Run(() => Pipeline.SummarizeHosts(_sourcePath));
+            _hosts = result.Hosts.ToList();
+            if (_hosts.Count == 0)
+                _error = "No host rows found in that file.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool GetExportFormat(int index) => index switch
+    {
+        0 => _exportPdf,
+        1 => _exportXlsx,
+        2 => _exportCsv,
+        _ => false
+    };
+
+    private void SetExportFormat(int index, bool value)
+    {
+        switch (index)
+        {
+            case 0: _exportPdf = value; break;
+            case 1: _exportXlsx = value; break;
+            case 2: _exportCsv = value; break;
+        }
+    }
+
+    private void OnExportFormatClick(int index, MouseEventArgs e)
+    {
+        var newValue = !GetExportFormat(index);
+        _exportFormatRange.Click(index, newValue, e, SetExportFormat);
+    }
+
+    private void SetSort(string column)
+    {
+        if (_sortColumn == column)
+            _sortDesc = !_sortDesc;
+        else
+        {
+            _sortColumn = column;
+            _sortDesc = column is "total" or "windows" or "products";
+        }
+    }
+
+    private string SortIcon(string column) =>
+        _sortColumn == column ? (_sortDesc ? "↓" : "↑") : "";
+
+    private static string RowClass(HostVulnerabilitySummary host) =>
+        host.TotalVulnCount >= _highCountThreshold ? "table-warning" : "";
+
+    private async Task RunExport()
+    {
+        _exportMessage = null;
+        if (FilteredHostList.Count == 0)
+        {
+            _exportMessage = "Nothing to export — adjust filters or load data first.";
+            return;
+        }
+
+        if (!_exportPdf && !_exportXlsx && !_exportCsv)
+            return;
+
+        _busy = true;
+        try
+        {
+            var clientName = _clientName;
+            if (string.IsNullOrWhiteSpace(clientName))
+                clientName = Path.GetFileNameWithoutExtension(_sourcePath) ?? "Client";
+
+            var layout = PathResolver.Resolve(
+                _userSettings,
+                _companyId,
+                clientName,
+                DateTime.Today.ToString("yyyy-MM-dd"),
+                _exportDir);
+            _exportDir = layout.OutputDirectory;
+
+            var request = new HostVulnerabilityReportRequest(
+                clientName,
+                FilteredHostList,
+                SourceFileName: string.IsNullOrWhiteSpace(_sourcePath) ? null : Path.GetFileName(_sourcePath),
+                HighCountThreshold: _highCountThreshold);
+
+            var stamp = ReportPathResolver.GetReportTimestamp();
+            var result = await Task.Run(() =>
+                HostExporter.Export(request, layout.OutputDirectory, clientName, stamp, _exportPdf, _exportXlsx, _exportCsv));
+
+            FolderHistory.Add(clientName, layout.OutputDirectory);
+            _userSettings.LastOutputDirectory = layout.OutputDirectory;
+            Settings.SaveUserSettings(_userSettings);
+            RefreshExportPathHint();
+
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(result.PdfPath)) parts.Add($"PDF: {result.PdfPath}");
+            if (!string.IsNullOrWhiteSpace(result.XlsxPath)) parts.Add($"XLSX: {result.XlsxPath}");
+            if (!string.IsNullOrWhiteSpace(result.CsvPath)) parts.Add($"CSV: {result.CsvPath}");
+            _exportMessage = string.Join(" | ", parts);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

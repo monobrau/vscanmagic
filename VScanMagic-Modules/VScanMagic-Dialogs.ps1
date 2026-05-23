@@ -2761,9 +2761,9 @@ function Show-TemplatesDialog {
     $tabControl.Location = New-Object System.Drawing.Point(12, 12)
     $tabControl.Size = New-Object System.Drawing.Size(710, 460)
 
-    # --- Email Template Tab ---
+    # --- Email Template Tab (RMIT / CMIT) ---
     $tabEmail = New-Object System.Windows.Forms.TabPage
-    $tabEmail.Text = "Email Template"
+    $tabEmail.Text = "Email - RMIT"
     $lblEmailHint = New-Object System.Windows.Forms.Label
     $lblEmailHint.Location = New-Object System.Drawing.Point(8, 8)
     $lblEmailHint.Size = New-Object System.Drawing.Size(650, 32)
@@ -2780,6 +2780,26 @@ function Show-TemplatesDialog {
     $txtEmail.Text = $script:Templates.EmailTemplate.Body
     $tabEmail.Controls.Add($txtEmail)
     $tabControl.TabPages.Add($tabEmail)
+
+    # --- Email Template Tab (RMIT+) ---
+    $tabEmailPlus = New-Object System.Windows.Forms.TabPage
+    $tabEmailPlus.Text = "Email - RMIT+"
+    $lblEmailPlusHint = New-Object System.Windows.Forms.Label
+    $lblEmailPlusHint.Location = New-Object System.Drawing.Point(8, 8)
+    $lblEmailPlusHint.Size = New-Object System.Drawing.Size(650, 32)
+    $lblEmailPlusHint.Text = "Placeholders: {Year}, {Quarter}, {Greeting}, {NoteText}, {PreparedBy}, {TopNLabel}"
+    $lblEmailPlusHint.ForeColor = [System.Drawing.Color]::Gray
+    $lblEmailPlusHint.AutoSize = $false
+    $tabEmailPlus.Controls.Add($lblEmailPlusHint)
+    $txtEmailPlus = New-Object System.Windows.Forms.TextBox
+    $txtEmailPlus.Location = New-Object System.Drawing.Point(8, 44)
+    $txtEmailPlus.Size = New-Object System.Drawing.Size(680, 360)
+    $txtEmailPlus.Multiline = $true
+    $txtEmailPlus.ScrollBars = "Vertical"
+    $txtEmailPlus.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $txtEmailPlus.Text = $script:Templates.EmailTemplateRmitPlus.Body
+    $tabEmailPlus.Controls.Add($txtEmailPlus)
+    $tabControl.TabPages.Add($tabEmailPlus)
 
     # --- Ticket Notes Tab ---
     $tabNotes = New-Object System.Windows.Forms.TabPage
@@ -2880,6 +2900,7 @@ function Show-TemplatesDialog {
     $btnSave.Text = "Save"
     $btnSave.Add_Click({
         $script:Templates.EmailTemplate.Body = $txtEmail.Text
+        $script:Templates.EmailTemplateRmitPlus.Body = $txtEmailPlus.Text
         $script:Templates.TicketNotes.StepsBeforeTickets = $txtStepsBefore.Text
         $script:Templates.TicketNotes.StepsAfterTickets = $txtStepsAfter.Text
         $script:Templates.TicketNotes.ResolvedQuestion = $txtResolvedQ.Text
@@ -2901,6 +2922,7 @@ function Show-TemplatesDialog {
     $btnLoadDefaults.Add_Click({
         $defaults = Get-DefaultTemplates
         $txtEmail.Text = $defaults.EmailTemplate.Body
+        $txtEmailPlus.Text = $defaults.EmailTemplateRmitPlus.Body
         $txtStepsBefore.Text = $defaults.TicketNotes.StepsBeforeTickets
         $txtStepsAfter.Text = $defaults.TicketNotes.StepsAfterTickets
         $txtResolvedQ.Text = $defaults.TicketNotes.ResolvedQuestion

@@ -1,0 +1,255 @@
+@page "/configuration"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Models
+@inject CompanyFolderMapService FolderMap
+@inject CoveredSoftwareService CoveredSoftwareSvc
+@using VScanMagic.ConnectSecure
+@inject ConnectSecureClient ConnectSecure
+@inject SettingsService Settings
+
+<PageTitle>Configuration</PageTitle>
+
+<h1>Configuration</h1>
+<p class="text-muted">Company output folder mappings and RMIT+ covered software patterns.</p>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_tab == "folders" ? "active" : "")" @onclick='() => _tab = "folders"'>Folder map</button>
+    </li>
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_tab == "covered" ? "active" : "")" @onclick='() => _tab = "covered"'>Covered software</button>
+    </li>
+</ul>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_tab == "folders")
+{
+    <p class="text-muted">Maps ConnectSecure company ID to client folder path under Reports Base Path (relative path, e.g. <code>Contoso/Network Documentation/Vulnerability Scans</code>).</p>
+    <div class="mb-3">
+        <button class="btn btn-outline-primary btn-sm me-2" @onclick="AddFolderEntry">Add mapping</button>
+        <button class="btn btn-primary btn-sm" @onclick="SaveFolderMap">Save folder map</button>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 10rem;">Company ID</th>
+                    <th>Folder path</th>
+                    <th style="width: 6rem;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _folderEntries.Count; i++)
+                {
+                    var index = i;
+                    <tr>
+                        <td>
+                            <input class="form-control form-control-sm" list="companyIds" @bind="_folderEntries[index].CompanyId" />
+                        </td>
+                        <td>
+                            <input class="form-control form-control-sm" @bind="_folderEntries[index].FolderPath" placeholder="Client Name/Network Documentation/Vulnerability Scans" />
+                        </td>
+                        <td>
+                            <button class="btn btn-outline-danger btn-sm" @onclick="() => _folderEntries.RemoveAt(index)">Remove</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <datalist id="companyIds">
+        @foreach (var c in _companies)
+        {
+            <option value="@c.Id">@c.Name</option>
+        }
+    </datalist>
+    @if (ConnectSecure.IsConfigured)
+    {
+        <button class="btn btn-outline-secondary btn-sm" disabled="@_busy" @onclick="LoadCompanies">Refresh company list</button>
+    }
+}
+else
+{
+    <p class="text-muted">Products matching these patterns are treated as agreement-covered (first-party) for RMIT+ defaults. Use wildcards like <code>*Microsoft*</code>.</p>
+    <div class="mb-3">
+        <button class="btn btn-outline-primary btn-sm me-2" @onclick="AddCoveredEntry">Add entry</button>
+        <button class="btn btn-outline-secondary btn-sm me-2" @onclick="LoadDefaults">Restore defaults</button>
+        <button class="btn btn-primary btn-sm" @onclick="SaveCoveredSoftware">Save covered software</button>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Pattern</th>
+                    <th>Wildcard</th>
+                    <th>Override</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _coveredEntries.Count; i++)
+                {
+                    var index = i;
+                    <tr>
+                        <td><input class="form-control form-control-sm" @bind="_coveredEntries[index].Pattern" /></td>
+                        <td><input type="checkbox" class="form-check-input" checked="@_coveredEntries[index].IsPattern"
+                                   @onclick="e => OnCoveredCheckboxClick(index, CoveredCheckboxColumn.Wildcard, e)" @onclick:preventDefault /></td>
+                        <td><input type="checkbox" class="form-check-input" checked="@_coveredEntries[index].Override"
+                                   @onclick="e => OnCoveredCheckboxClick(index, CoveredCheckboxColumn.Override, e)" @onclick:preventDefault /></td>
+                        <td><button class="btn btn-outline-danger btn-sm" @onclick="() => _coveredEntries.RemoveAt(index)">Remove</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="form-text">Shift-click checkboxes in the Wildcard or Override column to toggle a range.</p>
+}
+
+@code {
+    private string _tab = "folders";
+    private List<FolderMapEntry> _folderEntries = [];
+    private List<CoveredSoftwareEntry> _coveredEntries = [];
+    private List<CompanyInfo> _companies = [];
+    private string? _message;
+    private string? _error;
+    private bool _busy;
+    private readonly CheckboxRangeColumn _coveredWildcardRange = new();
+    private readonly CheckboxRangeColumn _coveredOverrideRange = new();
+
+    private enum CoveredCheckboxColumn { Wildcard, Override }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var creds = Settings.LoadConnectSecureCredentials();
+        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
+            ConnectSecure.Configure(creds);
+
+        ReloadFolderMap();
+        ReloadCoveredSoftware();
+
+        if (ConnectSecure.IsConfigured)
+            await LoadCompanies();
+    }
+
+    private void ReloadFolderMap()
+    {
+        _folderEntries = FolderMap.GetOrderedEntries()
+            .Select(p => new FolderMapEntry { CompanyId = p.Key, FolderPath = p.Value })
+            .ToList();
+    }
+
+    private void ReloadCoveredSoftware()
+    {
+        _coveredEntries = CoveredSoftwareSvc.Load().Select(e => new CoveredSoftwareEntry
+        {
+            Pattern = e.Pattern,
+            IsPattern = e.IsPattern,
+            Override = e.Override
+        }).ToList();
+    }
+
+    private async Task LoadCompanies()
+    {
+        _busy = true;
+        try
+        {
+            _companies = (await ConnectSecure.GetCompaniesAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void AddFolderEntry() => _folderEntries.Add(new FolderMapEntry());
+
+    private void SaveFolderMap()
+    {
+        _message = null;
+        _error = null;
+        try
+        {
+            var entries = _folderEntries
+                .Where(e => !string.IsNullOrWhiteSpace(e.CompanyId) && !string.IsNullOrWhiteSpace(e.FolderPath))
+                .Select(e => new KeyValuePair<string, string>(e.CompanyId.Trim(), e.FolderPath.Trim()));
+            FolderMap.ReplaceAll(entries);
+            ReloadFolderMap();
+            _message = "Folder map saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void AddCoveredEntry() => _coveredEntries.Add(new CoveredSoftwareEntry { Pattern = "*", IsPattern = true });
+
+    private bool GetCoveredCheckbox(int index, CoveredCheckboxColumn column) =>
+        column switch
+        {
+            CoveredCheckboxColumn.Wildcard => _coveredEntries[index].IsPattern,
+            CoveredCheckboxColumn.Override => _coveredEntries[index].Override,
+            _ => false
+        };
+
+    private void SetCoveredCheckbox(int index, CoveredCheckboxColumn column, bool value)
+    {
+        switch (column)
+        {
+            case CoveredCheckboxColumn.Wildcard:
+                _coveredEntries[index].IsPattern = value;
+                break;
+            case CoveredCheckboxColumn.Override:
+                _coveredEntries[index].Override = value;
+                break;
+        }
+    }
+
+    private void OnCoveredCheckboxClick(int index, CoveredCheckboxColumn column, MouseEventArgs e)
+    {
+        if (index < 0 || index >= _coveredEntries.Count)
+            return;
+
+        var range = column == CoveredCheckboxColumn.Wildcard ? _coveredWildcardRange : _coveredOverrideRange;
+        var newValue = !GetCoveredCheckbox(index, column);
+        range.Click(index, newValue, e, (i, on) => SetCoveredCheckbox(i, column, on));
+    }
+
+    private void LoadDefaults()
+    {
+        _coveredEntries = CoveredSoftwareService.GetDefaults();
+    }
+
+    private void SaveCoveredSoftware()
+    {
+        _message = null;
+        _error = null;
+        try
+        {
+            CoveredSoftwareSvc.Save(_coveredEntries);
+            _message = "Covered software list saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private sealed class FolderMapEntry
+    {
+        public string CompanyId { get; set; } = "";
+        public string FolderPath { get; set; } = "";
+    }
+}

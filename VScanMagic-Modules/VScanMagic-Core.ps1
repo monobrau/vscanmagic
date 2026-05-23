@@ -1370,6 +1370,42 @@ Sincerely,
 {PreparedBy}
 "@
         }
+        EmailTemplateRmitPlus = @{
+            SubjectFormat = "{Year} Q{Quarter} Vulnerability Scan Follow Up"
+            Body = @"
+Subject: {Year} Q{Quarter} Vulnerability Scan Follow Up
+
+Good {Greeting},
+
+Your quarterly vulnerability scan report has been completed and is available in your client folder.
+
+Recommended remediation priorities ({TopNLabel}):
+<link to top ten report from onedrive>
+
+Complete report package:
+<onedrive link to folder containing reports>
+
+The folder contains the following reports:
+• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
+• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
+• Executive Summary Report – A high-level overview of your security posture and network information.
+• External Scan – Detected vulnerabilities and services exposed to the internet.
+• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+
+Schedule time with me
+<scheduling link>
+
+{NoteText}
+
+We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
+
+Sincerely,
+
+{PreparedBy}
+"@
+        }
         TicketNotes = @{
             StepsBeforeTickets = @"
 - Examined lightweight agents
@@ -1399,10 +1435,16 @@ function Load-Templates {
     if (-not [string]::IsNullOrEmpty($script:TemplatesPath) -and (Test-Path $script:TemplatesPath)) {
         try {
             $json = Get-Content $script:TemplatesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $defaults = Get-DefaultTemplates
+            $rmitPlusJson = $json.EmailTemplateRmitPlus
             $script:Templates = @{
                 EmailTemplate = @{
-                    SubjectFormat = if ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { (Get-DefaultTemplates).EmailTemplate.SubjectFormat }
-                    Body = if ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { (Get-DefaultTemplates).EmailTemplate.Body }
+                    SubjectFormat = if ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { $defaults.EmailTemplate.SubjectFormat }
+                    Body = if ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { $defaults.EmailTemplate.Body }
+                }
+                EmailTemplateRmitPlus = @{
+                    SubjectFormat = if ($rmitPlusJson -and $rmitPlusJson.SubjectFormat) { $rmitPlusJson.SubjectFormat } elseif ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { $defaults.EmailTemplateRmitPlus.SubjectFormat }
+                    Body = if ($rmitPlusJson -and $rmitPlusJson.Body) { $rmitPlusJson.Body } elseif ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { $defaults.EmailTemplateRmitPlus.Body }
                 }
                 TicketNotes = @{
                     StepsBeforeTickets = if ($json.TicketNotes.StepsBeforeTickets) { $json.TicketNotes.StepsBeforeTickets } else { (Get-DefaultTemplates).TicketNotes.StepsBeforeTickets }
