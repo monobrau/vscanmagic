@@ -1,5 +1,4 @@
-﻿@rendermode InteractiveServer
-@inject ConnectSecureClient ConnectSecure
+﻿@inject ConnectSecureClient ConnectSecure
 
 <div class="nav-shell">
     <div class="top-row ps-3 navbar navbar-dark">
@@ -8,20 +7,17 @@
         </div>
     </div>
 
-    <button type="button"
-            class="navbar-toggler"
-            title="Navigation menu"
-            aria-controls="main-nav"
-            aria-expanded="@_mobileNavOpen"
-            @onclick="ToggleMobileNav">
-        <span class="navbar-toggler-icon" aria-hidden="true"></span>
-    </button>
+    <input type="checkbox" id="nav-menu-toggle" class="nav-menu-toggle" title="Navigation menu" />
 
-    <div id="main-nav" class="nav-scrollable @(_mobileNavOpen ? "nav-open" : "")">
+    <label for="nav-menu-toggle" class="navbar-toggler">
+        <span class="navbar-toggler-icon" aria-hidden="true"></span>
+    </label>
+
+    <div id="main-nav" class="nav-scrollable">
         <nav class="nav-main flex-column" aria-label="Main">
             <div class="nav-section-label">ConnectSecure</div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="company-review" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="company-review">
                     <i class="bi bi-building" aria-hidden="true"></i>
                     <span>Company review</span>
                 </NavLink>
@@ -29,32 +25,32 @@
 
             <div class="nav-section-label nav-section-label-nested">Patching</div>
             <div class="nav-item px-3 nav-item-nested">
-                <NavLink class="nav-link" href="application-patching" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="application-patching">
                     <i class="bi bi-bandaid" aria-hidden="true"></i>
                     <span>Application patching</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3 nav-item-nested">
-                <NavLink class="nav-link" href="os-patching" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="os-patching">
                     <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
                     <span>OS patching</span>
                 </NavLink>
             </div>
 
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="vulnerability-suppress" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="vulnerability-suppress">
                     <i class="bi bi-slash-circle" aria-hidden="true"></i>
                     <span>Suppress vulnerabilities</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="probe-config" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="probe-config">
                     <i class="bi bi-hdd-network" aria-hidden="true"></i>
                     <span>Probe &amp; credentials</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="hostname-review" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="hostname-review">
                     <i class="bi bi-pc-display-horizontal" aria-hidden="true"></i>
                     <span>Host counts</span>
                 </NavLink>
@@ -62,25 +58,25 @@
 
             <div class="nav-section-label">Client review</div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="" Match="NavLinkMatch.All" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
                     <i class="bi bi-cloud-download" aria-hidden="true"></i>
                     <span>Download &amp; ingest</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="sessions" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="sessions">
                     <i class="bi bi-collection" aria-hidden="true"></i>
                     <span>Sessions</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="rules" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="rules">
                     <i class="bi bi-journal-text" aria-hidden="true"></i>
                     <span>Rules</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="templates" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="templates">
                     <i class="bi bi-envelope" aria-hidden="true"></i>
                     <span>Templates</span>
                 </NavLink>
@@ -88,13 +84,13 @@
 
             <div class="nav-section-label">Setup</div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="settings" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="settings">
                     <i class="bi bi-gear" aria-hidden="true"></i>
                     <span>Settings</span>
                 </NavLink>
             </div>
             <div class="nav-item px-3">
-                <NavLink class="nav-link" href="configuration" @onclick="CloseMobileNav">
+                <NavLink class="nav-link" href="configuration">
                     <i class="bi bi-sliders" aria-hidden="true"></i>
                     <span>Client mappings</span>
                 </NavLink>
@@ -102,7 +98,7 @@
         </nav>
 
         <div class="nav-footer px-3">
-            <NavLink class="nav-link nav-link-footer" href="about" @onclick="CloseMobileNav">
+            <NavLink class="nav-link nav-link-footer" href="about">
                 <i class="bi bi-info-circle" aria-hidden="true"></i>
                 <span>About</span>
             </NavLink>
@@ -115,8 +111,6 @@
 </div>
 
 @code {
-    private bool _mobileNavOpen;
-
     private bool ApiConfigured => ConnectSecure.IsConfigured;
 
     private string ApiStatusClass => ApiConfigured ? "nav-status-dot-ok" : "nav-status-dot-warn";
@@ -126,12 +120,4 @@
     private string ApiStatusDetail => ApiConfigured
         ? "ConnectSecure credentials are configured."
         : "Add ConnectSecure API credentials on Settings.";
-
-    private void ToggleMobileNav() => _mobileNavOpen = !_mobileNavOpen;
-
-    private void CloseMobileNav()
-    {
-        if (_mobileNavOpen)
-            _mobileNavOpen = false;
-    }
 }
