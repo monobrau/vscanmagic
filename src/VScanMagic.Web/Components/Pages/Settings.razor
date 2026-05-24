@@ -1,10 +1,8 @@
 @page "/settings"
 @rendermode InteractiveServer
 @using VScanMagic.ConnectSecure
-@using VScanMagic.Web.Services
 @inject SettingsService SettingsSvc
 @inject ConnectSecureClient ConnectSecure
-@inject AppRestartService RestartSvc
 @inject IJSRuntime Js
 
 <PageTitle>Settings</PageTitle>
@@ -142,33 +140,6 @@
     </div>
 </div>
 
-<div class="card mb-3">
-    <div class="card-header">Application</div>
-    <div class="card-body">
-        <p class="mb-2">
-            Restart the web UI after updating the app or when you want a clean reload of in-memory state.
-            The page will reconnect automatically after a few seconds.
-        </p>
-        @if (!_restartAllowed)
-        {
-            <div class="alert alert-warning py-2 mb-2">
-                Restart is disabled because the server is not bound to loopback.
-                Set <code>VSCANMAGIC_API_BIND=127.0.0.1</code> (default) to enable it.
-            </div>
-        }
-        <button type="button" class="btn btn-outline-warning" disabled="@(_busy || _restarting || !_restartAllowed)" @onclick="RestartApp">
-            @if (_restarting)
-            {
-                <span>Restarting…</span>
-            }
-            else
-            {
-                <span>Restart application</span>
-            }
-        </button>
-    </div>
-</div>
-
 @if (!string.IsNullOrEmpty(_message))
 {
     <div class="alert alert-success">@_message</div>
@@ -188,8 +159,6 @@
     private string? _message;
     private string? _error;
     private bool _busy;
-    private bool _restarting;
-    private readonly bool _restartAllowed = AppRestartService.IsRestartPermitted();
     private bool _secretLooksEncoded;
     private bool _showSwaggerToken;
     private string _swaggerToken = "";
@@ -335,24 +304,5 @@
             ShowSwaggerToken();
         await Js.InvokeVoidAsync("navigator.clipboard.writeText", _swaggerToken);
         _message = "Client-Auth-Token copied. Paste it into Swagger POST /w/authorize.";
-    }
-
-    private async Task RestartApp()
-    {
-        _error = null;
-        _message = null;
-        _restarting = true;
-
-        try
-        {
-            await RestartSvc.ScheduleRestartAsync();
-            _message = "Restarting… this page will reload automatically.";
-            await Js.InvokeVoidAsync("eval", "setTimeout(() => { location.reload(); }, 5000)");
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _restarting = false;
-        }
     }
 }

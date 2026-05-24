@@ -1,0 +1,51 @@
+.nav-restart {
+    margin-bottom: 0.35rem;
+}
+
+.nav-restart-button {
+    width: 100%;
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    color: #e8e8e8;
+    min-height: 2.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 0 4px 4px 0;
+    border-left: 3px solid transparent;
+}
+
+.nav-restart-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+.nav-restart-disabled {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 0.25rem 0.65rem;
+}
+
+.nav-restart-confirm {
+    font-size: 0.82rem;
+    color: rgba(255, 255, 255, 0.88);
+    padding: 0.25rem 0.65rem 0.5rem;
+}
+
+.nav-restart-actions {
+    display: flex;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.nav-restart-error {
+    font-size: 0.75rem;
+    color: #ffb4b4;
+    padding: 0.15rem 0.65rem 0;
+}
