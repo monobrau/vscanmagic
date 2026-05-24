@@ -1017,6 +1017,16 @@ public class ProductDisplayFormatterTests
         Assert.Equal("MongoDB 3.4", ProductConsolidator.GetProductMajorVersion("MongoDB 3.4.24"));
         Assert.Equal("Adobe Reader", ProductConsolidator.GetProductMajorVersion("Adobe Reader 11.0"));
     }
+
+    [Theory]
+    [InlineData("Microsoft .NET Runtime 8.0.14 (x64)", "Microsoft .NET (all versions)")]
+    [InlineData("Microsoft .NET Framework 4.8", "Microsoft .NET (all versions)")]
+    [InlineData("Microsoft .NET Host - 8.0.14 (x64)", "Microsoft .NET (all versions)")]
+    [InlineData("Microsoft .NET SDK 8.0.100", "Microsoft .NET (all versions)")]
+    [InlineData("Microsoft Visual C++ 2015-2022 Redistributable", "Microsoft Visual C++ (all versions)")]
+    [InlineData("Google Chrome", "Google Chrome")]
+    public void GetTimeEstimateGroupKey_GroupsDotNetAndVisualCppVariants(string input, string expected) =>
+        Assert.Equal(expected, ProductConsolidator.GetTimeEstimateGroupKey(input));
 }
 
 public class ProductNameNormalizerTests

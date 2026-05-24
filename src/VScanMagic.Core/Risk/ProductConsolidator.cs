@@ -43,14 +43,14 @@ public static class ProductConsolidator
 
     public static string GetTimeEstimateGroupKey(string productName)
     {
+        if (string.IsNullOrWhiteSpace(productName))
+            return productName;
+
         if (productName.Contains("Visual C++", StringComparison.OrdinalIgnoreCase) ||
-            productName.Contains("Microsoft Visual C++", StringComparison.OrdinalIgnoreCase))
+            productName.Contains("Visual C#", StringComparison.OrdinalIgnoreCase))
             return "Microsoft Visual C++ (all versions)";
 
-        if (productName.Contains(".NET", StringComparison.OrdinalIgnoreCase) &&
-            (productName.Contains("Runtime", StringComparison.OrdinalIgnoreCase) ||
-             productName.Contains("Framework", StringComparison.OrdinalIgnoreCase) ||
-             productName.Contains("SDK", StringComparison.OrdinalIgnoreCase)))
+        if (productName.Contains("Microsoft .NET", StringComparison.OrdinalIgnoreCase))
             return "Microsoft .NET (all versions)";
 
         return productName;
