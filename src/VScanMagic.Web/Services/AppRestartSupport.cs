@@ -38,19 +38,35 @@ public static class AppRestartSupport
 
     public static string BuildWindowsDevRestartScript(string srcDirectory, string bind, string port)
     {
-        var escapedSrc = srcDirectory.Replace("'", "''");
-        var escapedBind = bind.Replace("'", "''");
-        var escapedPort = port.Replace("'", "''");
-        return "$env:PATH = \"$env:USERPROFILE\\.dotnet;$env:PATH\"; "
-            + $"$env:VSCANMAGIC_API_BIND = '{escapedBind}'; "
-            + $"$env:VSCANMAGIC_PORT = '{escapedPort}'; "
-            + "Start-Sleep -Seconds 2; "
-            + $"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | "
-            + "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; "
-            + $"Set-Location '{escapedSrc}'; "
-            + "dotnet run --project VScanMagic.Web -c Release";
+        if (!int.TryParse(port, out var portNumber) || portNumber is <= 0 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be a valid TCP port number.");
+
+        var escapedSrc = EscapePowerShellSingleQuoted(srcDirectory);
+        var escapedBind = EscapePowerShellSingleQuoted(bind);
+
+        return $$"""
+            $ErrorActionPreference = 'SilentlyContinue'
+            $dotnetUser = Join-Path $env:USERPROFILE '.dotnet'
+            $env:PATH = [string]::Join(';', $dotnetUser, $env:PATH)
+            $env:VSCANMAGIC_API_BIND = '{{escapedBind}}'
+            $env:VSCANMAGIC_PORT = '{{portNumber}}'
+            Start-Sleep -Seconds 2
+            $port = {{portNumber}}
+            Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+                ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+            netstat -ano | Select-String (':' + $port + ' ') | ForEach-Object {
+                if ($_ -match 'LISTENING\s+(\d+)\s*$') {
+                    Stop-Process -Id ([int]$Matches[1]) -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Set-Location '{{escapedSrc}}'
+            Start-Process -FilePath 'dotnet' -ArgumentList @('run','--project','VScanMagic.Web','-c','Release') -WorkingDirectory '{{escapedSrc}}' -WindowStyle Hidden
+            """;
     }
 
     public static string EscapeSingleQuotedShell(string value) =>
         value.Replace("'", "'\\''");
+
+    public static string EscapePowerShellSingleQuoted(string value) =>
+        value.Replace("'", "''");
 }

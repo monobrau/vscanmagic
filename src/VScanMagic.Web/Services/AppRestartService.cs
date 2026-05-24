@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using VScanMagic.Core.Paths;
 
 namespace VScanMagic.Web.Services;
 
@@ -72,10 +74,13 @@ public sealed class AppRestartService(
     {
         if (OperatingSystem.IsWindows())
         {
+            var scriptPath = VScanMagicPaths.GetTempFile("restart", "restart.ps1");
+            File.WriteAllText(scriptPath, windowsScript, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
             Process.Start(new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{windowsScript}\"",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });

@@ -1239,6 +1239,32 @@ public class AppRestartSupportTests
         Assert.Contains("export VSCANMAGIC_PORT='8080'", script);
         Assert.Contains("fuser -k 8080/tcp", script);
     }
+
+    [Fact]
+    public void BuildWindowsDevRestartScript_AvoidsInlineDoubleQuotesAndStartsDetached()
+    {
+        var script = Web.Services.AppRestartSupport.BuildWindowsDevRestartScript(
+            @"C:\Users\dev\Documents\GitHub\vscanmagic\src",
+            "127.0.0.1",
+            "8080");
+
+        Assert.DoesNotContain("\"", script);
+        Assert.Contains("Start-Process -FilePath 'dotnet'", script);
+        Assert.Contains("$env:VSCANMAGIC_API_BIND = '127.0.0.1'", script);
+        Assert.Contains("Set-Location 'C:\\Users\\dev\\Documents\\GitHub\\vscanmagic\\src'", script);
+        Assert.Contains("netstat -ano", script);
+    }
+
+    [Fact]
+    public void BuildWindowsDevRestartScript_EscapesSingleQuotesInPath()
+    {
+        var script = Web.Services.AppRestartSupport.BuildWindowsDevRestartScript(
+            @"C:\Users\o'brien\src",
+            "127.0.0.1",
+            "8080");
+
+        Assert.Contains(@"Set-Location 'C:\Users\o''brien\src'", script);
+    }
 }
 
 public class CheckboxRangeColumnTests
