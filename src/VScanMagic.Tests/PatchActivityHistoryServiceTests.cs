@@ -53,4 +53,40 @@ public sealed class PatchActivityHistoryServiceTests : IDisposable
         Assert.Single(company200);
         Assert.Equal("job-b", company200[0].JobId);
     }
+
+    [Fact]
+    public void Record_PreservesOtherCompanyEntries()
+    {
+        for (var i = 0; i < 105; i++)
+        {
+            _service.Record(new PatchActivityEntry(
+                100,
+                $"job-100-{i}",
+                "Application Patch",
+                "Submitted",
+                $"Entry {i}",
+                null,
+                null,
+                DateTimeOffset.UtcNow.AddMinutes(-i),
+                null));
+        }
+
+        _service.Record(new PatchActivityEntry(
+            200,
+            "job-200",
+            "OS Patch",
+            "Submitted",
+            "Windows update",
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            null));
+
+        var company200 = _service.GetEntries(200);
+        Assert.Single(company200);
+        Assert.Equal("job-200", company200[0].JobId);
+
+        var company100 = _service.GetEntries(100, limit: 200);
+        Assert.Equal(100, company100.Count);
+    }
 }

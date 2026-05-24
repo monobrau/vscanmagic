@@ -126,12 +126,12 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         await DeleteDiscoverySettingAsync(discoverySettingId, ct);
     }
 
-    public Task TriggerExternalScanAsync(int companyId, IReadOnlyList<int> discoverySettingIds, CancellationToken ct = default)
+    public async Task TriggerExternalScanAsync(int companyId, IReadOnlyList<int> discoverySettingIds, CancellationToken ct = default)
     {
         if (discoverySettingIds.Count == 0)
-            return Task.CompletedTask;
+            return;
 
-        return client.InvokeAuthenticatedAsync(
+        var response = await client.InvokeAuthenticatedAsync(
             HttpMethod.Post,
             "/w/company/external_scan",
             body: new Dictionary<string, object?>
@@ -140,6 +140,8 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
                 ["discovery_settings"] = discoverySettingIds.ToArray()
             },
             ct: ct);
+
+        ConnectSecureJsonReader.EnsureSuccessResponse(response, "external scan");
     }
 
     private async Task<int> CreateDiscoverySettingAsync(Dictionary<string, object?> data, CancellationToken ct)
@@ -150,7 +152,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             body: new Dictionary<string, object?> { ["data"] = data },
             ct: ct);
 
-        EnsureSuccessResponse(response, "discovery setting");
+        ConnectSecureJsonReader.EnsureSuccessResponse(response, "discovery setting");
         var id = ExtractCreatedId(response);
         if (id is null or <= 0)
             throw new InvalidOperationException("ConnectSecure did not return a discovery setting id.");
@@ -209,7 +211,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             },
             ct: ct);
 
-        EnsureSuccessResponse(response, "agent mapping");
+        ConnectSecureJsonReader.EnsureSuccessResponse(response, "agent mapping");
         var id = ExtractCreatedId(response);
         if (id is null or <= 0)
             throw new InvalidOperationException("ConnectSecure did not return an agent mapping id.");
@@ -321,24 +323,6 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         if (!string.IsNullOrWhiteSpace(addressType))
             target["address_type"] = addressType;
         return target;
-    }
-
-    private static void EnsureSuccessResponse(JsonElement response, string resourceLabel)
-    {
-        if (!response.TryGetProperty("status", out var statusEl))
-            return;
-
-        if (statusEl.ValueKind == JsonValueKind.True)
-            return;
-
-        if (statusEl.ValueKind == JsonValueKind.False)
-        {
-            var message = ConnectSecureJsonReader.GetString(response, "message");
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(message)
-                    ? $"ConnectSecure rejected the {resourceLabel} request."
-                    : message);
-        }
     }
 
     private static int? ExtractCreatedId(JsonElement response)

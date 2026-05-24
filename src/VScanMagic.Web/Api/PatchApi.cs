@@ -12,6 +12,9 @@ public static class PatchApi
             ConnectSecurePatchService patchService,
             CancellationToken ct) =>
         {
+            if (LocalApiGuard.RequireLoopbackBind() is { } denied)
+                return denied;
+
             if (companyId <= 0)
                 return Results.BadRequest(new { error = "companyId is required." });
 
@@ -25,6 +28,9 @@ public static class PatchApi
             ConnectSecurePatchService patchService,
             CancellationToken ct) =>
         {
+            if (LocalApiGuard.RequireLoopbackBind() is { } denied)
+                return denied;
+
             if (companyId <= 0)
                 return Results.BadRequest(new { error = "companyId is required." });
             if (solutionId <= 0)
@@ -39,6 +45,9 @@ public static class PatchApi
             ConnectSecurePatchService patchService,
             CancellationToken ct) =>
         {
+            if (LocalApiGuard.RequireLoopbackBind() is { } denied)
+                return denied;
+
             try
             {
                 var result = await patchService.PatchApplicationsNowAsync(request, ct);
@@ -55,6 +64,9 @@ public static class PatchApi
             ConnectSecurePatchService patchService,
             CancellationToken ct) =>
         {
+            if (LocalApiGuard.RequireLoopbackBind() is { } denied)
+                return denied;
+
             try
             {
                 var result = await patchService.ScheduleApplicationPatchAsync(request, ct);

@@ -128,10 +128,6 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var creds = Settings.LoadConnectSecureCredentials();
-        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
-            ConnectSecure.Configure(creds);
-
         ReloadFolderMap();
         ReloadCoveredSoftware();
 

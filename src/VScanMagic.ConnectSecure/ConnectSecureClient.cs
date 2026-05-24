@@ -18,6 +18,8 @@ public sealed class ConnectSecureClient
     private readonly RateLimiter _rateLimiter;
     private readonly ConnectSecureOptions _options;
 
+    private readonly SemaphoreSlim _stateLock = new(1, 1);
+
     private string? _accessToken;
     private string? _userId;
     private DateTimeOffset _tokenExpiry = DateTimeOffset.MinValue;
@@ -38,22 +40,40 @@ public sealed class ConnectSecureClient
 
     public void Configure(ConnectSecureCredentials credentials)
     {
-        _credentials = new ConnectSecureCredentials
+        var normalized = NormalizeCredentials(credentials);
+        if (!_stateLock.Wait(TimeSpan.FromSeconds(30)))
+            throw new TimeoutException("Timed out waiting for ConnectSecure client state lock.");
+
+        try
         {
-            BaseUrl = credentials.BaseUrl.Trim().TrimEnd('/'),
-            TenantName = credentials.TenantName.Trim(),
-            ClientId = credentials.ClientId.Trim(),
-            ClientSecret = credentials.ClientSecret.Replace("\r", "").Replace("\n", "").Trim()
-        };
-        _accessToken = null;
-        _userId = null;
-        _tokenExpiry = DateTimeOffset.MinValue;
+            if (_credentials is not null && CredentialsEqual(_credentials, normalized))
+                return;
+
+            _credentials = normalized;
+            _accessToken = null;
+            _userId = null;
+            _tokenExpiry = DateTimeOffset.MinValue;
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
     }
 
     public async Task TestAuthenticationAsync(CancellationToken ct = default)
     {
-        _accessToken = null;
-        _tokenExpiry = DateTimeOffset.MinValue;
+        await _stateLock.WaitAsync(ct);
+        try
+        {
+            _accessToken = null;
+            _userId = null;
+            _tokenExpiry = DateTimeOffset.MinValue;
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
+
         await EnsureAuthenticatedAsync(ct);
     }
 
@@ -287,10 +307,10 @@ public sealed class ConnectSecureClient
         using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
         if (!isPresigned)
         {
-            await EnsureAuthenticatedAsync(ct);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
-            if (!string.IsNullOrWhiteSpace(_userId))
-                request.Headers.TryAddWithoutValidation("X-USER-ID", _userId);
+            var (accessToken, userId) = await GetAuthHeadersAsync(ct);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            if (!string.IsNullOrWhiteSpace(userId))
+                request.Headers.TryAddWithoutValidation("X-USER-ID", userId);
         }
 
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -317,16 +337,16 @@ public sealed class ConnectSecureClient
     {
         for (var attempt = 1; attempt <= retryCount; attempt++)
         {
-            await EnsureAuthenticatedAsync(ct);
-            await _rateLimiter.WaitAsync(_options.RequestsPerMinute, 60, ct);
+            var (accessToken, userId) = await GetAuthHeadersAsync(ct);
+            await _rateLimiter.WaitAsync(_options.RequestsPerMinute, _options.RequestsPerHour, ct);
 
             var url = BuildUrl(endpoint, query);
             using var request = new HttpRequestMessage(method, url);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.TryAddWithoutValidation("Content-Type", "application/json");
-            if (!string.IsNullOrWhiteSpace(_userId))
-                request.Headers.TryAddWithoutValidation("X-USER-ID", _userId);
+            if (!string.IsNullOrWhiteSpace(userId))
+                request.Headers.TryAddWithoutValidation("X-USER-ID", userId);
 
             if (method != HttpMethod.Get && body is not null)
                 request.Content = JsonContent.Create(body);
@@ -342,9 +362,7 @@ public sealed class ConnectSecureClient
 
             if (response.StatusCode == HttpStatusCode.Unauthorized && attempt < retryCount)
             {
-                _accessToken = null;
-                _tokenExpiry = DateTimeOffset.MinValue;
-                await EnsureAuthenticatedAsync(ct);
+                await InvalidateAuthAsync(ct);
                 continue;
             }
 
@@ -384,14 +402,56 @@ public sealed class ConnectSecureClient
         return path + "?" + qs;
     }
 
+    private async Task<(string AccessToken, string? UserId)> GetAuthHeadersAsync(CancellationToken ct)
+    {
+        await EnsureAuthenticatedAsync(ct);
+        await _stateLock.WaitAsync(ct);
+        try
+        {
+            return (_accessToken!, _userId);
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
+    }
+
+    private async Task InvalidateAuthAsync(CancellationToken ct)
+    {
+        await _stateLock.WaitAsync(ct);
+        try
+        {
+            _accessToken = null;
+            _userId = null;
+            _tokenExpiry = DateTimeOffset.MinValue;
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
+    }
+
     private async Task EnsureAuthenticatedAsync(CancellationToken ct)
     {
-        if (_credentials is null)
-            throw new InvalidOperationException("ConnectSecure credentials are not configured.");
+        await _stateLock.WaitAsync(ct);
+        try
+        {
+            if (_credentials is null)
+                throw new InvalidOperationException("ConnectSecure credentials are not configured.");
 
-        if (!string.IsNullOrWhiteSpace(_accessToken) && DateTimeOffset.UtcNow < _tokenExpiry)
-            return;
+            if (!string.IsNullOrWhiteSpace(_accessToken) && DateTimeOffset.UtcNow < _tokenExpiry)
+                return;
 
+            await AuthenticateCoreAsync(ct);
+        }
+        finally
+        {
+            _stateLock.Release();
+        }
+    }
+
+    private async Task AuthenticateCoreAsync(CancellationToken ct)
+    {
         const int maxAuthRetries = 3;
         const int apiErrorRetries = 3;
         string? lastError = null;
@@ -400,9 +460,9 @@ public sealed class ConnectSecureClient
         {
             for (var attempt = 1; attempt <= maxAuthRetries; attempt++)
             {
-                await _rateLimiter.WaitAsync(_options.RequestsPerMinute, 60, ct);
+                await _rateLimiter.WaitAsync(_options.RequestsPerMinute, _options.RequestsPerHour, ct);
 
-                var authString = $"{_credentials.TenantName}+{_credentials.ClientId}:{_credentials.ClientSecret}";
+                var authString = $"{_credentials!.TenantName}+{_credentials.ClientId}:{_credentials.ClientSecret}";
                 var base64Auth = Convert.ToBase64String(Encoding.UTF8.GetBytes(authString));
                 var tokenUrl = $"{_credentials.BaseUrl}/w/authorize";
 
@@ -463,6 +523,21 @@ public sealed class ConnectSecureClient
 
         throw new InvalidOperationException(lastError ?? "ConnectSecure authentication failed.");
     }
+
+    private static ConnectSecureCredentials NormalizeCredentials(ConnectSecureCredentials credentials) =>
+        new()
+        {
+            BaseUrl = credentials.BaseUrl.Trim().TrimEnd('/'),
+            TenantName = credentials.TenantName.Trim(),
+            ClientId = credentials.ClientId.Trim(),
+            ClientSecret = credentials.ClientSecret.Replace("\r", "").Replace("\n", "").Trim()
+        };
+
+    private static bool CredentialsEqual(ConnectSecureCredentials left, ConnectSecureCredentials right) =>
+        string.Equals(left.BaseUrl, right.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(left.TenantName, right.TenantName, StringComparison.Ordinal) &&
+        string.Equals(left.ClientId, right.ClientId, StringComparison.Ordinal) &&
+        string.Equals(left.ClientSecret, right.ClientSecret, StringComparison.Ordinal);
 
     internal static bool TryParseAuthResponse(
         JsonElement doc,

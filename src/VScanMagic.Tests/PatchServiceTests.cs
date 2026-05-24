@@ -76,6 +76,24 @@ public sealed class ConnectSecurePatchServiceTests
         Assert.Equal(true, body["trigger_reboot"]);
         Assert.False(body.ContainsKey("type"));
     }
+
+    [Fact]
+    public void Clone_DoesNotMutateOriginalPatchType()
+    {
+        var request = new ApplicationPatchRequest
+        {
+            CompanyId = 1,
+            AgentIds = [1],
+            IncludedApplications = ["App"],
+            PatchType = ConnectSecurePatchType.App
+        };
+
+        var copy = request.Clone();
+        copy.PatchType = ConnectSecurePatchType.Os;
+
+        Assert.Equal(ConnectSecurePatchType.App, request.PatchType);
+        Assert.Equal(ConnectSecurePatchType.Os, copy.PatchType);
+    }
 }
 
 public sealed class PatchCatalogHelperTests
@@ -108,6 +126,20 @@ public sealed class PatchCatalogHelperTests
 
         Assert.Single(merged);
         Assert.True(merged[0].OnlineStatus);
+    }
+
+    [Fact]
+    public void MergeAssetDetails_DoesNotCollideAssetIdWithAgentId()
+    {
+        var merged = PatchCatalogHelper.MergeAssetDetails(
+        [
+            new PatchAssetDetail(5, "10.0.0.1", "asset-host", 100, true, ["App"], ["1.0"], []),
+            new PatchAssetDetail(0, "10.0.0.2", "agent-host", 5, true, ["App"], ["2.0"], [])
+        ]);
+
+        Assert.Equal(2, merged.Count);
+        Assert.Contains(merged, detail => detail.HostName == "asset-host");
+        Assert.Contains(merged, detail => detail.HostName == "agent-host");
     }
 
     [Fact]

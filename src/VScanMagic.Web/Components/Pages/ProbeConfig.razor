@@ -330,13 +330,6 @@ else
     private string _mappingParamsJson = "{}";
     private int? _mappingCredentialId;
 
-    protected override void OnInitialized()
-    {
-        var creds = Settings.LoadConnectSecureCredentials();
-        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
-            ConnectSecure.Configure(creds);
-    }
-
     protected override async Task OnInitializedAsync()
     {
         if (ConnectSecure.IsConfigured)

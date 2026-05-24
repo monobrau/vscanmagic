@@ -1,5 +1,6 @@
 @page "/os-patching"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @using VScanMagic.ConnectSecure
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
@@ -25,7 +26,7 @@ else
                 <div class="col-md-8">
                     <label class="form-label">Company</label>
                     <div class="input-group">
-                        <select class="form-select" @bind="_selectedCompanyId">
+                        <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanySelectionChanged">
                             <option value="">-- Select company --</option>
                             @foreach (var c in _companies)
                             {
@@ -59,7 +60,7 @@ else
     <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
             <span>Recent patch activity</span>
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_loadingJobs" @onclick="LoadPatchJobsAsync">
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_loadingJobs" @onclick="RefreshPatchJobsAsync">
                 Refresh
             </button>
         </div>
@@ -274,18 +275,26 @@ else
     private string? _expandedKey;
     private string? _confirmKey;
     private readonly HashSet<int> _selectedAgentIds = [];
+    private int _loadGeneration;
+    private int _expandGeneration;
+    private CancellationTokenSource? _loadCts;
 
-    protected override void OnInitialized()
-    {
-        var creds = Settings.LoadConnectSecureCredentials();
-        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
-            ConnectSecure.Configure(creds);
-    }
+    private CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
     protected override async Task OnInitializedAsync()
     {
+        _loadCts = new CancellationTokenSource();
         if (ConnectSecure.IsConfigured)
             await LoadCompanies();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_loadCts is not null)
+        {
+            await _loadCts.CancelAsync();
+            _loadCts.Dispose();
+        }
     }
 
     private async Task LoadCompanies()
@@ -293,7 +302,10 @@ else
         _busy = true;
         try
         {
-            _companies = (await ConnectSecure.GetCompaniesAsync()).ToList();
+            _companies = (await ConnectSecure.GetCompaniesAsync(LoadCancellationToken)).ToList();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
@@ -303,6 +315,38 @@ else
         {
             _busy = false;
         }
+    }
+
+    private void OnCompanySelectionChanged()
+    {
+        if (_loaded && int.TryParse(_selectedCompanyId, out var selected) && selected == _companyId)
+            return;
+
+        if (string.IsNullOrEmpty(_selectedCompanyId) || !int.TryParse(_selectedCompanyId, out _))
+        {
+            ClearLoadedCompanyState();
+            return;
+        }
+
+        if (_loaded)
+            ClearLoadedCompanyState();
+    }
+
+    private void ClearLoadedCompanyState()
+    {
+        _loadGeneration++;
+        _expandGeneration++;
+        _companyId = 0;
+        _loaded = false;
+        _error = null;
+        _message = null;
+        _osPatches = [];
+        _patchJobs = [];
+        _expandedKey = null;
+        _expandedPatch = null;
+        _confirmKey = null;
+        _patchHostViews = [];
+        _selectedAgentIds.Clear();
     }
 
     private async Task LoadOsPatchesAsync()
@@ -321,11 +365,18 @@ else
         _selectedAgentIds.Clear();
         _patchHostViews = [];
         _busy = true;
+        var generation = ++_loadGeneration;
 
         try
         {
-            _osPatches = (await PatchService.GetOsPendingPatchesAsync(_companyId)).ToList();
-            await LoadPatchJobsAsync();
+            _osPatches = (await PatchService.GetOsPendingPatchesAsync(_companyId, ct: LoadCancellationToken)).ToList();
+            if (generation != _loadGeneration)
+                return;
+
+            await LoadPatchJobsAsync(generation);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
@@ -339,7 +390,9 @@ else
         }
     }
 
-    private async Task LoadPatchJobsAsync()
+    private Task RefreshPatchJobsAsync() => LoadPatchJobsAsync();
+
+    private async Task LoadPatchJobsAsync(int? generation = null)
     {
         if (_companyId <= 0)
             return;
@@ -347,7 +400,9 @@ else
         _loadingJobs = true;
         try
         {
-            _patchJobs = (await PatchService.GetCompanyJobsAsync(_companyId, patchJobsOnly: true)).ToList();
+            var jobs = (await PatchService.GetCompanyJobsAsync(_companyId, patchJobsOnly: true, ct: LoadCancellationToken)).ToList();
+            if (generation is null || generation == _loadGeneration)
+                _patchJobs = jobs;
         }
         catch (Exception ex)
         {
@@ -376,7 +431,8 @@ else
         _expandedKey = key;
         _expandedPatch = patch;
         _confirmKey = null;
-        await LoadHostsAsync(patch);
+        var generation = ++_expandGeneration;
+        await LoadHostsAsync(patch, generation);
     }
 
     private async Task RefreshHostsAsync()
@@ -387,7 +443,7 @@ else
         _loadingHosts = true;
         try
         {
-            await LoadHostsAsync(_expandedPatch);
+            await LoadHostsAsync(_expandedPatch, _expandGeneration);
         }
         finally
         {
@@ -395,16 +451,22 @@ else
         }
     }
 
-    private async Task LoadHostsAsync(OsPendingPatchEntry patch)
+    private async Task LoadHostsAsync(OsPendingPatchEntry patch, int generation)
     {
         _loadingHosts = true;
         _selectedAgentIds.Clear();
         try
         {
-            var details = await PatchService.GetOsPatchHostsAsync(_companyId, patch);
+            var details = await PatchService.GetOsPatchHostsAsync(_companyId, patch, LoadCancellationToken);
+            if (generation != _expandGeneration)
+                return;
+
             _patchHostViews = PatchCatalogHelper.BuildHostViews(details, patch.Fix, isEndOfLife: false).ToList();
             foreach (var host in _patchHostViews.Where(h => h.Detail.OnlineStatus && h.Detail.AgentId > 0))
                 _selectedAgentIds.Add(host.Detail.AgentId);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {

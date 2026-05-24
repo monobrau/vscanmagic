@@ -48,11 +48,11 @@ public static class PatchCatalogHelper
 
     public static IReadOnlyList<PatchAssetDetail> MergeAssetDetails(IEnumerable<PatchAssetDetail> details)
     {
-        var merged = new Dictionary<int, PatchAssetDetail>();
+        var merged = new Dictionary<string, PatchAssetDetail>(StringComparer.Ordinal);
         foreach (var detail in details)
         {
-            var key = detail.AssetId > 0 ? detail.AssetId : detail.AgentId;
-            if (key <= 0)
+            var key = MergeAssetKey(detail);
+            if (string.IsNullOrEmpty(key))
                 continue;
 
             if (!merged.TryGetValue(key, out var existing))
@@ -63,6 +63,8 @@ public static class PatchCatalogHelper
 
             merged[key] = existing with
             {
+                AssetId = existing.AssetId > 0 ? existing.AssetId : detail.AssetId,
+                AgentId = existing.AgentId > 0 ? existing.AgentId : detail.AgentId,
                 OnlineStatus = existing.OnlineStatus || detail.OnlineStatus,
                 Versions = DistinctVersions(existing.Versions.Concat(detail.Versions))
             };
@@ -73,6 +75,17 @@ public static class PatchCatalogHelper
             .ThenBy(detail => detail.HostName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(detail => detail.Ip, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    internal static string MergeAssetKey(PatchAssetDetail detail)
+    {
+        if (detail.AgentId > 0 && detail.AssetId > 0)
+            return $"a{detail.AssetId}:g{detail.AgentId}";
+        if (detail.AssetId > 0)
+            return $"a{detail.AssetId}";
+        if (detail.AgentId > 0)
+            return $"g{detail.AgentId}";
+        return "";
     }
 
     public static string FormatVersionSummary(IReadOnlyList<string> versions)

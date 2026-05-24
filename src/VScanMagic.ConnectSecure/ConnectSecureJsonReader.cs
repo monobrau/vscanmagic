@@ -65,4 +65,22 @@ internal static class ConnectSecureJsonReader
 
         return [];
     }
+
+    public static void EnsureSuccessResponse(JsonElement response, string resourceLabel)
+    {
+        if (!response.TryGetProperty("status", out var statusEl))
+            return;
+
+        if (statusEl.ValueKind == JsonValueKind.True)
+            return;
+
+        if (statusEl.ValueKind == JsonValueKind.False)
+        {
+            var message = GetString(response, "message");
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(message)
+                    ? $"ConnectSecure rejected the {resourceLabel} request."
+                    : message);
+        }
+    }
 }

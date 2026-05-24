@@ -1,5 +1,6 @@
 @page "/company-review"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @using VScanMagic.ConnectSecure
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecureCompanyReviewService ReviewService
@@ -25,7 +26,7 @@ else
                 <div class="col-md-8">
                     <label class="form-label">Company</label>
                     <div class="input-group">
-                        <select class="form-select" @bind="_selectedCompanyId">
+                        <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanySelectionChanged">
                             <option value="">-- Select company --</option>
                             @foreach (var c in _companies)
                             {
@@ -561,18 +562,26 @@ else
     private bool _addingInternal;
     private bool _scanBusy;
     private string? _scanAction;
+    private int? _loadedCompanyId;
+    private int _reviewGeneration;
+    private CancellationTokenSource? _loadCts;
 
-    protected override void OnInitialized()
-    {
-        var creds = Settings.LoadConnectSecureCredentials();
-        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
-            ConnectSecure.Configure(creds);
-    }
+    private CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
     protected override async Task OnInitializedAsync()
     {
+        _loadCts = new CancellationTokenSource();
         if (ConnectSecure.IsConfigured)
             await LoadCompanies();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_loadCts is not null)
+        {
+            await _loadCts.CancelAsync();
+            _loadCts.Dispose();
+        }
     }
 
     private async Task LoadCompanies()
@@ -582,7 +591,10 @@ else
         _busy = true;
         try
         {
-            _companies = (await ConnectSecure.GetCompaniesAsync()).ToList();
+            _companies = (await ConnectSecure.GetCompaniesAsync(LoadCancellationToken)).ToList();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
@@ -592,6 +604,28 @@ else
         {
             _busy = false;
         }
+    }
+
+    private void OnCompanySelectionChanged()
+    {
+        if (_loadedCompanyId is int loaded &&
+            int.TryParse(_selectedCompanyId, out var selected) &&
+            loaded == selected)
+            return;
+
+        ClearReviewState();
+    }
+
+    private void ClearReviewState()
+    {
+        _reviewGeneration++;
+        _loadedCompanyId = null;
+        _data = null;
+        _error = null;
+        _message = null;
+        _nmapSelections.Clear();
+        ResetExternalEditor();
+        ResetInternalFieldsOnly();
     }
 
     private async Task RunReview()
@@ -606,13 +640,22 @@ else
         ResetExternalEditor();
         ResetInternalFieldsOnly();
         _busy = true;
+        var generation = ++_reviewGeneration;
         try
         {
             var name = _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
-            _data = await ReviewService.GetReviewDataAsync(companyId, name);
+            var data = await ReviewService.GetReviewDataAsync(companyId, name, LoadCancellationToken);
+            if (generation != _reviewGeneration)
+                return;
+
+            _data = data;
+            _loadedCompanyId = companyId;
             foreach (var probe in _data.ProbeAgentsNmapInfo)
                 SeedSelection(probe);
             SeedInternalProbeSelection();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {

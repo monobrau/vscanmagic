@@ -19,7 +19,7 @@ public sealed class ConnectSecurePatchService(
             ? $"company_id={companyId} and is_patchable=true"
             : $"company_id={companyId}";
 
-        var rows = await FetchArrayAsync(
+        var rows = await FetchAllPagesAsync(
             "/r/report_queries/remediation_plan_by_company",
             ReportQuery(condition),
             ct);
@@ -63,10 +63,11 @@ public sealed class ConnectSecurePatchService(
         ApplicationPatchRequest request,
         CancellationToken ct = default)
     {
-        request.PatchType = ConnectSecurePatchType.Os;
-        ValidatePatchRequest(request);
-        var body = BuildPatchPayload(request, ConnectSecurePatchWhen.Now, scheduledAt: null);
-        return InvokePatchAsync(request, "OS Patch", body, ct);
+        var osRequest = request.Clone();
+        osRequest.PatchType = ConnectSecurePatchType.Os;
+        ValidatePatchRequest(osRequest);
+        var body = BuildPatchPayload(osRequest, ConnectSecurePatchWhen.Now, scheduledAt: null);
+        return InvokePatchAsync(osRequest, "OS Patch", body, ct);
     }
 
     public async Task<IReadOnlyList<PatchJobEntry>> GetCompanyJobsAsync(
@@ -82,9 +83,6 @@ public sealed class ConnectSecurePatchService(
             .GetEntries(companyId, limit)
             .Select(ToPatchJobEntry)
             .ToList();
-
-        if (patchJobsOnly)
-            return localJobs;
 
         var rows = await FetchArrayAsync(
             "/r/company/jobs_view",
@@ -117,14 +115,12 @@ public sealed class ConnectSecurePatchService(
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var rows = await FetchArrayAsync(
+        var rows = await FetchAllPagesAsync(
             "/r/report_queries/os_pending_patches",
             new Dictionary<string, string>
             {
                 ["num_days"] = lookbackDays.ToString(),
                 ["condition"] = $"company_id={companyId}",
-                ["limit"] = "5000",
-                ["skip"] = "0",
                 ["order_by"] = "affected_assets desc"
             },
             ct);
@@ -149,21 +145,26 @@ public sealed class ConnectSecurePatchService(
             return [];
 
         var assetSet = patch.AssetIds.ToHashSet();
-        var assets = await FetchLightweightAssetsAsync(companyId, ct);
-        var matched = assets
-            .Where(row => LightweightRowMatchesAssetIds(row, assetSet))
-            .Select(ParseLightweightAssetDetail)
-            .ToList();
+        var matched = await FetchOsHostsFromAgentsAsync(companyId, assetSet, ct);
+
+        if (matched.Count < assetSet.Count)
+        {
+            var foundIds = matched
+                .SelectMany(host => new[] { host.AssetId, host.AgentId })
+                .Where(id => id > 0)
+                .ToHashSet();
+            var missing = assetSet.Where(id => !foundIds.Contains(id)).ToHashSet();
+            if (missing.Count > 0)
+            {
+                var fromLightweight = await FetchLightweightAssetsMatchingAsync(companyId, missing, ct);
+                matched.AddRange(fromLightweight);
+            }
+        }
 
         if (matched.Count == 0)
-        {
-            matched = await FetchOsHostsFromAgentsAsync(companyId, assetSet, ct);
-        }
-        else
-        {
-            matched = await EnrichOsHostsWithAgentsAsync(companyId, matched, ct);
-        }
+            return [];
 
+        matched = await EnrichOsHostsWithAgentsAsync(companyId, matched, ct);
         return PatchCatalogHelper.MergeAssetDetails(matched);
     }
 
@@ -174,7 +175,7 @@ public sealed class ConnectSecurePatchService(
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var rows = await FetchArrayAsync(
+        var rows = await FetchAllPagesAsync(
             "/r/report_queries/remediation_plan_by_company",
             ReportQuery($"company_id={companyId}"),
             ct);
@@ -271,14 +272,12 @@ public sealed class ConnectSecurePatchService(
         bool onlineOnly,
         CancellationToken ct)
     {
-        var rows = await FetchArrayAsync(
+        var rows = await FetchAllPagesAsync(
             "/r/report_queries/remediation_plan_asset_details",
             new Dictionary<string, string>
             {
                 ["having"] = onlineOnly ? "true" : "false",
-                ["condition"] = condition,
-                ["limit"] = "5000",
-                ["skip"] = "0"
+                ["condition"] = condition
             },
             ct);
 
@@ -464,22 +463,55 @@ public sealed class ConnectSecurePatchService(
         if (hosts.All(host => host.AgentId > 0))
             return hosts;
 
-        var agents = await FetchArrayAsync(
-            "/r/company/agents",
-            ConnectSecureCompanyReviewService.CompanyQuery(companyId),
-            ct);
+        var neededAssetIds = hosts
+            .Where(host => host.AgentId <= 0 && host.AssetId > 0)
+            .Select(host => host.AssetId)
+            .ToHashSet();
+        var neededHostNames = hosts
+            .Where(host => host.AgentId <= 0 && !string.IsNullOrWhiteSpace(host.HostName))
+            .Select(host => host.HostName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var byAssetId = agents
-            .Select(ParseAgentAssetDetail)
-            .Where(agent => agent.AssetId > 0)
-            .GroupBy(agent => agent.AssetId)
-            .ToDictionary(group => group.Key, group => group.First());
+        var byAssetId = new Dictionary<int, PatchAssetDetail>();
+        var byHostName = new Dictionary<string, PatchAssetDetail>(StringComparer.OrdinalIgnoreCase);
 
-        var byHostName = agents
-            .Select(ParseAgentAssetDetail)
-            .Where(agent => !string.IsNullOrWhiteSpace(agent.HostName))
-            .GroupBy(agent => agent.HostName, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        for (var page = 0;
+             page < ConnectSecurePagedQuery.MaxPages &&
+             (neededAssetIds.Count > 0 || neededHostNames.Count > 0);
+             page++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var agents = await FetchArrayAsync(
+                "/r/company/agents",
+                ConnectSecureCompanyReviewService.CompanyQuery(
+                    companyId,
+                    limit: ConnectSecurePagedQuery.PageSize,
+                    skip: page * ConnectSecurePagedQuery.PageSize),
+                ct);
+
+            if (agents.Count == 0)
+                break;
+
+            foreach (var row in agents)
+            {
+                var agent = ParseAgentAssetDetail(row);
+                if (agent.AssetId > 0 && neededAssetIds.Contains(agent.AssetId))
+                {
+                    byAssetId.TryAdd(agent.AssetId, agent);
+                    neededAssetIds.Remove(agent.AssetId);
+                }
+
+                if (!string.IsNullOrWhiteSpace(agent.HostName) && neededHostNames.Contains(agent.HostName))
+                {
+                    byHostName.TryAdd(agent.HostName, agent);
+                    neededHostNames.Remove(agent.HostName);
+                }
+            }
+
+            if (agents.Count < ConnectSecurePagedQuery.PageSize)
+                break;
+        }
 
         var enriched = new List<PatchAssetDetail>();
         foreach (var host in hosts)
@@ -523,15 +555,85 @@ public sealed class ConnectSecurePatchService(
         HashSet<int> assetSet,
         CancellationToken ct)
     {
-        var agents = await FetchArrayAsync(
-            "/r/company/agents",
-            ConnectSecureCompanyReviewService.CompanyQuery(companyId),
-            ct);
+        var matched = new List<PatchAssetDetail>();
+        var remaining = new HashSet<int>(assetSet);
 
-        return agents
-            .Where(agent => LightweightRowMatchesAssetIds(agent, assetSet))
-            .Select(ParseAgentAssetDetail)
-            .ToList();
+        for (var page = 0;
+             page < ConnectSecurePagedQuery.MaxPages && remaining.Count > 0;
+             page++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var agents = await FetchArrayAsync(
+                "/r/company/agents",
+                ConnectSecureCompanyReviewService.CompanyQuery(
+                    companyId,
+                    limit: ConnectSecurePagedQuery.PageSize,
+                    skip: page * ConnectSecurePagedQuery.PageSize),
+                ct);
+
+            if (agents.Count == 0)
+                break;
+
+            foreach (var agent in agents.Where(row => LightweightRowMatchesAssetIds(row, remaining)))
+            {
+                var detail = ParseAgentAssetDetail(agent);
+                matched.Add(detail);
+                if (detail.AssetId > 0)
+                    remaining.Remove(detail.AssetId);
+                if (detail.AgentId > 0)
+                    remaining.Remove(detail.AgentId);
+            }
+
+            if (agents.Count < ConnectSecurePagedQuery.PageSize)
+                break;
+        }
+
+        return matched;
+    }
+
+    private async Task<List<PatchAssetDetail>> FetchLightweightAssetsMatchingAsync(
+        int companyId,
+        HashSet<int> assetSet,
+        CancellationToken ct)
+    {
+        var matched = new List<PatchAssetDetail>();
+        var remaining = new HashSet<int>(assetSet);
+
+        for (var page = 0;
+             page < ConnectSecurePagedQuery.MaxPages && remaining.Count > 0;
+             page++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var rows = await FetchArrayAsync(
+                "/r/report_queries/lightweight_assets",
+                new Dictionary<string, string>
+                {
+                    ["company_id"] = companyId.ToString(),
+                    ["limit"] = ConnectSecurePagedQuery.PageSize.ToString(),
+                    ["skip"] = (page * ConnectSecurePagedQuery.PageSize).ToString()
+                },
+                ct);
+
+            if (rows.Count == 0)
+                break;
+
+            foreach (var row in rows.Where(row => LightweightRowMatchesAssetIds(row, remaining)))
+            {
+                var detail = ParseLightweightAssetDetail(row);
+                matched.Add(detail);
+                if (detail.AssetId > 0)
+                    remaining.Remove(detail.AssetId);
+                if (detail.AgentId > 0)
+                    remaining.Remove(detail.AgentId);
+            }
+
+            if (rows.Count < ConnectSecurePagedQuery.PageSize)
+                break;
+        }
+
+        return matched;
     }
 
     private static PatchAssetDetail ParseAgentAssetDetail(JsonElement row)
@@ -575,22 +677,6 @@ public sealed class ConnectSecurePatchService(
         }
 
         return MatchesCompany(row, companyId);
-    }
-
-    private async Task<List<JsonElement>> FetchLightweightAssetsAsync(int companyId, CancellationToken ct)
-    {
-        var response = await client.InvokeAuthenticatedAsync(
-            HttpMethod.Get,
-            "/r/report_queries/lightweight_assets",
-            new Dictionary<string, string>
-            {
-                ["company_id"] = companyId.ToString(),
-                ["limit"] = "5000",
-                ["skip"] = "0"
-            },
-            ct: ct);
-
-        return ConnectSecureJsonReader.ExtractDataArray(response);
     }
 
     private static PatchAssetDetail ParseLightweightAssetDetail(JsonElement row) =>
@@ -719,12 +805,19 @@ public sealed class ConnectSecurePatchService(
         return ConnectSecureJsonReader.ExtractDataArray(response);
     }
 
+    private Task<List<JsonElement>> FetchAllPagesAsync(
+        string endpoint,
+        Dictionary<string, string> baseQuery,
+        CancellationToken ct) =>
+        ConnectSecurePagedQuery.FetchAllPagesAsync(
+            (query, token) => FetchArrayAsync(endpoint, query, token),
+            baseQuery,
+            ct);
+
     private static Dictionary<string, string> ReportQuery(string condition) =>
         new()
         {
             ["condition"] = condition,
-            ["limit"] = "5000",
-            ["skip"] = "0",
             ["order_by"] = "affected_assets desc"
         };
 }

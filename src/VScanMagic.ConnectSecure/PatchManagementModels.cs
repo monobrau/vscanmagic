@@ -45,6 +45,22 @@ public class ApplicationPatchRequest
     public Dictionary<string, string> FromVersions { get; set; } = new(StringComparer.Ordinal);
     public ConnectSecurePatchType PatchType { get; set; } = ConnectSecurePatchType.App;
     public bool TriggerReboot { get; set; }
+
+    public ApplicationPatchRequest Clone() =>
+        new()
+        {
+            CompanyId = CompanyId,
+            AssetIds = AssetIds.ToList(),
+            AgentIds = AgentIds.ToList(),
+            IncludedApplications = IncludedApplications.ToList(),
+            ExcludedApplications = ExcludedApplications.ToList(),
+            IncludeTags = IncludeTags.ToList(),
+            ExcludeTags = ExcludeTags.ToList(),
+            TargetHostNames = TargetHostNames.ToList(),
+            FromVersions = new Dictionary<string, string>(FromVersions, StringComparer.Ordinal),
+            PatchType = PatchType,
+            TriggerReboot = TriggerReboot
+        };
 }
 
 public sealed class ScheduledApplicationPatchRequest : ApplicationPatchRequest

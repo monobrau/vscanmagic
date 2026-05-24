@@ -518,13 +518,13 @@ public sealed class ConnectSecureCompanyReviewService(ConnectSecureClient client
         return best ?? rows[0];
     }
 
-    internal static Dictionary<string, string> CompanyQuery(int companyId, int limit = 5000, string? orderBy = null)
+    internal static Dictionary<string, string> CompanyQuery(int companyId, int limit = 5000, int skip = 0, string? orderBy = null)
     {
         var query = new Dictionary<string, string>
         {
             ["condition"] = $"company_id={companyId}",
             ["limit"] = limit.ToString(),
-            ["skip"] = "0"
+            ["skip"] = skip.ToString()
         };
         if (!string.IsNullOrWhiteSpace(orderBy))
             query["order_by"] = orderBy;

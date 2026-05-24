@@ -103,11 +103,13 @@ public sealed class ConnectSecureScanService(
         var dataNode = JsonNode.Parse(dataEl.GetRawText())!.AsObject();
         dataNode["scan_later"] = false;
 
-        await client.InvokeAuthenticatedAsync(
+        var patchResponse = await client.InvokeAuthenticatedAsync(
             HttpMethod.Patch,
             "/w/company/discovery_settings",
             body: new Dictionary<string, object?> { ["data"] = dataNode, ["id"] = discoverySettingId },
             ct: ct);
+
+        ConnectSecureJsonReader.EnsureSuccessResponse(patchResponse, "internal scan trigger");
     }
 
     private async Task<List<int>> GetExternalDiscoverySettingIdsAsync(int companyId, CancellationToken ct)
@@ -134,18 +136,20 @@ public sealed class ConnectSecureScanService(
 
     private async Task<List<int>> GetLightweightAgentIdsAsync(int companyId, CancellationToken ct)
     {
-        var response = await client.InvokeAuthenticatedAsync(
-            HttpMethod.Get,
-            "/r/report_queries/lightweight_assets",
-            new Dictionary<string, string>
+        var rows = await ConnectSecurePagedQuery.FetchAllPagesAsync(
+            async (query, token) =>
             {
-                ["company_id"] = companyId.ToString(),
-                ["limit"] = "5000",
-                ["skip"] = "0"
+                var response = await client.InvokeAuthenticatedAsync(
+                    HttpMethod.Get,
+                    "/r/report_queries/lightweight_assets",
+                    query,
+                    ct: token);
+                return ConnectSecureJsonReader.ExtractDataArray(response);
             },
-            ct: ct);
+            new Dictionary<string, string> { ["company_id"] = companyId.ToString() },
+            ct);
 
-        return ConnectSecureJsonReader.ExtractDataArray(response)
+        return rows
             .Select(row => ConnectSecureJsonReader.GetInt(row, "agent_id", "agentId") ?? 0)
             .Where(id => id > 0)
             .Distinct()
@@ -154,12 +158,17 @@ public sealed class ConnectSecureScanService(
 
     private async Task<List<JsonElement>> FetchDiscoverySettingsAsync(int companyId, CancellationToken ct)
     {
-        var response = await client.InvokeAuthenticatedAsync(
-            HttpMethod.Get,
-            "/r/report_queries/discovery_settings",
-            ConnectSecureCompanyReviewService.CompanyQuery(companyId, limit: 500, orderBy: "updated desc"),
-            ct: ct);
-
-        return ConnectSecureJsonReader.ExtractDataArray(response);
+        return await ConnectSecurePagedQuery.FetchAllPagesAsync(
+            async (query, token) =>
+            {
+                var response = await client.InvokeAuthenticatedAsync(
+                    HttpMethod.Get,
+                    "/r/report_queries/discovery_settings",
+                    query,
+                    ct: token);
+                return ConnectSecureJsonReader.ExtractDataArray(response);
+            },
+            ConnectSecureCompanyReviewService.CompanyQuery(companyId, orderBy: "updated desc"),
+            ct);
     }
 }
