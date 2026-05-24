@@ -1,72 +1,137 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">VScanMagic</a>
+﻿@rendermode InteractiveServer
+@inject ConnectSecureClient ConnectSecure
+
+<div class="nav-shell">
+    <div class="top-row ps-3 navbar navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="">VScanMagic</a>
+        </div>
+    </div>
+
+    <button type="button"
+            class="navbar-toggler"
+            title="Navigation menu"
+            aria-controls="main-nav"
+            aria-expanded="@_mobileNavOpen"
+            @onclick="ToggleMobileNav">
+        <span class="navbar-toggler-icon" aria-hidden="true"></span>
+    </button>
+
+    <div id="main-nav" class="nav-scrollable @(_mobileNavOpen ? "nav-open" : "")">
+        <nav class="nav-main flex-column" aria-label="Main">
+            <div class="nav-section-label">ConnectSecure</div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="company-review" @onclick="CloseMobileNav">
+                    <i class="bi bi-building" aria-hidden="true"></i>
+                    <span>Company review</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label nav-section-label-nested">Patching</div>
+            <div class="nav-item px-3 nav-item-nested">
+                <NavLink class="nav-link" href="application-patching" @onclick="CloseMobileNav">
+                    <i class="bi bi-bandaid" aria-hidden="true"></i>
+                    <span>Application patching</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3 nav-item-nested">
+                <NavLink class="nav-link" href="os-patching" @onclick="CloseMobileNav">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    <span>OS patching</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="vulnerability-suppress" @onclick="CloseMobileNav">
+                    <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                    <span>Suppress vulnerabilities</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="probe-config" @onclick="CloseMobileNav">
+                    <i class="bi bi-hdd-network" aria-hidden="true"></i>
+                    <span>Probe &amp; credentials</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="hostname-review" @onclick="CloseMobileNav">
+                    <i class="bi bi-pc-display-horizontal" aria-hidden="true"></i>
+                    <span>Host counts</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label">Client review</div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="" Match="NavLinkMatch.All" @onclick="CloseMobileNav">
+                    <i class="bi bi-cloud-download" aria-hidden="true"></i>
+                    <span>Download &amp; ingest</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="sessions" @onclick="CloseMobileNav">
+                    <i class="bi bi-collection" aria-hidden="true"></i>
+                    <span>Sessions</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="rules" @onclick="CloseMobileNav">
+                    <i class="bi bi-journal-text" aria-hidden="true"></i>
+                    <span>Rules</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="templates" @onclick="CloseMobileNav">
+                    <i class="bi bi-envelope" aria-hidden="true"></i>
+                    <span>Templates</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label">Setup</div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="settings" @onclick="CloseMobileNav">
+                    <i class="bi bi-gear" aria-hidden="true"></i>
+                    <span>Settings</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="configuration" @onclick="CloseMobileNav">
+                    <i class="bi bi-sliders" aria-hidden="true"></i>
+                    <span>Client mappings</span>
+                </NavLink>
+            </div>
+        </nav>
+
+        <div class="nav-footer px-3">
+            <NavLink class="nav-link nav-link-footer" href="about" @onclick="CloseMobileNav">
+                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                <span>About</span>
+            </NavLink>
+            <div class="nav-status" title="@ApiStatusDetail">
+                <span class="nav-status-dot @ApiStatusClass" aria-hidden="true"></span>
+                <span class="nav-status-text">@ApiStatusText</span>
+            </div>
+        </div>
     </div>
 </div>
 
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+@code {
+    private bool _mobileNavOpen;
 
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Ingest
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="sessions">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Sessions
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="settings">
-                <span class="bi bi-gear-fill-nav-menu" aria-hidden="true"></span> Settings
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="rules">
-                <span class="bi bi-journal-text-nav-menu" aria-hidden="true"></span> Rules
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="templates">
-                <span class="bi bi-envelope-fill-nav-menu" aria-hidden="true"></span> Templates
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="configuration">
-                <span class="bi bi-sliders-nav-menu" aria-hidden="true"></span> Configuration
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="hostname-review">
-                <span class="bi bi-pc-display-horizontal-nav-menu" aria-hidden="true"></span> Host Counts
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="company-review">
-                <span class="bi bi-building-nav-menu" aria-hidden="true"></span> Company Review
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="application-patching">
-                <span class="bi bi-bandaid-fill-nav-menu" aria-hidden="true"></span> Application Patching
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="os-patching">
-                <span class="bi bi-windows-nav-menu" aria-hidden="true"></span> OS Patching
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="vulnerability-suppress">
-                <span class="bi bi-slash-circle-nav-menu" aria-hidden="true"></span> Suppress
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="probe-config">
-                <span class="bi bi-hdd-network-nav-menu" aria-hidden="true"></span> Probe & Credentials
-            </NavLink>
-        </div>
-    </nav>
-</div>
+    private bool ApiConfigured => ConnectSecure.IsConfigured;
+
+    private string ApiStatusClass => ApiConfigured ? "nav-status-dot-ok" : "nav-status-dot-warn";
+
+    private string ApiStatusText => ApiConfigured ? "ConnectSecure connected" : "API not configured";
+
+    private string ApiStatusDetail => ApiConfigured
+        ? "ConnectSecure credentials are configured."
+        : "Add ConnectSecure API credentials on Settings.";
+
+    private void ToggleMobileNav() => _mobileNavOpen = !_mobileNavOpen;
+
+    private void CloseMobileNav()
+    {
+        if (_mobileNavOpen)
+            _mobileNavOpen = false;
+    }
+}
