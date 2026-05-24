@@ -8,8 +8,18 @@ public static partial class ExternalSubnetHelper
     [GeneratedRegex(@"^(\d+\.\d+\.\d+\.\d+)/(\d+)$")]
     private static partial Regex CidrRegex();
 
+    [GeneratedRegex(@"^(\d+\.\d+\.\d+\.\d+)/(\d+\.\d+\.\d+\.\d+)$")]
+    private static partial Regex CidrWithDottedMaskRegex();
+
+    [GeneratedRegex(@"^\d+\.\d+\.\d+\.\d+/$")]
+    private static partial Regex IncompleteCidrRegex();
+
     [GeneratedRegex(@"^\d+\.\d+\.\d+\.\d+$")]
     private static partial Regex IpRegex();
+
+    private static readonly Regex DottedMaskRegex = new(
+        @"^\d{1,3}(\.\d{1,3}){3}$",
+        RegexOptions.Compiled);
 
     public sealed record SubnetBounds(
         string Network,
@@ -50,24 +60,36 @@ public static partial class ExternalSubnetHelper
 
     public static ExternalScanTargetValidationResult ParseAndValidateScanInput(string input)
     {
-        var tokens = TokenizeInput(input);
-        if (tokens.Count == 0)
+        input = NormalizeScanInput(input);
+        var segments = SplitSegments(input);
+        if (segments.Count == 0)
         {
             return new ExternalScanTargetValidationResult(
                 false,
-                ["Enter a CIDR subnet or one or more IP addresses."],
+                ["Enter a CIDR subnet (e.g. 10.0.0.0/24) or IP with subnet mask (e.g. 10.0.0.0 255.255.255.0)."],
                 [],
                 "",
                 "");
         }
 
+        var tokens = new List<string>();
+        var errors = new List<string>();
+
+        foreach (var segment in segments)
+        {
+            foreach (var expanded in ExpandSegment(segment))
+            {
+                errors.AddRange(expanded.Errors);
+                if (!string.IsNullOrWhiteSpace(expanded.Token))
+                    tokens.Add(expanded.Token);
+            }
+        }
+
+        if (tokens.Count == 0 && errors.Count == 0)
+            errors.Add("No scannable targets were resolved from the input.");
+
         var cidrTokens = tokens.Where(IsCidr).ToList();
         var ipTokens = tokens.Where(t => IsIp(t) && !IsCidr(t)).ToList();
-        var invalidTokens = tokens.Where(t => !IsCidr(t) && !IsIp(t)).ToList();
-
-        var errors = new List<string>();
-        foreach (var invalid in invalidTokens)
-            errors.Add($"Invalid target: {invalid}");
 
         var scanIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -182,6 +204,72 @@ public static partial class ExternalSubnetHelper
         return $"Scans {validation.ScanIps.Count} addresses: {validation.ScanIps[0]} – {validation.ScanIps[^1]}";
     }
 
+    public static bool IsIncompleteScanInput(string input)
+    {
+        var trimmed = NormalizeScanInput(input);
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return false;
+
+        if (IncompleteCidrRegex().IsMatch(trimmed))
+            return true;
+
+        if (trimmed.EndsWith('|'))
+            return true;
+
+        var parts = trimmed
+            .Replace('|', ' ')
+            .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 2 && IpRegex().IsMatch(parts[0]) && parts[1].Contains('.'))
+        {
+            var octets = parts[1].Split('.', StringSplitOptions.RemoveEmptyEntries);
+            if (octets.Length is > 0 and < 4)
+                return true;
+        }
+
+        return false;
+    }
+
+    public static string NormalizeScanInput(string input) =>
+        input.Trim()
+            .Replace('\u2044', '/')
+            .Replace('\u2215', '/');
+
+    public static bool LooksLikeSubnetInput(string input)
+    {
+        input = NormalizeScanInput(input);
+        if (string.IsNullOrWhiteSpace(input))
+            return false;
+
+        if (input.Contains('/'))
+            return true;
+
+        var parts = input
+            .Replace('|', ' ')
+            .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length >= 2 && IpRegex().IsMatch(parts[0]);
+    }
+
+    public static IReadOnlyList<string> ValidateScanInputForUi(string input, bool strict = true)
+    {
+        input = NormalizeScanInput(input);
+        if (!strict && IsIncompleteScanInput(input))
+            return [];
+
+        var validation = ParseAndValidateScanInput(input);
+        if (!validation.IsValid)
+            return validation.Errors.ToList();
+
+        if (LooksLikeSubnetInput(input) && validation.ScanIps.Count <= 1)
+        {
+            return
+            [
+                "Could not parse a subnet from that input. Use CIDR (192.168.50.0/24) or IP + mask (192.168.50.0 255.255.255.0)."
+            ];
+        }
+
+        return [];
+    }
+
     private static string? FindReservedCidrMatch(string ip, IReadOnlyList<string> cidrs)
     {
         foreach (var cidr in cidrs)
@@ -208,11 +296,188 @@ public static partial class ExternalSubnetHelper
         return value >= networkLong && value <= broadcastLong;
     }
 
-    private static List<string> TokenizeInput(string input) =>
+    private static List<string> SplitSegments(string input) =>
         input
-            .Split([',', ';', '\n', '\r', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
             .ToList();
+
+    private static IEnumerable<(string? Token, List<string> Errors)> ExpandSegment(string segment)
+    {
+        if (TryNormalizeSegment(segment, out var normalized, out var errors) &&
+            !string.IsNullOrWhiteSpace(normalized))
+        {
+            yield return (normalized, errors);
+            yield break;
+        }
+
+        if (errors.Count > 0)
+        {
+            yield return (null, errors);
+            yield break;
+        }
+
+        var parts = segment
+            .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length <= 1)
+        {
+            yield return (null, [$"Invalid target: {segment.Trim()}"]);
+            yield break;
+        }
+
+        foreach (var part in parts)
+        {
+            if (TryNormalizeSegment(part, out var token, out var partErrors) &&
+                !string.IsNullOrWhiteSpace(token))
+                yield return (token, partErrors);
+            else
+                yield return (null, partErrors.Count > 0 ? partErrors : [$"Invalid target: {part.Trim()}"]);
+        }
+    }
+
+    internal static bool TryNormalizeSegment(string segment, out string normalized, out List<string> errors)
+    {
+        normalized = "";
+        errors = [];
+        segment = segment.Trim();
+        if (string.IsNullOrWhiteSpace(segment))
+            return false;
+
+        if (IsCidr(segment))
+        {
+            normalized = segment;
+            return true;
+        }
+
+        if (IncompleteCidrRegex().IsMatch(segment))
+        {
+            errors.Add("Enter a prefix length after / (e.g. 192.168.54.0/24).");
+            return false;
+        }
+
+        var dottedSlash = CidrWithDottedMaskRegex().Match(segment);
+        if (dottedSlash.Success && IPAddress.TryParse(dottedSlash.Groups[1].Value, out _))
+        {
+            if (TryMaskToPrefix(dottedSlash.Groups[2].Value, out var dottedPrefix, out var dottedError))
+            {
+                normalized = $"{dottedSlash.Groups[1].Value}/{dottedPrefix}";
+                return true;
+            }
+
+            if (dottedError is not null)
+            {
+                errors.Add(dottedError);
+                return false;
+            }
+        }
+
+        var slashIndex = segment.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var ipPart = segment[..slashIndex].Trim();
+            var maskPart = segment[(slashIndex + 1)..].Trim();
+            if (IpRegex().IsMatch(ipPart))
+            {
+                if (TryMaskToPrefix(maskPart, out var slashPrefix, out var slashError))
+                {
+                    normalized = $"{ipPart}/{slashPrefix}";
+                    return true;
+                }
+
+                if (slashError is not null)
+                {
+                    errors.Add(slashError);
+                    return false;
+                }
+            }
+        }
+
+        var cleaned = segment.Replace('|', ' ').Trim();
+        var pairParts = cleaned
+            .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (pairParts.Length == 2 && IpRegex().IsMatch(pairParts[0]))
+        {
+            if (TryMaskToPrefix(pairParts[1], out var pairPrefix, out var pairError))
+            {
+                normalized = $"{pairParts[0]}/{pairPrefix}";
+                return true;
+            }
+
+            if (pairError is not null)
+            {
+                errors.Add(pairError);
+                return false;
+            }
+        }
+
+        if (IpRegex().IsMatch(segment))
+        {
+            if (TryMaskToPrefix(segment, out _, out _))
+            {
+                errors.Add($"Invalid target: {segment} (subnet mask is not a scannable host address).");
+                return false;
+            }
+
+            normalized = segment;
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static bool TryMaskToPrefix(string maskPart, out int prefix, out string? error)
+    {
+        prefix = 0;
+        error = null;
+        maskPart = maskPart.Trim();
+        if (string.IsNullOrWhiteSpace(maskPart))
+        {
+            error = "Subnet mask or prefix length is required.";
+            return false;
+        }
+
+        if (int.TryParse(maskPart, out prefix) && prefix is >= 0 and <= 32)
+            return true;
+
+        if (!DottedMaskRegex.IsMatch(maskPart))
+        {
+            error = maskPart.Contains('.', StringComparison.Ordinal)
+                ? $"Invalid subnet mask: {maskPart} (expected four octets, e.g. 255.255.255.0)."
+                : $"Invalid prefix length: {maskPart} (use 0-32 or a dotted mask like 255.255.255.0).";
+            return false;
+        }
+
+        if (!IPAddress.TryParse(maskPart, out var maskIp))
+        {
+            error = $"Invalid subnet mask: {maskPart}.";
+            return false;
+        }
+
+        prefix = SubnetMaskToPrefix(maskIp);
+        if (prefix >= 0)
+            return true;
+
+        error = $"Invalid subnet mask: {maskPart} (mask bits must be contiguous).";
+        return false;
+    }
+
+    internal static int SubnetMaskToPrefix(IPAddress mask)
+    {
+        var value = IpToUInt(mask);
+        if (value == 0)
+            return 0;
+
+        var prefix = 0;
+        for (var bit = 31; bit >= 0; bit--)
+        {
+            if ((value & (1u << bit)) == 0)
+                break;
+            prefix++;
+        }
+
+        var expected = prefix >= 32 ? uint.MaxValue : uint.MaxValue << (32 - prefix);
+        return value == expected ? prefix : -1;
+    }
 
     private static bool IsCidr(string token) => CidrRegex().IsMatch(token.Trim());
 

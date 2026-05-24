@@ -54,6 +54,7 @@ app.MapReviewSessionApi();
 app.MapLegacyReportApi();
 app.MapConnectSecureDownloadApi();
 app.MapAdminApi();
+app.MapPatchApi();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

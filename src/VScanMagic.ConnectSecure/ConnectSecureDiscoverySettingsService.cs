@@ -42,6 +42,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             validated,
             ExternalScanType,
             null,
+            includeTargetIp: true,
             ct);
 
         await TriggerExternalScanAsync(companyId, [discoverySettingId], ct);
@@ -66,7 +67,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
 
         var template = await ResolveInternalDiscoveryTemplateAsync(companyId, ct);
         var discoverySettingId = await CreateDiscoverySettingAsync(
-            BuildScanTargetData(companyId, name, validated, template.DiscoverySettingsType, template.AddressType),
+            BuildScanTargetData(companyId, name, validated, template.DiscoverySettingsType, template.AddressType, includeTargetIp: false),
             ct);
         var mappingId = await CreateAgentMappingAsync(companyId, probeAgentId, discoverySettingId, ct);
         return (discoverySettingId, mappingId);
@@ -96,6 +97,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             validated,
             template.DiscoverySettingsType,
             template.AddressType,
+            includeTargetIp: false,
             ct);
 
         if (mappingId is > 0)
@@ -148,6 +150,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             body: new Dictionary<string, object?> { ["data"] = data },
             ct: ct);
 
+        EnsureSuccessResponse(response, "discovery setting");
         var id = ExtractCreatedId(response);
         if (id is null or <= 0)
             throw new InvalidOperationException("ConnectSecure did not return a discovery setting id.");
@@ -162,6 +165,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         ExternalSubnetHelper.ExternalScanTargetValidationResult validated,
         string discoverySettingsType,
         string? addressType,
+        bool includeTargetIp,
         CancellationToken ct)
     {
         var response = await client.InvokeAuthenticatedAsync(
@@ -173,7 +177,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             throw new InvalidOperationException($"Discovery setting {discoverySettingId} was not found.");
 
         var dataNode = JsonNode.Parse(dataEl.GetRawText())!.AsObject();
-        ApplyScanTargetFields(dataNode, companyId, name, validated, discoverySettingsType, addressType);
+        ApplyScanTargetFields(dataNode, companyId, name, validated, discoverySettingsType, addressType, includeTargetIp);
 
         await client.InvokeAuthenticatedAsync(
             HttpMethod.Patch,
@@ -205,6 +209,7 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
             },
             ct: ct);
 
+        EnsureSuccessResponse(response, "agent mapping");
         var id = ExtractCreatedId(response);
         if (id is null or <= 0)
             throw new InvalidOperationException("ConnectSecure did not return an agent mapping id.");
@@ -269,8 +274,9 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         string name,
         ExternalSubnetHelper.ExternalScanTargetValidationResult validated,
         string discoverySettingsType,
-        string? addressType) =>
-        ApplyScanTargetFields(new Dictionary<string, object?>(), companyId, name, validated, discoverySettingsType, addressType);
+        string? addressType,
+        bool includeTargetIp = true) =>
+        ApplyScanTargetFields(new Dictionary<string, object?>(), companyId, name, validated, discoverySettingsType, addressType, includeTargetIp);
 
     private static Dictionary<string, object?> ApplyScanTargetFields(
         IDictionary<string, object?> target,
@@ -278,13 +284,15 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         string name,
         ExternalSubnetHelper.ExternalScanTargetValidationResult validated,
         string discoverySettingsType,
-        string? addressType)
+        string? addressType,
+        bool includeTargetIp)
     {
         target["company_id"] = companyId;
         target["name"] = name.Trim();
         target["discovery_settings_type"] = discoverySettingsType;
         target["address"] = validated.Address;
-        target["target_ip"] = validated.TargetIp;
+        if (includeTargetIp && !string.IsNullOrWhiteSpace(validated.TargetIp))
+            target["target_ip"] = validated.TargetIp;
         target["scan_later"] = false;
         target["is_excluded"] = false;
         if (!string.IsNullOrWhiteSpace(addressType))
@@ -299,18 +307,38 @@ public sealed class ConnectSecureDiscoverySettingsService(ConnectSecureClient cl
         string name,
         ExternalSubnetHelper.ExternalScanTargetValidationResult validated,
         string discoverySettingsType,
-        string? addressType)
+        string? addressType,
+        bool includeTargetIp)
     {
         target["company_id"] = companyId;
         target["name"] = name.Trim();
         target["discovery_settings_type"] = discoverySettingsType;
         target["address"] = validated.Address;
-        target["target_ip"] = validated.TargetIp;
+        if (includeTargetIp && !string.IsNullOrWhiteSpace(validated.TargetIp))
+            target["target_ip"] = validated.TargetIp;
         target["scan_later"] = false;
         target["is_excluded"] = false;
         if (!string.IsNullOrWhiteSpace(addressType))
             target["address_type"] = addressType;
         return target;
+    }
+
+    private static void EnsureSuccessResponse(JsonElement response, string resourceLabel)
+    {
+        if (!response.TryGetProperty("status", out var statusEl))
+            return;
+
+        if (statusEl.ValueKind == JsonValueKind.True)
+            return;
+
+        if (statusEl.ValueKind == JsonValueKind.False)
+        {
+            var message = ConnectSecureJsonReader.GetString(response, "message");
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(message)
+                    ? $"ConnectSecure rejected the {resourceLabel} request."
+                    : message);
+        }
     }
 
     private static int? ExtractCreatedId(JsonElement response)

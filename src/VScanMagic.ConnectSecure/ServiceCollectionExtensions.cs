@@ -26,6 +26,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ConnectSecureCompanyCredentialsService>();
         services.AddSingleton<ConnectSecureIntegrationService>();
         services.AddSingleton<ConnectSecureProbeConfigurationService>();
+        services.AddSingleton<ConnectSecurePatchService>();
+        services.AddSingleton<ConnectSecureSuppressService>();
+        services.AddSingleton<ConnectSecureScanService>();
         return services;
     }
 }

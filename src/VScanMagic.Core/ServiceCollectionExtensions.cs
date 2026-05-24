@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SettingsService>();
         services.AddSingleton<CompanyFolderMapService>();
         services.AddSingleton<ReportFolderHistoryService>();
+        services.AddSingleton<PatchActivityHistoryService>();
         services.AddSingleton<RmitPlusSettingsService>();
         services.AddSingleton<ReportPathResolver>();
         services.AddSingleton<RemediationRuleService>();

@@ -35,6 +35,9 @@ public static class VScanMagicPaths
     public static string ReportFolderHistoryFile(string? configDir = null) =>
         Path.Combine(GetConfigDirectory(configDir), "VScanMagic_ReportFolderHistory.json");
 
+    public static string PatchActivityHistoryFile(string? configDir = null) =>
+        Path.Combine(GetConfigDirectory(configDir), "VScanMagic_PatchActivityHistory.json");
+
     public static string RmitPlusSettingsFile(string? configDir = null) =>
         Path.Combine(GetConfigDirectory(configDir), "VScanMagic_RMITPlusSettings.json");
 

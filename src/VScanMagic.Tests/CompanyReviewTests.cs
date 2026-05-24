@@ -181,6 +181,94 @@ public sealed class ExternalSubnetHelperTests
         Assert.True(result.IsValid);
         Assert.Equal(["203.0.113.50"], result.ScanIps);
     }
+
+    [Fact]
+    public void ParseAndValidateScanInput_AcceptsDottedMaskWithPipeSeparator()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.0 | 255.255.255.0");
+        Assert.True(result.IsValid);
+        Assert.Equal("192.168.54.0/24", result.Address);
+        Assert.Equal(253, result.ScanIps.Count);
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_AcceptsDottedMaskWithSlash()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.0/255.255.255.0");
+        Assert.True(result.IsValid);
+        Assert.Equal("192.168.54.0/24", result.Address);
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_AcceptsSpaceSeparatedMask()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.0 255.255.255.0");
+        Assert.True(result.IsValid);
+        Assert.Equal("192.168.54.0/24", result.Address);
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_RejectsIncompleteDottedMask()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.50 | 255.255.255");
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("four octets", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_RejectsIncompleteCidrPrefix()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.50/");
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("prefix length", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_AcceptsVlan50Cidr()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.50.0/24");
+        Assert.True(result.IsValid);
+        Assert.Equal("192.168.50.0/24", result.Address);
+        Assert.Equal(253, result.ScanIps.Count);
+    }
+
+    [Fact]
+    public void DescribeExpandedRange_AcceptsVlan50Cidr()
+    {
+        var description = ExternalSubnetHelper.DescribeExpandedRange("192.168.50.0/24");
+        Assert.Contains("253", description);
+    }
+
+    [Fact]
+    public void ValidateScanInputForUi_RejectsPartialSubnetNotation()
+    {
+        var errors = ExternalSubnetHelper.ValidateScanInputForUi("192.168.50.0", strict: true);
+        Assert.Empty(errors);
+
+        errors = ExternalSubnetHelper.ValidateScanInputForUi("192.168.50.0 255.255.255.0", strict: true);
+        Assert.Empty(errors);
+
+        errors = ExternalSubnetHelper.ValidateScanInputForUi("192.168.50.0/24", strict: true);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void ValidateScanInputForUi_FlagsSubnetLikeInputThatOnlyResolvesSingleIp()
+    {
+        var errors = ExternalSubnetHelper.ValidateScanInputForUi("192.168.50.0 255.255.255", strict: true);
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e =>
+            e.Contains("Could not parse a subnet", StringComparison.OrdinalIgnoreCase) ||
+            e.Contains("subnet mask", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_RejectsStandaloneSubnetMask()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("255.255.255.0");
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("subnet mask", StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 public sealed class CredentialTypeCatalogTests

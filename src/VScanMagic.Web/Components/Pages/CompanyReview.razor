@@ -5,12 +5,13 @@
 @inject ConnectSecureCompanyReviewService ReviewService
 @inject ConnectSecureAgentService AgentService
 @inject ConnectSecureDiscoverySettingsService DiscoverySettingsService
+@inject ConnectSecureScanService ScanService
 @inject SettingsService Settings
 
 <PageTitle>Company Review</PageTitle>
 
 <h1>Company Review</h1>
-    <p class="text-muted">Tenant configuration checks, probe subnets, external targets, and offline agents. Set probe nmap interface from reported NICs when the API allows. Manage credentials and probe mappings on <a href="probe-config">Probe & Credentials</a>.</p>
+    <p class="text-muted">Tenant configuration checks, probe subnets, external targets, and offline agents. Set probe nmap interface from reported NICs when the API allows. Manage credentials and probe mappings on <a href="probe-config">Probe & Credentials</a>. Application patching is on <a href="application-patching">Application Patching</a>.</p>
 
 @if (!ConnectSecure.IsConfigured)
 {
@@ -72,6 +73,33 @@ else
         </div>
     </div>
 
+    <div class="card mb-3">
+        <div class="card-header">Trigger scans</div>
+        <div class="card-body">
+            <p class="form-text">
+                Kick off ConnectSecure scans without opening the portal. External scans use configured external targets;
+                internal scans queue probe-mapped subnets; agent update requests a lightweight agent inventory refresh.
+            </p>
+            <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-primary"
+                        disabled="@(_busy || _scanBusy)"
+                        @onclick="TriggerExternalScanAsync">
+                    @(_scanAction == "external" ? "Queuing…" : "Run external scan")
+                </button>
+                <button type="button" class="btn btn-outline-primary"
+                        disabled="@(_busy || _scanBusy || _data.InternalSubnets.Count == 0)"
+                        @onclick="TriggerInternalScanAsync">
+                    @(_scanAction == "internal" ? "Queuing…" : "Run internal subnet scan")
+                </button>
+                <button type="button" class="btn btn-outline-secondary"
+                        disabled="@(_busy || _scanBusy || _data.AgentCount == 0)"
+                        @onclick="TriggerAgentUpdateAsync">
+                    @(_scanAction == "agents" ? "Requesting…" : "Request agent update")
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-3">
         <div class="col-lg-6">
             <div class="card h-100">
@@ -81,8 +109,9 @@ else
                 </div>
                 <div class="card-body">
                     <p class="form-text">
-                        Probe-mapped CIDR subnets for internal nmap scanning. Same usable-IP rules apply:
-                        skip network (1st), ISP gateway (2nd), and broadcast (last).
+                        Probe-mapped CIDR subnets for internal nmap scanning. Accepts CIDR (192.168.10.0/24),
+                        prefix with slash (192.168.10.0/255.255.255.0), or network + mask (192.168.10.0 255.255.255.0).
+                        Same usable-IP rules apply: skip network (1st), ISP gateway (2nd), and broadcast (last).
                     </p>
                     @if (_data.InternalSubnets.Count == 0 && _editingInternalId is null)
                     {
@@ -135,8 +164,10 @@ else
                                                 @if (editing)
                                                 {
                                                     <input class="form-control form-control-sm font-monospace"
-                                                           value="@_editInternalAddress"
-                                                           @oninput="OnEditInternalAddressChanged" />
+                                                           @bind="_editInternalAddress"
+                                                           @bind:event="oninput"
+                                                           @bind:after="OnEditInternalAddressInputAsync"
+                                                           @onfocusout="OnEditInternalAddressBlur" />
                                                     @if (!string.IsNullOrWhiteSpace(_editInternalPreview))
                                                     {
                                                         <div class="form-text">@_editInternalPreview</div>
@@ -200,10 +231,14 @@ else
                         <div class="row g-2">
                             <div class="col-md-3">
                                 <input class="form-control form-control-sm" placeholder="Name"
-                                       @bind="_newInternalName" />
+                                       @bind="_newInternalName"
+                                       @bind:event="oninput"
+                                       @bind:after="ClearNewInternalValidationAsync" />
                             </div>
                             <div class="col-md-3">
-                                <select class="form-select form-select-sm" @bind="_newInternalProbeId">
+                                <select class="form-select form-select-sm"
+                                        value="@ResolveNewInternalProbeId()"
+                                        @onchange="OnNewInternalProbeChanged">
                                     @foreach (var probe in GetProbeOptions())
                                     {
                                         <option value="@probe.AgentId">@probe.Label</option>
@@ -212,22 +247,19 @@ else
                             </div>
                             <div class="col-md-4">
                                 <input class="form-control form-control-sm font-monospace"
-                                       placeholder="10.0.0.0/24"
-                                       value="@_newInternalAddress"
-                                       @oninput="OnNewInternalAddressChanged" />
+                                       placeholder="10.0.0.0/24 or 10.0.0.0 255.255.255.0"
+                                       @bind="_newInternalAddress"
+                                       @bind:event="oninput"
+                                       @bind:after="ClearNewInternalValidationAsync" />
                             </div>
                             <div class="col-md-2">
                                 <button type="button" class="btn btn-sm btn-success w-100"
-                                        disabled="@(_busy || _addingInternal || GetProbeOptions().Count == 0 || string.IsNullOrWhiteSpace(_newInternalName) || string.IsNullOrWhiteSpace(_newInternalAddress) || _newInternalProbeId <= 0)"
+                                        disabled="@(_busy || _addingInternal || !CanAddInternalSubnet())"
                                         @onclick="AddInternalSubnet">
                                     @(_addingInternal ? "Adding…" : "Add")
                                 </button>
                             </div>
                         </div>
-                        @if (!string.IsNullOrWhiteSpace(_newInternalPreview))
-                        {
-                            <div class="form-text mt-2">@_newInternalPreview</div>
-                        }
                         @foreach (var issue in _newInternalValidationErrors)
                         {
                             <div class="form-text text-danger">@issue</div>
@@ -524,10 +556,11 @@ else
     private string _newInternalAddress = "";
     private int _newInternalProbeId;
     private string? _editInternalPreview;
-    private string? _newInternalPreview;
     private List<string> _editInternalValidationErrors = [];
     private List<string> _newInternalValidationErrors = [];
     private bool _addingInternal;
+    private bool _scanBusy;
+    private string? _scanAction;
 
     protected override void OnInitialized()
     {
@@ -711,7 +744,6 @@ else
         _editInternalName = "";
         _editInternalAddress = "";
         _editInternalPreview = null;
-        _newInternalPreview = null;
         _editInternalValidationErrors = [];
         _newInternalValidationErrors = [];
         _newInternalName = "";
@@ -722,9 +754,36 @@ else
     {
         var probes = GetProbeOptions();
         var first = probes.FirstOrDefault();
-        _newInternalProbeId = first?.AgentId ?? 0;
+        if (_newInternalProbeId <= 0 && first is not null)
+            _newInternalProbeId = first.AgentId;
         if (_editInternalProbeId <= 0 && first is not null)
             _editInternalProbeId = first.AgentId;
+    }
+
+    private int ResolveNewInternalProbeId()
+    {
+        if (_newInternalProbeId > 0)
+            return _newInternalProbeId;
+
+        return GetProbeOptions().FirstOrDefault()?.AgentId ?? 0;
+    }
+
+    private bool CanAddInternalSubnet() =>
+        GetProbeOptions().Count > 0 &&
+        ResolveNewInternalProbeId() > 0 &&
+        !string.IsNullOrWhiteSpace(_newInternalName) &&
+        !string.IsNullOrWhiteSpace(_newInternalAddress);
+
+    private Task ClearNewInternalValidationAsync()
+    {
+        _newInternalValidationErrors = [];
+        return Task.CompletedTask;
+    }
+
+    private void OnNewInternalProbeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var probeId))
+            _newInternalProbeId = probeId;
     }
 
     private sealed record ProbeOption(int AgentId, string Label);
@@ -781,10 +840,19 @@ else
         _newValidationErrors = ValidateExternalInput(_newExternalAddress);
     }
 
-    private static List<string> ValidateExternalInput(string input)
+    private static List<string> ValidateExternalInput(string input, bool strict = true) =>
+        ExternalSubnetHelper.ValidateScanInputForUi(input, strict).ToList();
+
+    private void RefreshEditInternalAddressValidation(bool strict = false)
     {
-        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(input);
-        return validation.IsValid ? [] : validation.Errors.ToList();
+        _editInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_editInternalAddress);
+        _editInternalValidationErrors = ValidateExternalInput(_editInternalAddress, strict);
+    }
+
+    private Task OnEditInternalAddressInputAsync()
+    {
+        RefreshEditInternalAddressValidation(strict: false);
+        return Task.CompletedTask;
     }
 
     private bool IsExternalSaving(int? id) => id is > 0 && _savingExternalIds.Contains(id.Value);
@@ -924,31 +992,41 @@ else
 
     private void CancelEditInternal() => ResetInternalEditor();
 
-    private void OnEditInternalAddressChanged(ChangeEventArgs e)
-    {
-        _editInternalAddress = e.Value?.ToString() ?? "";
-        _editInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_editInternalAddress);
-        _editInternalValidationErrors = ValidateExternalInput(_editInternalAddress);
-    }
-
-    private void OnNewInternalAddressChanged(ChangeEventArgs e)
-    {
-        _newInternalAddress = e.Value?.ToString() ?? "";
-        _newInternalPreview = ExternalSubnetHelper.DescribeExpandedRange(_newInternalAddress);
-        _newInternalValidationErrors = ValidateExternalInput(_newInternalAddress);
-    }
+    private void OnEditInternalAddressBlur() =>
+        RefreshEditInternalAddressValidation(strict: true);
 
     private bool IsInternalSaving(int? id) => id is > 0 && _savingInternalIds.Contains(id.Value);
 
     private async Task AddInternalSubnet()
     {
-        if (_data is null || _newInternalProbeId <= 0)
+        if (_data is null)
             return;
 
-        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_newInternalAddress);
-        _newInternalValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
-        if (!validation.IsValid)
+        var probeId = ResolveNewInternalProbeId();
+        if (probeId <= 0)
+        {
+            _error = "Select a probe agent before adding an internal subnet.";
+            _message = null;
             return;
+        }
+
+        var addressInput = ExternalSubnetHelper.NormalizeScanInput(_newInternalAddress);
+        _newInternalValidationErrors = ExternalSubnetHelper.ValidateScanInputForUi(addressInput, strict: true).ToList();
+        if (_newInternalValidationErrors.Count > 0)
+        {
+            _error = null;
+            _message = null;
+            return;
+        }
+
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(addressInput);
+
+        if (string.IsNullOrWhiteSpace(_newInternalName))
+        {
+            _error = "Enter a name for the internal subnet.";
+            _message = null;
+            return;
+        }
 
         _error = null;
         _message = null;
@@ -957,32 +1035,20 @@ else
         {
             var (discoverySettingId, mappingId) = await DiscoverySettingsService.CreateInternalSubnetAsync(
                 _data.CompanyId,
-                _newInternalProbeId,
+                probeId,
                 _newInternalName,
-                _newInternalAddress);
+                addressInput);
 
-            var probeLabel = GetProbeOptions().FirstOrDefault(p => p.AgentId == _newInternalProbeId)?.Label
-                ?? $"Agent #{_newInternalProbeId}";
+            var probeLabel = GetProbeOptions().FirstOrDefault(p => p.AgentId == probeId)?.Label
+                ?? $"Agent #{probeId}";
 
-            _data.InternalSubnets.Add(new InternalSubnetEntry(
-                discoverySettingId,
-                mappingId,
-                _newInternalProbeId,
-                probeLabel,
-                _newInternalName.Trim(),
-                validation.Address,
-                validation.TargetIp,
-                validation.ScanIps.Count));
-
-            if (!string.IsNullOrWhiteSpace(validation.Address) && !_data.ProbesSubnets.Contains(validation.Address))
-                _data.ProbesSubnets.Add(validation.Address);
-
+            await ReloadInternalSubnetsAsync();
             ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
             _newInternalName = "";
             _newInternalAddress = "";
-            _newInternalPreview = null;
             _newInternalValidationErrors = [];
-            _message = $"Added internal subnet ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
+            _newInternalProbeId = probeId;
+            _message = $"Added internal subnet {validation.Address} ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
         }
         catch (Exception ex)
         {
@@ -994,12 +1060,27 @@ else
         }
     }
 
+    private async Task ReloadInternalSubnetsAsync()
+    {
+        if (_data is null)
+            return;
+
+        var refreshed = await ReviewService.GetReviewDataAsync(_data.CompanyId, _data.CompanyName);
+        _data.InternalSubnets.Clear();
+        _data.InternalSubnets.AddRange(refreshed.InternalSubnets);
+        _data.ProbesSubnets.Clear();
+        _data.ProbesSubnets.AddRange(refreshed.ProbesSubnets);
+        _data.ProbesWithNetworks = refreshed.ProbesWithNetworks;
+        _data.ProbesWithBoth = refreshed.ProbesWithBoth;
+    }
+
     private async Task SaveInternalSubnet(InternalSubnetEntry subnet)
     {
         if (_data is null || subnet.DiscoverySettingId is not > 0 || _editInternalProbeId <= 0)
             return;
 
-        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(_editInternalAddress);
+        var addressInput = ExternalSubnetHelper.NormalizeScanInput(_editInternalAddress);
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(addressInput);
         _editInternalValidationErrors = validation.IsValid ? [] : validation.Errors.ToList();
         if (!validation.IsValid)
             return;
@@ -1015,32 +1096,15 @@ else
                 _data.CompanyId,
                 _editInternalProbeId,
                 _editInternalName,
-                _editInternalAddress);
+                addressInput);
 
             var probeLabel = GetProbeOptions().FirstOrDefault(p => p.AgentId == _editInternalProbeId)?.Label
                 ?? $"Agent #{_editInternalProbeId}";
 
-            var updated = new InternalSubnetEntry(
-                subnet.DiscoverySettingId,
-                subnet.MappingId,
-                _editInternalProbeId,
-                probeLabel,
-                _editInternalName.Trim(),
-                validation.Address,
-                validation.TargetIp,
-                validation.ScanIps.Count);
-
-            var index = _data.InternalSubnets.FindIndex(s => s.DiscoverySettingId == subnet.DiscoverySettingId);
-            if (index >= 0)
-                _data.InternalSubnets[index] = updated;
-
-            _data.ProbesSubnets.Remove(subnet.Address);
-            if (!string.IsNullOrWhiteSpace(validation.Address) && !_data.ProbesSubnets.Contains(validation.Address))
-                _data.ProbesSubnets.Add(validation.Address);
-
+            await ReloadInternalSubnetsAsync();
             ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
             ResetInternalEditor();
-            _message = $"Updated internal subnet ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
+            _message = $"Updated internal subnet {validation.Address} ({validation.ScanIps.Count} IP(s)) mapped to {probeLabel}.";
         }
         catch (Exception ex)
         {
@@ -1066,8 +1130,7 @@ else
                 subnet.DiscoverySettingId.Value,
                 subnet.MappingId);
 
-            _data.InternalSubnets.RemoveAll(s => s.DiscoverySettingId == subnet.DiscoverySettingId);
-            _data.ProbesSubnets.Remove(subnet.Address);
+            await ReloadInternalSubnetsAsync();
             ConnectSecureCompanyReviewService.RebuildQuickWins(_data);
             if (_editingInternalId == subnet.DiscoverySettingId)
                 ResetInternalEditor();
@@ -1080,6 +1143,43 @@ else
         finally
         {
             _savingInternalIds.Remove(subnet.DiscoverySettingId.Value);
+        }
+    }
+
+    private async Task TriggerExternalScanAsync() => await RunScanAsync(
+        "external",
+        () => ScanService.TriggerExternalScansAsync(_data!.CompanyId));
+
+    private async Task TriggerInternalScanAsync() => await RunScanAsync(
+        "internal",
+        () => ScanService.TriggerInternalScansAsync(_data!.CompanyId));
+
+    private async Task TriggerAgentUpdateAsync() => await RunScanAsync(
+        "agents",
+        () => ScanService.TriggerAgentUpdatesAsync(_data!.CompanyId));
+
+    private async Task RunScanAsync(string action, Func<Task<ScanTriggerResult>> trigger)
+    {
+        if (_data is null)
+            return;
+
+        _error = null;
+        _message = null;
+        _scanBusy = true;
+        _scanAction = action;
+        try
+        {
+            var result = await trigger();
+            _message = result.Message;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _scanBusy = false;
+            _scanAction = null;
         }
     }
 }

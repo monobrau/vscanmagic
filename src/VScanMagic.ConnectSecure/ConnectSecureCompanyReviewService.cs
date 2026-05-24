@@ -268,7 +268,11 @@ public sealed class ConnectSecureCompanyReviewService(ConnectSecureClient client
         if (ds.ValueKind == JsonValueKind.Undefined || IsExternalDiscoverySetting(ds))
             return;
 
-        if (!dsIdToAddr.TryGetValue(dsId.Value, out var address) || string.IsNullOrWhiteSpace(address))
+        var address = FirstNonEmpty(
+            dsIdToAddr.GetValueOrDefault(dsId.Value),
+            ConnectSecureJsonReader.GetString(ds, "address"),
+            ConnectSecureJsonReader.GetString(ds, "target_ip", "targetIp", "target_ips"));
+        if (string.IsNullOrWhiteSpace(address))
             return;
 
         var mappingId = ConnectSecureJsonReader.GetInt(mapping, "id");
