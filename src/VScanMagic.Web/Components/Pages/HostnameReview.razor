@@ -52,11 +52,11 @@
         <div class="card-body py-2">
             <div class="row g-2 align-items-center">
                 <div class="col-md-4">
-                    <input class="form-control form-control-sm" @bind="_search" @bind:event="oninput" placeholder="Search hostname or IP..." />
+                    <input class="form-control form-control-sm" value="@_search" @oninput="OnSearchInput" placeholder="Search hostname or IP..." />
                 </div>
                 <div class="col-md-4">
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" @bind="_windowsOnly" id="winOnly" />
+                        <input class="form-check-input" type="checkbox" @bind="_windowsOnly" @bind:after="RefreshFilteredHosts" id="winOnly" />
                         <label class="form-check-label" for="winOnly">Windows vulns only (&gt; 0)</label>
                     </div>
                 </div>
@@ -88,8 +88,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var h in FilteredHostList)
-                {
+                <Virtualize Items="_filteredHostList" Context="h" ItemSize="48">
                     <tr class="@RowClass(h)">
                         <td><strong>@h.DisplayName</strong></td>
                         <td>@h.Ip</td>
@@ -102,7 +101,7 @@
                         <td class="text-end">@h.Low</td>
                         <td class="small text-muted">@h.TopProducts</td>
                     </tr>
-                }
+                </Virtualize>
             </tbody>
         </table>
     </div>
@@ -171,6 +170,8 @@
     private const int _highCountThreshold = 350;
 
     private List<HostVulnerabilitySummary> _hosts = [];
+    private List<HostVulnerabilitySummary> _filteredHostList = [];
+    private CancellationTokenSource? _searchDebounceCts;
     private string _exportDir = "";
     private bool _exportPdf = true;
     private bool _exportXlsx = true;
@@ -184,31 +185,47 @@
 
     private int _highCountHosts => _hosts.Count(h => h.TotalVulnCount >= _highCountThreshold);
 
-    private List<HostVulnerabilitySummary> FilteredHostList
+    private IReadOnlyList<HostVulnerabilitySummary> FilteredHostList => _filteredHostList;
+
+    private void RefreshFilteredHosts()
     {
-        get
+        IEnumerable<HostVulnerabilitySummary> q = _hosts;
+        if (_windowsOnly)
+            q = q.Where(h => h.WindowsVulnCount > 0);
+
+        if (!string.IsNullOrWhiteSpace(_search))
         {
-            IEnumerable<HostVulnerabilitySummary> q = _hosts;
-            if (_windowsOnly)
-                q = q.Where(h => h.WindowsVulnCount > 0);
+            q = q.Where(h =>
+                h.DisplayName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                h.Ip.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        }
 
-            if (!string.IsNullOrWhiteSpace(_search))
-            {
-                q = q.Where(h =>
-                    h.DisplayName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-                    h.Ip.Contains(_search, StringComparison.OrdinalIgnoreCase));
-            }
+        q = _sortColumn switch
+        {
+            "host" => _sortDesc ? q.OrderByDescending(h => h.DisplayName, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.DisplayName, StringComparer.OrdinalIgnoreCase),
+            "ip" => _sortDesc ? q.OrderByDescending(h => h.Ip, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.Ip, StringComparer.OrdinalIgnoreCase),
+            "windows" => _sortDesc ? q.OrderByDescending(h => h.WindowsVulnCount) : q.OrderBy(h => h.WindowsVulnCount),
+            "products" => _sortDesc ? q.OrderByDescending(h => h.ProductCount) : q.OrderBy(h => h.ProductCount),
+            _ => _sortDesc ? q.OrderByDescending(h => h.TotalVulnCount) : q.OrderBy(h => h.TotalVulnCount)
+        };
 
-            q = _sortColumn switch
-            {
-                "host" => _sortDesc ? q.OrderByDescending(h => h.DisplayName, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.DisplayName, StringComparer.OrdinalIgnoreCase),
-                "ip" => _sortDesc ? q.OrderByDescending(h => h.Ip, StringComparer.OrdinalIgnoreCase) : q.OrderBy(h => h.Ip, StringComparer.OrdinalIgnoreCase),
-                "windows" => _sortDesc ? q.OrderByDescending(h => h.WindowsVulnCount) : q.OrderBy(h => h.WindowsVulnCount),
-                "products" => _sortDesc ? q.OrderByDescending(h => h.ProductCount) : q.OrderBy(h => h.ProductCount),
-                _ => _sortDesc ? q.OrderByDescending(h => h.TotalVulnCount) : q.OrderBy(h => h.TotalVulnCount)
-            };
+        _filteredHostList = q.ToList();
+    }
 
-            return q.ToList();
+    private async Task OnSearchInput(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        _searchDebounceCts?.Cancel();
+        _searchDebounceCts = new CancellationTokenSource();
+        var token = _searchDebounceCts.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            RefreshFilteredHosts();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (TaskCanceledException)
+        {
         }
     }
 
@@ -295,6 +312,7 @@
         {
             var result = await Task.Run(() => Pipeline.SummarizeHosts(_sourcePath));
             _hosts = result.Hosts.ToList();
+            RefreshFilteredHosts();
             if (_hosts.Count == 0)
                 _error = "No host rows found in that file.";
         }
@@ -341,6 +359,8 @@
             _sortColumn = column;
             _sortDesc = column is "total" or "windows" or "products";
         }
+
+        RefreshFilteredHosts();
     }
 
     private string SortIcon(string column) =>

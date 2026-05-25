@@ -82,12 +82,13 @@ public static class LegacyReportApi
         var userSettings = settings.LoadUserSettings();
         var filters = req.Filters ?? ReportFilters.FromUserSettings(userSettings);
         var result = pipeline.ProcessFile(req.InputPath, filters);
-        var session = factory.CreateFromTopVulnerabilities(
+        var session = factory.CreateFromScoredResult(
             req.ClientName ?? "Client",
             req.ScanDate ?? DateTime.Now.ToString("yyyy-MM-dd"),
-            result.TopVulnerabilities,
+            result.Scored,
             userSettings.PreparedBy,
-            req.InputPath);
+            req.InputPath,
+            exportTopN: filters.TopN);
 
         var companyId = 0;
         var layout = pathResolver.Resolve(

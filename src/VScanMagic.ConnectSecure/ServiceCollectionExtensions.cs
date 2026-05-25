@@ -8,6 +8,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<ConnectSecureOptions>();
         services.AddSingleton<RateLimiter>();
+        services.AddSingleton<ConnectSecureCacheService>();
         // Singleton so Configure() in Settings/Home applies to ConnectSecureReportService too
         // (typed HttpClient registration creates a separate instance per injection site).
         services.AddSingleton<ConnectSecureClient>(sp =>
@@ -17,7 +18,11 @@ public static class ServiceCollectionExtensions
                 Timeout = TimeSpan.FromSeconds(90)
             };
             http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "VScanMagic/1.0");
-            return new ConnectSecureClient(http, sp.GetRequiredService<RateLimiter>(), sp.GetRequiredService<ConnectSecureOptions>());
+            return new ConnectSecureClient(
+                http,
+                sp.GetRequiredService<RateLimiter>(),
+                sp.GetRequiredService<ConnectSecureOptions>(),
+                sp.GetRequiredService<ConnectSecureCacheService>());
         });
         services.AddSingleton<ConnectSecureReportService>();
         services.AddSingleton<ConnectSecureCompanyReviewService>();
@@ -28,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ConnectSecureProbeConfigurationService>();
         services.AddSingleton<ConnectSecurePatchService>();
         services.AddSingleton<ConnectSecureSuppressService>();
+        services.AddSingleton<ConnectSecureReviewSuppressService>();
         services.AddSingleton<ConnectSecureScanService>();
         return services;
     }

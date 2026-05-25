@@ -15,7 +15,7 @@ This script provides a GUI interface for:
 .NOTES
 Version: see VScanMagic-Version.ps1 (single source of truth)
 Requires: Microsoft Excel and Microsoft Word installed.
-Author: River Run MSP
+Author: River Run
 Modular: Core, Data, Reports, Dialogs, Form loaded from VScanMagic-Modules/
 #>
 

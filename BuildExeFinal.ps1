@@ -50,7 +50,7 @@ if (Test-Path $modulePath) {
             outputFile = $outputExe
             title = "VScanMagic v$appVersion"
             description = "Vulnerability Report Generator"
-            company = "River Run MSP"
+            company = "River Run"
             product = "VScanMagic"
             version = $appVersion
             copyright = "Copyright (c) 2025 Chris Knospe"

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VScanMagic.Core.Configuration;
 using VScanMagic.Core.Paths;
+using VScanMagic.Core.Nvd;
 using VScanMagic.Core.Services;
 
 namespace VScanMagic.Core;
@@ -19,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RemediationRuleService>();
         services.AddSingleton<TemplatesService>();
         services.AddSingleton<CoveredSoftwareService>();
+        services.AddSingleton<NvdCveLookupService>();
         return services;
     }
 }

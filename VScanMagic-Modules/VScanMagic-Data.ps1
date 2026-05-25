@@ -1104,6 +1104,23 @@ function Test-IsEOLProduct {
     return $false
 }
 
+function Test-IsCveOnlyProduct {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
+    return ($ProductName.Trim() -match '^CVE-\d{4}-\d+$')
+}
+
+function Test-IsHighSeverityCveOnlyProduct {
+    param(
+        [string]$ProductName,
+        [int]$Critical = 0,
+        [int]$High = 0
+    )
+
+    return (Test-IsCveOnlyProduct -ProductName $ProductName) -and (($Critical -gt 0) -or ($High -gt 0))
+}
+
 function Get-CompositeRiskScore {
     param(
         [int]$Critical,
@@ -1127,6 +1144,15 @@ function Get-CompositeRiskScore {
     # EOL products get max weight (1.0) per vuln - hits CS score hard
     if (Test-IsEOLProduct -ProductName $ProductName) {
         $severityWeightedSum += ($VulnCount * 1.0)
+    }
+
+    if (Test-IsCveOnlyProduct -ProductName $ProductName) {
+        $avgCVSS = Get-AverageCVSS -Critical $Critical -High $High -Medium $Medium -Low $Low
+        if ($avgCVSS -gt 0) {
+            $scale = if ($null -ne $script:Config.CveOnlyRiskScale) { [double]$script:Config.CveOnlyRiskScale } else { 1.5 }
+            $cveFloor = $avgCVSS * $scale
+            if ($cveFloor -gt $severityWeightedSum) { $severityWeightedSum = $cveFloor }
+        }
     }
 
     # EPSS boost: (1 + EPSS) ranges from 1.0 to 2.0
@@ -1393,6 +1419,31 @@ function Get-Top10Vulnerabilities {
         if ($added -gt 0) {
             $topVulns = $topVulns | Sort-Object -Property RiskScore -Descending
             Write-Log "Added $added Network vuln(s) to meet minimum of $minNetwork (total now $($topVulns.Count))" -Level Info
+        }
+    }
+
+    # Ensure at least MinHighSeverityCveInTopN critical/high CVE-only findings are included
+    $minCve = if ($null -ne $script:Config.MinHighSeverityCveInTopN) { $script:Config.MinHighSeverityCveInTopN } else { 2 }
+    if ($minCve -gt 0) {
+        $cveInTop = @($topVulns | Where-Object { Test-IsHighSeverityCveOnlyProduct -ProductName $_.Product -Critical $_.Critical -High $_.High })
+        if ($cveInTop.Count -lt $minCve) {
+            $cvePool = $filtered | Where-Object { Test-IsHighSeverityCveOnlyProduct -ProductName $_.Product -Critical $_.Critical -High $_.High } | Sort-Object -Property RiskScore -Descending
+            $topVulnKeys = $topVulns | ForEach-Object { "$($_.Source)|$($_.Product)" }
+            $needed = $minCve - $cveInTop.Count
+            $added = 0
+            foreach ($cve in $cvePool) {
+                if ($added -ge $needed) { break }
+                $key = "$($cve.Source)|$($cve.Product)"
+                if ($key -notin $topVulnKeys) {
+                    $topVulns += $cve
+                    $topVulnKeys += $key
+                    $added++
+                }
+            }
+            if ($added -gt 0) {
+                $topVulns = $topVulns | Sort-Object -Property RiskScore -Descending
+                Write-Log "Added $added critical/high CVE-only finding(s) to meet minimum of $minCve (total now $($topVulns.Count))" -Level Info
+            }
         }
     }
 

@@ -5,11 +5,17 @@
 @using VScanMagic.Core.Models
 @using VScanMagic.Core.Risk
 @using VScanMagic.Core.Services
+@using VScanMagic.Review.Services
+@using VScanMagic.ConnectSecure
 @inject IReviewSessionRepository SessionRepo
 @inject NavigationManager Nav
 @inject RmitPlusSettingsService RmitPlusSettings
 @inject VScanMagicOptions Options
 @inject SettingsService SettingsSvc
+@inject CveEnrichmentService CveEnrichment
+@inject ConnectSecureClient ConnectSecure
+@inject ConnectSecurePatchService PatchService
+@inject ConnectSecureReviewSuppressService ReviewSuppress
 
 <PageTitle>Review Session</PageTitle>
 
@@ -21,7 +27,7 @@ else
 {
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
-            <h1>@_session.ClientName</h1>
+            <h1>@_session.ClientName <HelpTip Text="Live review session. Use Deliverables for copy-paste client content and Export for report files." AlignEnd="true" /></h1>
             <p class="text-muted mb-0">
                 Scan: @_session.ScanDate | Presenter: @_session.Presenter | Export set: @ExportSetLabel()
                 | Client type: @(_session.IsRmitPlus ? "RMIT+" : "RMIT/CMIT")
@@ -45,6 +51,7 @@ else
             @if (!_readOnly)
             {
                 <a class="btn btn-outline-secondary me-2" href="@($"/review/{SessionId}?mode=client")" target="_blank">Open Client View</a>
+                <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">Deliverables <HelpTip Text="Copy ticket instructions, email (paste OneDrive links here), time estimate, and Manage PSA notes." /></a>
                 <a class="btn btn-success" href="@($"/export/{SessionId}")">Export</a>
             }
             else
@@ -59,7 +66,7 @@ else
         <div class="alert alert-success py-1">@_saveStatus</div>
     }
 
-    @if (GetOrderedFindings().Count == 0)
+    @if (_orderedFindings.Count == 0)
     {
         <div class="alert alert-warning">
             <strong>No findings in this session.</strong>
@@ -79,7 +86,12 @@ else
         <ul class="nav nav-tabs mb-3">
             <li class="nav-item">
                 <button type="button" class="nav-link @(_activeTab == ReviewTab ? "active" : "")" @onclick="() => SetActiveTab(ReviewTab)">
-                    Findings review
+                    Findings review <HelpTip Text="Walk the export set with the client — edit remediation, notes, hosts, and ConnectSecure suppress." />
+                </button>
+            </li>
+            <li class="nav-item">
+                <button type="button" class="nav-link @(_activeTab == AddToExportTab ? "active" : "")" @onclick="() => SetActiveTab(AddToExportTab)">
+                    Add to export (@CandidateCount()) <HelpTip Text="Network and registry findings waiting to be promoted into the client report." />
                 </button>
             </li>
             <li class="nav-item">
@@ -90,7 +102,7 @@ else
         </ul>
     }
 
-    @if (GetOrderedFindings().Count > 0 && (_readOnly || _activeTab == TimeEstimatesTab))
+    @if (_orderedFindings.Count > 0 && (_readOnly || _activeTab == TimeEstimatesTab))
     {
         <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -124,7 +136,7 @@ else
                         </thead>
                         <tbody>
                             @{
-                                var timeGroups = GetTimeEstimateGroups();
+                                var timeGroups = _timeEstimateGroups;
                             }
                             @for (var gi = 0; gi < timeGroups.Count; gi++)
                             {
@@ -191,7 +203,63 @@ else
         </div>
     }
 
-    @if (GetOrderedFindings().Count > 0 && (_readOnly || _activeTab == ReviewTab))
+    @if (GetOrderedFindings().Count > 0 && !_readOnly && _activeTab == AddToExportTab)
+    {
+        <div class="alert alert-info py-2">
+            Network and registry findings are never auto-ranked into Top N. Review every item below and
+            <strong>Add to export</strong> for anything that belongs on tonight's client review.
+            Application reserves ranked below the suggested Top @_session.ExportTopN are also listed here.
+        </div>
+
+        <div class="btn-group btn-group-sm mb-3">
+            <button type="button" class="btn @CandidateFilterClass(null)" @onclick="() => SetCandidateFilter(null)">All (@CandidateCount(null))</button>
+            <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Network)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Network)">Network (@CandidateCount(VulnerabilitySourceHelper.Network))</button>
+            <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Registry)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Registry)">Registry (@CandidateCount(VulnerabilitySourceHelper.Registry))</button>
+            <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Application)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Application)">Application reserve (@CandidateCount(VulnerabilitySourceHelper.Application))</button>
+        </div>
+
+        @if (_candidateFindings.Count == 0)
+        {
+            <div class="alert alert-success mb-0">All visible candidates are already in the export set.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Source</th>
+                            <th>Product</th>
+                            <th>Severity</th>
+                            <th class="text-end">Risk</th>
+                            <th class="text-end">EPSS</th>
+                            <th class="text-end">Hosts</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var candidate in _candidateFindings)
+                        {
+                            <tr>
+                                <td><span class="badge bg-secondary">@candidate.Source</span></td>
+                                <td class="text-break">@candidate.Product</td>
+                                <td>@ReviewCandidatePool.SeverityLabel(candidate)</td>
+                                <td class="text-end">@candidate.RiskScore.ToString("N2")</td>
+                                <td class="text-end">@candidate.Epss.ToString("N4")</td>
+                                <td class="text-end">@IncludedHostCount(candidate)</td>
+                                <td class="text-end text-nowrap">
+                                    <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => PromoteCandidate(candidate)">Add to export</button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => PreviewCandidate(candidate)">Preview</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+
+    @if (_orderedFindings.Count > 0 && (_readOnly || _activeTab == ReviewTab))
     {
     <div class="row">
         <div class="col-md-4">
@@ -205,23 +273,37 @@ else
                     </div>
                 </div>
             }
-            <div class="list-group">
-                @foreach (var f in GetOrderedFindings())
-                {
-                    var exportRank = ReviewSessionRanker.GetExportRank(_session, f);
+            <div class="list-group" style="max-height: 70vh; overflow-y: auto;">
+                <Virtualize Items="_orderedFindings" Context="f" ItemSize="88">
                     <button type="button"
                             class="list-group-item list-group-item-action @(IsFindingSelected(f) ? "active" : "") @FindingListClass(f)"
                             @onclick="e => OnFindingClick(f, e)">
                         <div class="d-flex justify-content-between align-items-start gap-2">
                             <div class="flex-grow-1 text-break">
-                                @if (exportRank.HasValue)
+                                @if (ReviewSessionRanker.GetExportRank(_session!, f) is int exportRank)
                                 {
                                     <strong>@exportRank.</strong>@(" ")@f.Product
+                                    @if (f.ManuallyPromoted)
+                                    {
+                                        <span class="badge bg-primary ms-1">Added</span>
+                                    }
+                                }
+                                else if (f.ConnectSecureSuppressed)
+                                {
+                                    <span class="text-muted"><s>#@f.OriginalRank @f.Product</s></span>
+                                    <span class="badge bg-warning text-dark ms-1">Suppressed</span>
                                 }
                                 else if (IsReserveFinding(f))
                                 {
                                     <span class="text-muted">#@f.OriginalRank @f.Product</span>
-                                    <span class="badge bg-light text-dark ms-1">Reserve</span>
+                                    @if (VulnerabilitySourceHelper.IsManualCandidateSource(f.Source))
+                                    {
+                                        <span class="badge bg-info text-dark ms-1">@f.Source</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-light text-dark ms-1">Reserve</span>
+                                    }
                                 }
                                 else if (f.ExcludedFromExport)
                                 {
@@ -231,9 +313,10 @@ else
                             </div>
                             <span class="badge bg-dark flex-shrink-0">@f.RiskScore.ToString("N2")</span>
                         </div>
-                        <small class="d-block mt-1">@f.Status · @IncludedHostCount(f) host(s)@FormatFindingBadges(f)</small>
+                        <small class="d-block mt-1">@FormatFindingRiskSummary(f)</small>
+                        <small class="d-block">@f.Status · @IncludedHostCount(f) host(s)@FormatFindingBadges(f)</small>
                     </button>
-                }
+                </Virtualize>
             </div>
             @if (!_readOnly)
             {
@@ -249,12 +332,23 @@ else
                             <strong>@FormatFindingTitle(_selected)</strong> (@_selected.Source)
                             @if (!_readOnly)
                             {
-                                <div class="form-check mt-2 mb-0">
-                                    <input class="form-check-input" type="checkbox" checked="@_selected.IncludeInExport"
-                                           @onchange="e => SetFindingExport(e.Value is true)" id="includeExport" />
-                                    <label class="form-check-label" for="includeExport">Include finding in export</label>
-                                </div>
-                                <div class="form-text">Uncheck to drop this item — the next ranked vulnerability promotes into the export set (@ExportSetLabel()). Document why with Status and Meeting Notes.</div>
+                                @if (_selected.ConnectSecureSuppressed)
+                                {
+                                    <span class="badge bg-warning text-dark mt-2">Suppressed in ConnectSecure</span>
+                                    @if (!string.IsNullOrWhiteSpace(_selected.SuppressionReason))
+                                    {
+                                        <div class="form-text">@_selected.SuppressionReason@if (!string.IsNullOrWhiteSpace(_selected.SuppressionComments)) { <text> — @_selected.SuppressionComments</text> }</div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="form-check mt-2 mb-0">
+                                        <input class="form-check-input" type="checkbox" checked="@_selected.IncludeInExport"
+                                               @onchange="e => SetFindingExport(e.Value is true)" id="includeExport" />
+                                        <label class="form-check-label" for="includeExport">Include finding in export</label>
+                                    </div>
+                                    <div class="form-text">Uncheck to drop this item — the next application reserve promotes into the suggested export set (@ExportSetLabel()). Network/registry items are added from the Add to export tab.</div>
+                                }
                             }
                             else if (!_selected.IncludeInExport || _selected.ExcludedFromExport)
                             {
@@ -263,7 +357,7 @@ else
                         </div>
                     </div>
                     <div class="card-body">
-                        <p>Risk: @_selected.RiskScore.ToString("N2") | EPSS: @_selected.Epss.ToString("N4") | CVSS: @_selected.AvgCvss.ToString("N2") | Vulns: @_selected.VulnCount</p>
+                        <p>@FormatFindingRiskSummary(_selected)</p>
 
                         @if (!_readOnly)
                         {
@@ -304,6 +398,170 @@ else
                                     Applies to grouped products (Visual C++, .NET, etc.).
                                 </div>
                             </div>
+                            @if (ConnectSecure.IsConfigured)
+                            {
+                                <div class="mb-3 border rounded p-3">
+                                    <label class="form-label mb-2">ConnectSecure suppression <HelpTip Text="Company-wide suppress in ConnectSecure. Click Load suppress options, pick CVE problem or remediation item, then Suppress. Requires session company id." AlignEnd="true" /></label>
+                                    @if (!TryGetCompanyId(out _))
+                                    {
+                                        <p class="small text-warning mb-2">Set the ConnectSecure company id for this session to suppress from review.</p>
+                                        <div class="row g-2 align-items-end mb-2">
+                                            <div class="col-sm-4">
+                                                <label class="form-label small mb-1" for="sessionCompanyId">Company id</label>
+                                                <input id="sessionCompanyId" class="form-control form-control-sm" @bind="_sessionCompanyId" placeholder="e.g. 12345" />
+                                            </div>
+                                            <div class="col-sm-8">
+                                                <button type="button" class="btn btn-sm btn-outline-primary" @onclick="SaveSessionCompanyId">Save company id</button>
+                                            </div>
+                                        </div>
+                                    }
+                                    else if (_selected.ConnectSecureSuppressed)
+                                    {
+                                        <p class="small text-muted mb-2">
+                                            This finding was suppressed company-wide during review
+                                            @if (_selected.SuppressedAt.HasValue)
+                                            {
+                                                <text> on @_selected.SuppressedAt.Value.LocalDateTime.ToString("g")</text>
+                                            }.
+                                            It will not appear on future remediation lists.
+                                        </p>
+                                        @if (!string.IsNullOrWhiteSpace(_unsuppressError))
+                                        {
+                                            <div class="alert alert-danger py-1 small mb-2">@_unsuppressError</div>
+                                        }
+                                        <div class="d-flex gap-2 flex-wrap">
+                                            @if (_confirmUnsuppress)
+                                            {
+                                                <button type="button" class="btn btn-sm btn-danger" disabled="@_unsuppressBusy" @onclick="ConfirmUnsuppressFindingAsync">
+                                                    @(_unsuppressBusy ? "Removing…" : "Confirm unsuppress")
+                                                </button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_unsuppressBusy" @onclick="() => _confirmUnsuppress = false">Cancel</button>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-warning" disabled="@(_unsuppressBusy || !TryGetCompanyId(out _))" @onclick="() => _confirmUnsuppress = true">
+                                                    Unsuppress in ConnectSecure
+                                                </button>
+                                            }
+                                        </div>
+                                        <p class="form-text small mb-0">Removes the company-wide suppression in ConnectSecure and clears the suppressed state on this finding.</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="small text-muted mb-2">
+                                            Suppress company-wide in ConnectSecure. Application items use the remediation plan;
+                                            CVE/registry/network items use problem ids.
+                                        </p>
+                                        @if (!_suppressOptionsLoaded)
+                                        {
+                                            @if (_suppressMatchLoading)
+                                            {
+                                                <p class="text-muted small mb-2">Loading suppress options…</p>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!TryGetCompanyId(out _))" @onclick="LoadSuppressOptionsAsync">
+                                                    Load suppress options
+                                                </button>
+                                                @if (!TryGetCompanyId(out _))
+                                                {
+                                                    <p class="form-text small mb-0">Set the session company id above before loading.</p>
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                        @if (!string.IsNullOrWhiteSpace(_suppressStatus))
+                                        {
+                                            <p class="text-muted small mb-2">@_suppressStatus</p>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(_suppressError))
+                                        {
+                                            <div class="alert alert-danger py-1 small mb-2">@_suppressError</div>
+                                        }
+                                        @if (_suppressMatchLoading)
+                                        {
+                                            <p class="text-muted small mb-2">Loading suppress options…</p>
+                                        }
+                                        else if (!_suppressUsesProblemId)
+                                        {
+                                            @if (_suppressRemediations.Count == 0)
+                                            {
+                                                <p class="text-muted small mb-2">No remediation items for this company. Verify the company id on this session.</p>
+                                            }
+                                            else
+                                            {
+                                                <label class="form-label small mb-1" for="suppressSolutionSelect">Remediation item</label>
+                                                <select id="suppressSolutionSelect" class="form-select form-select-sm mb-2" value="@_selectedSolutionId" @onchange="OnSuppressSolutionChanged">
+                                                    <option value="0">-- Select remediation item --</option>
+                                                    @foreach (var entry in _suppressRemediations)
+                                                    {
+                                                        <option value="@entry.SolutionId">@entry.Product (solution @entry.SolutionId, @entry.AffectedAssets host(s))</option>
+                                                    }
+                                                </select>
+                                            }
+                                            @if (GetEffectiveSolutionId() <= 0)
+                                            {
+                                                <p class="text-muted small mb-2">Select a remediation item above to enable suppress.</p>
+                                            }
+                                            else if (CanSuppressSelected())
+                                            {
+                                                <p class="text-success small mb-2">Ready to suppress (@GetSuppressTargetSummary()).</p>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            @if (_suppressProblems.Count == 0 && GetEffectiveProblemId() <= 0)
+                                            {
+                                                <p class="text-muted small mb-2">No CVE problem match found. Try <a href="/vulnerability-suppress">Suppress Vulnerabilities</a> or Deep search.</p>
+                                            }
+                                            else
+                                            {
+                                                <label class="form-label small mb-1" for="suppressProblemSelect">CVE problem</label>
+                                                <select id="suppressProblemSelect" class="form-select form-select-sm mb-2" value="@_selectedProblemId" @onchange="OnSuppressProblemChanged">
+                                                    <option value="0">-- Select CVE problem --</option>
+                                                    @foreach (var entry in _suppressProblems)
+                                                    {
+                                                        <option value="@entry.ProblemId">@entry.ProblemName (problem @entry.ProblemId)</option>
+                                                    }
+                                                </select>
+                                            }
+                                            @if (GetEffectiveProblemId() <= 0)
+                                            {
+                                                <p class="text-muted small mb-2">Select a CVE problem above to enable suppress.</p>
+                                            }
+                                            else if (CanSuppressSelected())
+                                            {
+                                                <p class="text-success small mb-2">Ready to suppress (@GetSuppressTargetSummary()).</p>
+                                            }
+                                        }
+                                        <div class="row g-2">
+                                            <div class="col-md-4">
+                                                <label class="form-label small mb-1" for="suppressReason">Reason</label>
+                                                <select id="suppressReason" class="form-select form-select-sm" @bind="_suppressReason">
+                                                    <option value="False positive">False positive</option>
+                                                    <option value="Accepted risk">Accepted risk</option>
+                                                    <option value="Business requirement">Business requirement</option>
+                                                    <option value="Compensating control">Compensating control</option>
+                                                    <option value="Other">Other</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-8">
+                                                <label class="form-label small mb-1" for="suppressComments">Comments</label>
+                                                <input id="suppressComments" class="form-control form-control-sm" @bind="_suppressComments" placeholder="Optional notes for the suppression record" />
+                                            </div>
+                                        </div>
+                                        <div class="mt-2 d-flex gap-2 flex-wrap">
+                                            <button type="button" class="btn btn-sm btn-warning" disabled="@(_suppressBusy || _suppressMatchLoading || !CanSuppressSelected())" @onclick="ConfirmSuppressFindingAsync">
+                                                @(_suppressBusy ? "Suppressing…" : "Suppress in ConnectSecure")
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_suppressMatchLoading" @onclick="RetrySuppressLookupAsync">Deep search</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_suppressMatchLoading" @onclick="LoadSuppressOptionsAsync">Reload options</button>
+                                        </div>
+                                        }
+                                    }
+                                </div>
+                            }
                             <div class="mb-3">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <label class="form-label mb-0">Affected systems</label>
@@ -419,6 +677,29 @@ else
                                 <label class="form-label">Revised Remediation</label>
                                 <textarea class="form-control" rows="6" @bind="_selected.RevisedRemediation" @bind:after="ScheduleSave"></textarea>
                             </div>
+                            @if (GetSelectedCveIds().Count > 0)
+                            {
+                                <div class="mb-3">
+                                    <label class="form-label">CVE references</label>
+                                    <div class="d-flex flex-wrap gap-2 mb-2">
+                                        @foreach (var cve in GetSelectedCveIds())
+                                        {
+                                            <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
+                                    {
+                                        <div class="small border rounded p-2 bg-light mb-2" style="white-space: pre-wrap;">@_selected.NvdEnrichment</div>
+                                    }
+                                    <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
+                                        @(_nvdBusy ? "Fetching NVD…" : "Fetch NVD details")
+                                    </button>
+                                    @if (!string.IsNullOrWhiteSpace(_nvdStatus))
+                                    {
+                                        <span class="form-text ms-2">@_nvdStatus</span>
+                                    }
+                                </div>
+                            }
                             <div class="mb-3">
                                 <label class="form-label">Meeting Notes</label>
                                 <textarea class="form-control" rows="3" @bind="_selected.MeetingNotes" @bind:after="ScheduleSave"></textarea>
@@ -447,6 +728,7 @@ else
 
 @code {
     private const string ReviewTab = "review";
+    private const string AddToExportTab = "add";
     private const string TimeEstimatesTab = "time";
 
     private static readonly decimal[] TimeEstimatePresets = [0.25m, 0.5m, 0.75m, 1m, 1.5m, 2m, 2.5m, 3m, 4m, 5m, 6m, 8m];
@@ -466,8 +748,35 @@ else
     private int? _findingAnchorRank;
     private readonly CheckboxRangeColumn _hostIncludeRange = new();
     private readonly CheckboxRangeColumn _afterHoursRange = new();
+    private bool _nvdBusy;
+    private string? _nvdStatus;
     private readonly CheckboxRangeColumn _thirdPartyRange = new();
     private readonly CheckboxRangeColumn _ticketGeneratedRange = new();
+    private string? _candidateSourceFilter;
+    private List<SuppressibleRemediationEntry> _suppressRemediations = [];
+    private List<SuppressibleProblemEntry> _suppressProblems = [];
+    private bool _suppressUsesProblemId;
+    private int _selectedSolutionId;
+    private int _selectedProblemId;
+    private string _sessionCompanyId = "";
+    private bool _suppressMatchLoading;
+    private bool _suppressOptionsLoaded;
+    private bool _suppressBusy;
+    private bool _confirmUnsuppress;
+    private bool _unsuppressBusy;
+    private string? _unsuppressError;
+    private string? _suppressError;
+    private string? _suppressStatus;
+    private string _suppressReason = "False positive";
+    private string _suppressComments = "";
+    private int _suppressLoadGeneration;
+    private int? _cachedRemediationCompanyId;
+    private List<SuppressibleRemediationEntry> _cachedRemediations = [];
+    private readonly Dictionary<string, SuppressibleProblemEntry?> _problemLookupCache = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _suppressLoadCts;
+    private List<ReviewFinding> _orderedFindings = [];
+    private List<ReviewFinding> _candidateFindings = [];
+    private List<TimeEstimateGroupRow> _timeEstimateGroups = [];
 
     private enum TimeEstimateCheckbox { AfterHours, ThirdParty, TicketGenerated }
 
@@ -497,11 +806,28 @@ else
                 _findingAnchorRank = first.OriginalRank;
                 SelectFinding(first);
             }
+
+            _sessionCompanyId = _session.CompanyId ?? "";
+
+            if (!_readOnly)
+                _ = AutoEnrichMissingAsync();
         }
+
+        RefreshFindingCaches();
     }
 
-    private List<ReviewFinding> GetOrderedFindings() =>
-        (_session?.Findings ?? []).OrderBy(x => x.OriginalRank).ToList();
+    private void RefreshFindingCaches()
+    {
+        _orderedFindings = (_session?.Findings ?? []).OrderBy(x => x.OriginalRank).ToList();
+        _candidateFindings = _session is null
+            ? []
+            : ReviewCandidatePool.GetCandidates(_session, _candidateSourceFilter).ToList();
+        _timeEstimateGroups = _session is null
+            ? []
+            : ReviewFindingTimeEstimate.GetExportGroups(_session).ToList();
+    }
+
+    private IReadOnlyList<ReviewFinding> GetOrderedFindings() => _orderedFindings;
 
     private bool IsFindingSelected(ReviewFinding finding) =>
         _selectedFindingRanks.Contains(finding.OriginalRank);
@@ -544,20 +870,30 @@ else
 
         foreach (var finding in _session.Findings.Where(f => _selectedFindingRanks.Contains(f.OriginalRank)))
         {
-            finding.IncludeInExport = include;
-            finding.ExcludedFromExport = !include;
+            if (finding.ConnectSecureSuppressed)
+                continue;
+
+            if (include && (VulnerabilitySourceHelper.IsManualCandidateSource(finding.Source) ||
+                            ReviewCandidatePool.IsApplicationReserve(finding)))
+                ReviewSessionRanker.PromoteToExport(_session, finding);
+            else
+                ReviewSessionRanker.SetExportIncluded(_session, finding, include);
         }
 
-        ReviewSessionRanker.Rebalance(_session);
         ScheduleSave();
     }
 
     private string ExportSetLabel()
     {
         if (_session is null) return "";
-        return _session.ExportTopN <= 0
-            ? "All"
-            : $"Top {_session.ExportTopN}";
+        var exportCount = ReviewSessionRanker.GetExportFindings(_session).Count;
+        var manual = _session.Findings.Count(f => f.IncludeInExport && f.ManuallyPromoted);
+        if (_session.ExportTopN <= 0)
+            return $"All ({exportCount})";
+
+        return manual > 0
+            ? $"{exportCount} in export (Top {_session.ExportTopN} suggested + {manual} added)"
+            : $"{exportCount} in export (Top {_session.ExportTopN})";
     }
 
     private string FormatFindingTitle(ReviewFinding finding)
@@ -572,15 +908,79 @@ else
     private bool IsReserveFinding(ReviewFinding finding) =>
         _session is not null &&
         !finding.IncludeInExport &&
-        !finding.ExcludedFromExport;
+        !finding.ExcludedFromExport &&
+        !finding.ConnectSecureSuppressed;
 
     private void SetFindingExport(bool include)
     {
         if (_selected is null || _session is null) return;
-        _selected.IncludeInExport = include;
-        _selected.ExcludedFromExport = !include;
-        ReviewSessionRanker.Rebalance(_session);
+        ReviewSessionRanker.SetExportIncluded(_session, _selected, include);
         ScheduleSave();
+    }
+
+    private int CandidateCount(string? sourceFilter = null) =>
+        _session is null ? 0 : ReviewCandidatePool.CountCandidates(_session, sourceFilter);
+
+    private IReadOnlyList<ReviewFinding> GetCandidateFindings() => _candidateFindings;
+
+    private void SetCandidateFilter(string? source)
+    {
+        _candidateSourceFilter = source;
+        RefreshFindingCaches();
+    }
+
+    private string CandidateFilterClass(string? source) =>
+        string.Equals(_candidateSourceFilter, source, StringComparison.OrdinalIgnoreCase) ||
+        (_candidateSourceFilter is null && source is null)
+            ? "btn-primary"
+            : "btn-outline-primary";
+
+    private async Task PromoteCandidate(ReviewFinding finding)
+    {
+        if (_session is null) return;
+        ReviewSessionRanker.PromoteToExport(_session, finding);
+        _selectedFindingRanks = [finding.OriginalRank];
+        _findingAnchorRank = finding.OriginalRank;
+        SelectFinding(finding);
+        SetActiveTab(ReviewTab);
+        ScheduleSave();
+
+        if (CveEnrichmentPolicy.ShouldEnrich(finding))
+            await EnrichFindingInBackgroundAsync(finding);
+    }
+
+    private async Task EnrichFindingInBackgroundAsync(ReviewFinding finding)
+    {
+        if (_session is null || _nvdBusy)
+            return;
+
+        _nvdBusy = true;
+        try
+        {
+            if (await CveEnrichment.EnrichFindingAsync(finding, _userSettings, applyToRemediation: true))
+            {
+                await SessionRepo.SaveAsync(_session);
+                _saveStatus = $"NVD details added for {finding.Product} at {DateTime.Now:HH:mm:ss}";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            _nvdStatus = ex.Message;
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            _nvdBusy = false;
+        }
+    }
+
+    private void PreviewCandidate(ReviewFinding finding)
+    {
+        _selectedFindingRanks = [finding.OriginalRank];
+        _findingAnchorRank = finding.OriginalRank;
+        SelectFinding(finding);
+        SetActiveTab(ReviewTab);
     }
 
     private void SelectFinding(ReviewFinding f)
@@ -590,12 +990,438 @@ else
         f.AffectedSystems ??= [];
         _tasksText = string.Join(Environment.NewLine, f.Tasks.Select(t => t.Text));
         _hostIncludeRange.Reset();
+        _confirmUnsuppress = false;
+        _unsuppressError = null;
+        _suppressError = null;
+        _suppressStatus = null;
+        _suppressOptionsLoaded = false;
+        _selectedSolutionId = 0;
+        _selectedProblemId = 0;
+        _suppressRemediations = [];
+        _suppressProblems = [];
+        _suppressLoadCts?.Cancel();
+    }
+
+    private Task LoadSuppressOptionsAsync()
+    {
+        if (_selected is null || _selected.ConnectSecureSuppressed)
+            return Task.CompletedTask;
+
+        ClearProblemLookupCacheForFinding(_selected);
+        return LoadSuppressOptionsAsync(_selected, exhaustive: false);
+    }
+
+    private bool TryGetCompanyId(out int companyId)
+    {
+        companyId = 0;
+        if (_session is null || string.IsNullOrWhiteSpace(_session.CompanyId))
+            return false;
+
+        return int.TryParse(_session.CompanyId.Trim(), out companyId) && companyId > 0;
+    }
+
+    private void OnSuppressProblemChanged(ChangeEventArgs e)
+    {
+        _selectedProblemId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+    }
+
+    private void OnSuppressSolutionChanged(ChangeEventArgs e)
+    {
+        _selectedSolutionId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+    }
+
+    private string GetSuppressTargetSummary()
+    {
+        if (_suppressUsesProblemId)
+        {
+            var problemId = GetEffectiveProblemId();
+            var problem = _suppressProblems.FirstOrDefault(p => p.ProblemId == problemId);
+            return problem is not null
+                ? $"problem {problemId}, {problem.ProblemName}"
+                : $"problem {problemId}";
+        }
+
+        var solutionId = GetEffectiveSolutionId();
+        var solution = _suppressRemediations.FirstOrDefault(r => r.SolutionId == solutionId);
+        return solution is not null
+            ? $"solution {solutionId}, {solution.Product}"
+            : $"solution {solutionId}";
+    }
+
+    private async Task LoadSuppressOptionsAsync(ReviewFinding finding, bool exhaustive)
+    {
+        if (!TryGetCompanyId(out var companyId))
+            return;
+
+        _suppressLoadCts?.Cancel();
+        _suppressLoadCts?.Dispose();
+        _suppressLoadCts = new CancellationTokenSource(exhaustive ? TimeSpan.FromMinutes(3) : TimeSpan.FromSeconds(75));
+        var loadCt = _suppressLoadCts.Token;
+
+        var generation = ++_suppressLoadGeneration;
+        _suppressMatchLoading = true;
+        _suppressError = null;
+        _suppressStatus = null;
+        _selectedSolutionId = 0;
+        _selectedProblemId = 0;
+        _suppressUsesProblemId = !ReviewSuppressPathHelper.UsesApplicationSolutionPath(
+            finding.Source, finding.Product, finding.CveIds);
+        var shouldSaveSession = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            if (!_suppressUsesProblemId)
+            {
+                if (_cachedRemediationCompanyId != companyId)
+                {
+                    _cachedRemediations = (await PatchService.GetSuppressibleRemediationsAsync(companyId, loadCt)).ToList();
+                    _cachedRemediationCompanyId = companyId;
+                }
+
+                _suppressRemediations = _cachedRemediations;
+
+                if (generation != _suppressLoadGeneration)
+                    return;
+
+                var match = SuppressibleRemediationMatcher.Match(_suppressRemediations, finding.Product);
+                if (match.HasMatch)
+                    _selectedSolutionId = match.Entry!.SolutionId;
+                else if (match.AmbiguousMatches.Count == 1)
+                    _selectedSolutionId = match.AmbiguousMatches[0].SolutionId;
+
+                _suppressStatus = match.HasMatch
+                    ? $"Auto-selected: {match.Entry!.Product} (solution {_selectedSolutionId})."
+                    : _suppressRemediations.Count == 0
+                        ? "No remediation items returned — verify company id."
+                        : $"Select a remediation item ({_suppressRemediations.Count} available).";
+
+                EnsureSolutionSelection(finding);
+            }
+            else
+            {
+                var cveIds = CveReferenceHelper.IsCveOnlyProduct(finding.Product)
+                    ? CveReferenceHelper.SplitCveIds(finding.Product)
+                    : CveReferenceHelper.SplitCveIds(finding.CveIds);
+
+                if (finding.ConnectSecureProblemId is > 0)
+                {
+                    _selectedProblemId = finding.ConnectSecureProblemId.Value;
+                    _suppressProblems =
+                    [
+                        new SuppressibleProblemEntry(
+                            finding.ConnectSecureProblemId.Value,
+                            cveIds.FirstOrDefault() ?? finding.Product,
+                            finding.AffectedSystems?.Count ?? 0)
+                    ];
+                    _suppressStatus = $"Using saved problem id {_selectedProblemId}.";
+                }
+                else
+                {
+                    var hostIdentifiers = GetSuppressHostIdentifiers(finding);
+                    foreach (var cve in cveIds)
+                    {
+                        var cacheKey = $"{companyId}|{cve}";
+                        if (!_problemLookupCache.TryGetValue(cacheKey, out var lookedUp))
+                        {
+                            try
+                            {
+                                lookedUp = exhaustive
+                                    ? await PatchService.LookupProblemByNameExhaustiveAsync(companyId, cve, hostIdentifiers, loadCt)
+                                    : await PatchService.LookupProblemByNameAsync(companyId, cve, finding.Source, hostIdentifiers, loadCt);
+                            }
+                            catch (OperationCanceledException) when (loadCt.IsCancellationRequested)
+                            {
+                                if (generation == _suppressLoadGeneration)
+                                    _suppressError = "ConnectSecure lookup timed out. Try Deep search (uses affected hosts) or verify API connectivity.";
+                                return;
+                            }
+
+                            if (lookedUp is not null)
+                                _problemLookupCache[cacheKey] = lookedUp;
+                        }
+
+                        if (generation != _suppressLoadGeneration)
+                            return;
+
+                        if (lookedUp is null)
+                            continue;
+
+                        _selectedProblemId = lookedUp.ProblemId;
+                        finding.ConnectSecureProblemId = lookedUp.ProblemId;
+                        shouldSaveSession = true;
+                        _suppressProblems = [lookedUp];
+                        _suppressStatus = $"Auto-selected: {lookedUp.ProblemName} (problem {_selectedProblemId}).";
+                        break;
+                    }
+
+                    if (_selectedProblemId <= 0 && exhaustive)
+                    {
+                        foreach (var cve in cveIds)
+                        {
+                            var lookedUp = await PatchService.LookupProblemByNameExhaustiveAsync(
+                                companyId, cve, hostIdentifiers, loadCt);
+                            if (generation != _suppressLoadGeneration)
+                                return;
+
+                            if (lookedUp is null)
+                                continue;
+
+                            _selectedProblemId = lookedUp.ProblemId;
+                            finding.ConnectSecureProblemId = lookedUp.ProblemId;
+                            shouldSaveSession = true;
+                            _suppressProblems = [lookedUp];
+                            _suppressStatus = $"Auto-selected: {lookedUp.ProblemName} (problem {_selectedProblemId}).";
+                            break;
+                        }
+                    }
+
+                    if (_selectedProblemId <= 0)
+                    {
+                        _suppressStatus = exhaustive
+                            ? $"No problem id found for {finding.Product} in ConnectSecure."
+                            : $"No quick match for {finding.Product}. Click Deep search for a slower full lookup.";
+                    }
+                    else if (string.IsNullOrWhiteSpace(_suppressStatus))
+                    {
+                        _suppressStatus = $"Auto-selected problem id {_selectedProblemId}.";
+                    }
+                }
+
+                EnsureProblemSelection(finding);
+            }
+        }
+        catch (OperationCanceledException) when (loadCt.IsCancellationRequested)
+        {
+            if (generation == _suppressLoadGeneration)
+                _suppressError = "ConnectSecure lookup timed out. Try Deep search (uses affected hosts) or verify API connectivity.";
+        }
+        catch (Exception ex)
+        {
+            if (generation == _suppressLoadGeneration)
+                _suppressError = ex.Message;
+        }
+        finally
+        {
+            if (generation == _suppressLoadGeneration)
+            {
+                if (_suppressUsesProblemId)
+                    EnsureProblemSelection(finding);
+                else
+                    EnsureSolutionSelection(finding);
+
+                _suppressMatchLoading = false;
+                _suppressOptionsLoaded = true;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+
+        if (shouldSaveSession && _session is not null)
+            await SessionRepo.SaveAsync(_session);
+    }
+
+    private static IReadOnlyList<string> GetSuppressHostIdentifiers(ReviewFinding finding) =>
+        (finding.AffectedSystems ?? [])
+            .SelectMany(s => new[] { s.Ip, s.HostName })
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private bool CanSuppressSelected()
+    {
+        if (_selected is null || _selected.ConnectSecureSuppressed || !_suppressOptionsLoaded || !TryGetCompanyId(out _))
+            return false;
+
+        return _suppressUsesProblemId
+            ? GetEffectiveProblemId() > 0
+            : GetEffectiveSolutionId() > 0;
+    }
+
+    private int GetEffectiveProblemId()
+    {
+        if (_selectedProblemId > 0)
+            return _selectedProblemId;
+
+        if (_selected?.ConnectSecureProblemId is int savedProblemId and > 0)
+            return savedProblemId;
+
+        return _suppressProblems.Count == 1 ? _suppressProblems[0].ProblemId : 0;
+    }
+
+    private int GetEffectiveSolutionId()
+    {
+        if (_selectedSolutionId > 0)
+            return _selectedSolutionId;
+
+        if (_selected?.ConnectSecureSolutionId is int savedSolutionId and > 0)
+            return savedSolutionId;
+
+        return _suppressRemediations.Count == 1 ? _suppressRemediations[0].SolutionId : 0;
+    }
+
+    private void EnsureProblemSelection(ReviewFinding finding)
+    {
+        if (finding.ConnectSecureProblemId is int savedProblemId and > 0)
+            _selectedProblemId = savedProblemId;
+        else if (_selectedProblemId <= 0 && _suppressProblems.Count == 1)
+            _selectedProblemId = _suppressProblems[0].ProblemId;
+    }
+
+    private void EnsureSolutionSelection(ReviewFinding finding)
+    {
+        if (finding.ConnectSecureSolutionId is int savedSolutionId and > 0)
+            _selectedSolutionId = savedSolutionId;
+        else if (_selectedSolutionId <= 0 && _suppressRemediations.Count == 1)
+            _selectedSolutionId = _suppressRemediations[0].SolutionId;
+    }
+
+    private void ClearProblemLookupCacheForFinding(ReviewFinding finding)
+    {
+        if (!TryGetCompanyId(out var companyId))
+            return;
+
+        var cveIds = CveReferenceHelper.IsCveOnlyProduct(finding.Product)
+            ? CveReferenceHelper.SplitCveIds(finding.Product)
+            : CveReferenceHelper.SplitCveIds(finding.CveIds);
+
+        foreach (var cve in cveIds)
+            _problemLookupCache.Remove($"{companyId}|{cve}");
+    }
+
+    private async Task RetrySuppressLookupAsync()
+    {
+        if (_selected is null || !TryGetCompanyId(out var companyId))
+            return;
+
+        _cachedRemediationCompanyId = null;
+        _cachedRemediations = [];
+        ClearProblemLookupCacheForFinding(_selected);
+        ReviewSuppress.InvalidateCache(companyId);
+        await LoadSuppressOptionsAsync(_selected, exhaustive: true);
+    }
+
+    private async Task SaveSessionCompanyId()
+    {
+        if (_session is null)
+            return;
+
+        _session.CompanyId = _sessionCompanyId.Trim();
+        await SessionRepo.SaveAsync(_session);
+        _saveStatus = "Company id saved.";
+    }
+
+    private async Task ConfirmSuppressFindingAsync()
+    {
+        if (_session is null || _selected is null || !TryGetCompanyId(out var companyId))
+            return;
+
+        ReviewSuppressEntry? entry = null;
+        if (_suppressUsesProblemId)
+        {
+            var problemId = GetEffectiveProblemId();
+            if (problemId <= 0)
+                return;
+
+            var problem = _suppressProblems.FirstOrDefault(p => p.ProblemId == problemId);
+            var label = problem?.ProblemName
+                ?? (CveReferenceHelper.IsCveOnlyProduct(_selected.Product) ? _selected.Product : _selected.CveIds);
+            entry = new ReviewSuppressEntry(ReviewSuppressTargetKind.Problem, problemId, label, problem?.AffectedAssets ?? 0);
+        }
+        else
+        {
+            var solutionId = GetEffectiveSolutionId();
+            if (solutionId <= 0)
+                return;
+
+            var solution = _suppressRemediations.FirstOrDefault(r => r.SolutionId == solutionId);
+            entry = solution is not null
+                ? ReviewSuppressEntry.FromSolution(solution)
+                : new ReviewSuppressEntry(ReviewSuppressTargetKind.Solution, solutionId, _selected.Product, 0);
+        }
+
+        _suppressBusy = true;
+        _suppressError = null;
+        try
+        {
+            var result = await ReviewSuppress.SuppressCompanyWideAsync(
+                companyId,
+                entry,
+                _selected.Product,
+                _suppressReason,
+                _suppressComments);
+
+            if (entry.Kind == ReviewSuppressTargetKind.Problem)
+                _selected.ConnectSecureProblemId = entry.Id;
+            else
+                _selected.ConnectSecureSolutionId = entry.Id;
+
+            var recordId = await ReviewSuppress.ResolveSuppressRecordIdAsync(
+                companyId,
+                _selected.ConnectSecureSuppressRecordId,
+                _selected.ConnectSecureProblemId,
+                _selected.ConnectSecureSolutionId);
+            if (recordId is > 0)
+                _selected.ConnectSecureSuppressRecordId = recordId;
+
+            ReviewSessionRanker.MarkConnectSecureSuppressed(_session, _selected, _suppressReason, _suppressComments);
+            _suppressOptionsLoaded = false;
+            _saveStatus = result.Message;
+            await SessionRepo.SaveAsync(_session);
+        }
+        catch (Exception ex)
+        {
+            _suppressError = ex.Message;
+        }
+        finally
+        {
+            _suppressBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ConfirmUnsuppressFindingAsync()
+    {
+        if (_session is null || _selected is null || !_selected.ConnectSecureSuppressed || !TryGetCompanyId(out var companyId))
+            return;
+
+        _unsuppressBusy = true;
+        _unsuppressError = null;
+        try
+        {
+            var recordId = await ReviewSuppress.ResolveSuppressRecordIdAsync(
+                companyId,
+                _selected.ConnectSecureSuppressRecordId,
+                _selected.ConnectSecureProblemId,
+                _selected.ConnectSecureSolutionId);
+            if (recordId is not > 0)
+            {
+                _unsuppressError = "Could not find the ConnectSecure suppression record. It may already be removed.";
+                return;
+            }
+
+            var result = await ReviewSuppress.UnsuppressCompanyWideAsync(recordId.Value);
+            ReviewSessionRanker.MarkConnectSecureUnsuppressed(_session, _selected);
+            _confirmUnsuppress = false;
+            _suppressOptionsLoaded = false;
+            _saveStatus = result.Message;
+            await SessionRepo.SaveAsync(_session);
+        }
+        catch (Exception ex)
+        {
+            _unsuppressError = ex.Message;
+        }
+        finally
+        {
+            _unsuppressBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private static string FormatAffectedSystems(ReviewFinding finding) =>
         FindingExportDetails.FormatAffectedSystemsInline(finding);
 
     private static string FindingListClass(ReviewFinding finding) =>
+        finding.ConnectSecureSuppressed ? "opacity-50" :
         finding.IncludeInExport ? "" : "opacity-75";
 
     private static string IncludedHostCount(ReviewFinding finding)
@@ -735,11 +1561,13 @@ else
         _activeTab = tab;
     }
 
-    private IReadOnlyList<TimeEstimateGroupRow> GetTimeEstimateGroups() =>
-        _session is null ? [] : ReviewFindingTimeEstimate.GetExportGroups(_session);
+    private IReadOnlyList<TimeEstimateGroupRow> GetTimeEstimateGroups() => _timeEstimateGroups;
 
     private static string GetTimeEstimateRowId(TimeEstimateGroupRow row) =>
         row.GroupKey.Replace(' ', '-').Replace('.', '-').ToLowerInvariant();
+
+    private static string FormatFindingRiskSummary(ReviewFinding finding) =>
+        $"Risk: {finding.RiskScore:N2} | EPSS: {finding.Epss:N4} | CVSS: {finding.AvgCvss:N2} | Vulns: {finding.VulnCount}";
 
     private string FormatFindingBadges(ReviewFinding finding)
     {
@@ -783,6 +1611,7 @@ else
     private void ScheduleSave()
     {
         if (_readOnly || _session is null) return;
+        RefreshFindingCaches();
         _saveCts?.Cancel();
         _saveCts = new CancellationTokenSource();
         _ = SaveDebouncedAsync(_saveCts.Token);
@@ -792,12 +1621,76 @@ else
     {
         try
         {
-            await Task.Delay(500, ct);
+            await Task.Delay(1500, ct);
             if (_session is null) return;
             await SessionRepo.SaveAsync(_session, ct);
             _saveStatus = $"Saved {DateTime.Now:HH:mm:ss}";
             await InvokeAsync(StateHasChanged);
         }
         catch (TaskCanceledException) { }
+    }
+
+    private IReadOnlyList<string> GetSelectedCveIds() =>
+        _selected is null ? [] : FindingExportDetails.GetCveIds(_selected);
+
+    private async Task FetchNvdForSelected()
+    {
+        if (_session is null || _selected is null)
+            return;
+
+        _nvdBusy = true;
+        _nvdStatus = null;
+        try
+        {
+            var updated = await CveEnrichment.EnrichFindingAsync(_selected, _userSettings, applyToRemediation: true);
+            if (updated)
+            {
+                await SessionRepo.SaveAsync(_session);
+                _nvdStatus = "NVD details applied to this finding.";
+                _saveStatus = $"Saved {DateTime.Now:HH:mm:ss}";
+            }
+            else
+            {
+                _nvdStatus = "No NVD summary returned for these CVE IDs.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _nvdStatus = ex.Message;
+        }
+        finally
+        {
+            _nvdBusy = false;
+        }
+    }
+
+    private async Task AutoEnrichMissingAsync()
+    {
+        if (_session is null || _readOnly || _nvdBusy || !_userSettings.NvdEnrichOnIngest)
+            return;
+
+        if (!_session.Findings.Any(f => f.IncludeInExport && CveEnrichmentPolicy.ShouldEnrich(f)))
+            return;
+
+        _nvdBusy = true;
+        try
+        {
+            var count = await CveEnrichment.EnrichMissingExportAsync(_session, _userSettings);
+            if (count > 0)
+            {
+                await SessionRepo.SaveAsync(_session);
+                _saveStatus = $"Fetched NVD details for {count} finding(s) at {DateTime.Now:HH:mm:ss}";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            _nvdStatus = ex.Message;
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            _nvdBusy = false;
+        }
     }
 }

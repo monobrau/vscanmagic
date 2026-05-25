@@ -9,15 +9,15 @@
 
 <PageTitle>Configuration</PageTitle>
 
-<h1>Configuration</h1>
+<h1>Configuration <HelpTip Text="Per-client folder paths and RMIT+ covered software — not OneDrive share URLs." /></h1>
 <p class="text-muted">Company output folder mappings and RMIT+ covered software patterns.</p>
 
 <ul class="nav nav-tabs mb-3">
     <li class="nav-item">
-        <button type="button" class="nav-link @(_tab == "folders" ? "active" : "")" @onclick='() => _tab = "folders"'>Folder map</button>
+        <button type="button" class="nav-link @(_tab == "folders" ? "active" : "")" @onclick='() => _tab = "folders"'>Folder map <HelpTip Text="ConnectSecure company ID → relative path under Reports Base Path for local exports." /></button>
     </li>
     <li class="nav-item">
-        <button type="button" class="nav-link @(_tab == "covered" ? "active" : "")" @onclick='() => _tab = "covered"'>Covered software</button>
+        <button type="button" class="nav-link @(_tab == "covered" ? "active" : "")" @onclick='() => _tab = "covered"'>Covered software <HelpTip Text="Product patterns treated as first-party under RMIT+ agreements when setting Third party defaults." /></button>
     </li>
 </ul>
 
@@ -32,7 +32,7 @@
 
 @if (_tab == "folders")
 {
-    <p class="text-muted">Maps ConnectSecure company ID to client folder path under Reports Base Path (relative path, e.g. <code>Contoso/Network Documentation/Vulnerability Scans</code>).</p>
+    <p class="text-muted">Maps ConnectSecure company ID to client folder path under Reports Base Path (relative path, e.g. <code>Contoso/Network Documentation/Vulnerability Scans</code>). Local sync paths only — SharePoint share links for deliverable emails are pasted on the review Deliverables page after you export and copy links from Explorer.</p>
     <div class="mb-3">
         <button class="btn btn-outline-primary btn-sm me-2" @onclick="AddFolderEntry">Add mapping</button>
         <button class="btn btn-primary btn-sm" @onclick="SaveFolderMap">Save folder map</button>

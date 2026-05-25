@@ -94,7 +94,7 @@ For building an application remediation database (baseline of applications with 
 .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath "C:\...\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
 
 # From ConnectSecure (using saved API credentials; CompanyId from VScanMagic GUI company list)
-.\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+.\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Example Client" -UseSavedCredentials -UniqueProductsOnly
 
 # Seed Remediation Steps from ConnectSecure Fix text, or from NVD when CVE IDs are present (requires CVE/Fix columns in source)
 .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -OutputPath ".\applications-baseline.csv"

@@ -61,13 +61,15 @@ public static class FindingExportDetails
             .ToList();
 
     public static IReadOnlyList<string> GetCveIds(ReviewFinding finding) =>
-        CveReferenceHelper.SplitCveIds(finding.CveIds);
+        CveReferenceHelper.SplitCveIds(CveReferenceHelper.NormalizeFindingCveIds(finding.CveIds, finding.Product));
 
     public static string FormatCveIds(ReviewFinding finding) =>
         string.Join("; ", GetCveIds(finding));
 
     public static string FormatReferenceLinks(ReviewFinding finding, string? separator = null) =>
-        CveReferenceHelper.FormatReferenceLinks(finding.CveIds, separator);
+        CveReferenceHelper.FormatReferenceLinks(
+            CveReferenceHelper.NormalizeFindingCveIds(finding.CveIds, finding.Product),
+            separator);
 
     public static string GetRemediationText(ReviewFinding finding) =>
         string.IsNullOrWhiteSpace(finding.RevisedRemediation)

@@ -5,10 +5,11 @@
 
 <PageTitle>Templates</PageTitle>
 
-<h1>Email &amp; Ticket Note Templates</h1>
+<h1>Email &amp; Ticket Note Templates <HelpTip Text="Email placeholders include {TopNReportLink} and {ReportsFolderLink} — values come from Deliverables after you paste Explorer share links." /></h1>
 <p class="text-muted">
-    Placeholders: <code>{Year}</code>, <code>{Quarter}</code>, <code>{Greeting}</code>, <code>{TopNLabel}</code>, <code>{NoteText}</code>, <code>{PreparedBy}</code>, <code>{ReportStepLine}</code>.
-    Use separate email bodies for RMIT/CMIT and RMIT+ clients; <code>{NoteText}</code> is filled automatically when the client type is chosen at export time.
+    Placeholders: <code>{Year}</code>, <code>{Quarter}</code>, <code>{Greeting}</code>, <code>{TopNLabel}</code>, <code>{TopNReportLink}</code>, <code>{ReportsFolderLink}</code>, <code>{SchedulingLink}</code>, <code>{NoteText}</code>, <code>{PreparedBy}</code>, <code>{ReportStepLine}</code>.
+    Link placeholders: <code>{TopNReportLink}</code> and <code>{ReportsFolderLink}</code> are filled when you paste share links on the review Deliverables page (after export and Copy link in Explorer).
+    <code>{SchedulingLink}</code> uses the default from <a href="/settings">Settings</a>, or a per-session override on Deliverables.
 </p>
 
 @if (!string.IsNullOrEmpty(_message))

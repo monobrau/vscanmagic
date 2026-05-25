@@ -11,7 +11,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DocxReviewExporter>();
         services.AddSingleton<PdfReviewExporter>();
         services.AddSingleton<TicketExporter>();
-        services.AddSingleton<EmailExporter>();
         services.AddSingleton<FlatXlsxExporter>();
         services.AddSingleton<CombinedReportHtmlExporter>();
         services.AddSingleton<HostVulnerabilityReportExporter>();
@@ -26,13 +25,8 @@ public sealed record SessionExportOptions(
 public sealed class ExportOrchestrator(
     DocxReviewExporter docx,
     PdfReviewExporter pdf,
-    TicketExporter ticket,
-    EmailExporter email,
     FlatXlsxExporter xlsx,
-    CombinedReportHtmlExporter html,
-    HostVulnerabilityReportExporter hostCountsExporter,
-    TemplatesService templatesService,
-    RemediationRuleService remediationRules)
+    HostVulnerabilityReportExporter hostCountsExporter)
 {
     public ExportResult ExportAll(
         VScanMagic.Review.Models.ReviewSession session,
@@ -41,7 +35,6 @@ public sealed class ExportOrchestrator(
     {
         options ??= new SessionExportOptions();
         Directory.CreateDirectory(layout.OutputDirectory);
-        Directory.CreateDirectory(layout.TextOutputDirectory);
 
         var stamp = ReportPathResolver.GetReportTimestamp();
         var companyName = string.IsNullOrWhiteSpace(session.ClientName) ? "Client" : session.ClientName.Trim();
@@ -51,30 +44,12 @@ public sealed class ExportOrchestrator(
             layout.OutputDirectory, companyName, $" {reportTitle}_{stamp}", "docx");
         var pdfPath = ReportPathResolver.GetSafeReportOutputPath(
             layout.OutputDirectory, companyName, $" Top Ten Review (Client)_{stamp}", "pdf");
-        var ticketPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.TextOutputDirectory, companyName, $" Ticket Instructions_{stamp}", "txt");
-        var htmlPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.TextOutputDirectory, companyName, $" Report_{stamp}", "html");
-        var notesPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.TextOutputDirectory, companyName, $" Ticket Notes_{stamp}", "txt");
-        var timeEstimatePath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.TextOutputDirectory, companyName, $" Time Estimate_{stamp}", "txt");
         var xlsxPath = ReportPathResolver.GetSafeReportOutputPath(
             layout.OutputDirectory, companyName, $" Top Ten Data_{stamp}", "xlsx");
 
         docx.Export(session, docxPath);
         pdf.Export(session, pdfPath);
-        ticket.ExportToFile(session, ticketPath, layout.ReportsPathPartial);
-        html.Export(session, htmlPath, layout.ReportsPathPartial);
-
-        var (emailText, emailEml) = email.Export(session, layout.TextOutputDirectory, companyName, stamp);
         xlsx.Export(session, xlsxPath);
-
-        var ticketNotes = TicketNotesBuilder.Build(session, templatesService.Load().TicketNotes, session.IsRmitPlus);
-        File.WriteAllText(notesPath, ticketNotes);
-
-        var timeEstimateText = TimeEstimateBuilder.Build(session, remediationRules);
-        File.WriteAllText(timeEstimatePath, timeEstimateText);
 
         string? hostCountsPdf = null;
         string? hostCountsXlsx = null;
@@ -92,8 +67,11 @@ public sealed class ExportOrchestrator(
 
         return new ExportResult(
             layout.OutputDirectory,
-            docxPath, pdfPath, ticketPath, htmlPath, notesPath, timeEstimatePath, emailText, emailEml, xlsxPath,
-            hostCountsPdf, hostCountsXlsx);
+            docxPath,
+            pdfPath,
+            xlsxPath,
+            hostCountsPdf,
+            hostCountsXlsx);
     }
 
     private static string GetReportTitle(VScanMagic.Review.Models.ReviewSession session)
@@ -111,12 +89,6 @@ public sealed record ExportResult(
     string OutputDirectory,
     string DocxPath,
     string PdfPath,
-    string TicketPath,
-    string HtmlPath,
-    string TicketNotesPath,
-    string TimeEstimatePath,
-    string EmailTextPath,
-    string EmailEmlPath,
     string XlsxPath,
     string? HostCountsPdfPath = null,
     string? HostCountsXlsxPath = null);

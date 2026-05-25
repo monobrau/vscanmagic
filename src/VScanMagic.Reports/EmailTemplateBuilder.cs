@@ -12,7 +12,17 @@ public static class EmailTemplateBuilder
     public static string Build(ReviewSession session, VScanMagicTemplates templates) =>
         Build(session, templates.ResolveEmailTemplate(session.IsRmitPlus), session.IsRmitPlus);
 
-    public static string Build(ReviewSession session, EmailTemplateSettings template, bool isRmitPlus = false)
+    public static string Build(ReviewSession session, VScanMagicTemplates templates, DeliverableLinks links) =>
+        Build(session, templates.ResolveEmailTemplate(session.IsRmitPlus), session.IsRmitPlus, links);
+
+    public static string Build(ReviewSession session, EmailTemplateSettings template, bool isRmitPlus = false) =>
+        Build(session, template, isRmitPlus, new DeliverableLinks());
+
+    public static string Build(
+        ReviewSession session,
+        EmailTemplateSettings template,
+        bool isRmitPlus,
+        DeliverableLinks links)
     {
         isRmitPlus = session.IsRmitPlus || isRmitPlus;
         var now = DateTime.Now;
@@ -43,7 +53,13 @@ public static class EmailTemplateBuilder
             .Replace("{Greeting}", greeting, StringComparison.Ordinal)
             .Replace("{NoteText}", noteText, StringComparison.Ordinal)
             .Replace("{PreparedBy}", session.Presenter, StringComparison.Ordinal)
-            .Replace("{TopNLabel}", topNLabel, StringComparison.Ordinal);
+            .Replace("{TopNLabel}", topNLabel, StringComparison.Ordinal)
+            .Replace("{TopNReportLink}", links.TopNReportUrl, StringComparison.Ordinal)
+            .Replace("{ReportsFolderLink}", links.ReportsFolderUrl, StringComparison.Ordinal)
+            .Replace("{SchedulingLink}", links.SchedulingLinkUrl, StringComparison.Ordinal)
+            .Replace("<link to top ten report from onedrive>", links.TopNReportUrl, StringComparison.OrdinalIgnoreCase)
+            .Replace("<onedrive link to folder containing reports>", links.ReportsFolderUrl, StringComparison.OrdinalIgnoreCase)
+            .Replace("<scheduling link>", links.SchedulingLinkUrl, StringComparison.OrdinalIgnoreCase);
 
         if (!isRmitPlus && body.Contains(BakedInRmitNote, StringComparison.Ordinal))
             body = body.Replace(BakedInRmitNote, noteText, StringComparison.Ordinal);

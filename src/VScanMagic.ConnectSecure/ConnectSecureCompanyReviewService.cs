@@ -3,21 +3,35 @@ using System.Text.RegularExpressions;
 
 namespace VScanMagic.ConnectSecure;
 
-public sealed class ConnectSecureCompanyReviewService(ConnectSecureClient client)
+public sealed class ConnectSecureCompanyReviewService(
+    ConnectSecureClient client,
+    ConnectSecureCacheService cache)
 {
     private static readonly Regex IpTargetRegex = new(@"^\d+\.\d+\.\d+\.\d+(/(\d+))?$", RegexOptions.Compiled);
 
     public async Task<CompanyReviewData> GetReviewDataAsync(int companyId, string companyName = "", CancellationToken ct = default)
     {
-        var result = new CompanyReviewData { CompanyId = companyId, CompanyName = companyName };
         if (companyId <= 0)
-            return result;
+            return new CompanyReviewData { CompanyId = companyId, CompanyName = companyName };
 
-        var lwAssets = await FetchArrayAsync("/r/report_queries/lightweight_assets",
-            LightweightAssetsQuery(companyId), ct);
+        if (cache.TryGetCompanyReview(companyId, out var cachedReview) && cachedReview is not null)
+            return cachedReview;
+
+        var result = new CompanyReviewData { CompanyId = companyId, CompanyName = companyName };
+
+        var lwAssetsTask = FetchArrayAsync("/r/report_queries/lightweight_assets", LightweightAssetsQuery(companyId), ct);
+        var agentsTask = FetchArrayAsync("/r/company/agents", CompanyQuery(companyId), ct);
+        var credMappingsTask = FetchArrayAsync("/r/company/agent_credentials_mapping", CompanyQuery(companyId), ct);
+        var discMappingsTask = FetchArrayAsync("/r/company/agent_discoverysettings_mapping", CompanyQuery(companyId), ct);
+
+        await Task.WhenAll(lwAssetsTask, agentsTask, credMappingsTask, discMappingsTask);
+
+        var lwAssets = await lwAssetsTask;
+        var agents = await agentsTask;
+        var credMappings = await credMappingsTask;
+        var discMappings = await discMappingsTask;
+
         result.AgentCount = lwAssets.Count;
-
-        var agents = await FetchArrayAsync("/r/company/agents", CompanyQuery(companyId), ct);
         if (result.AgentCount == 0 && agents.Count > 0)
         {
             var lightweight = agents.Count(a =>
@@ -25,9 +39,6 @@ public sealed class ConnectSecureCompanyReviewService(ConnectSecureClient client
                     .Contains("lightweight", StringComparison.OrdinalIgnoreCase));
             result.AgentCount = lightweight > 0 ? lightweight : agents.Count;
         }
-
-        var credMappings = await FetchArrayAsync("/r/company/agent_credentials_mapping", CompanyQuery(companyId), ct);
-        var discMappings = await FetchArrayAsync("/r/company/agent_discoverysettings_mapping", CompanyQuery(companyId), ct);
 
         var agentIdsWithCreds = credMappings
             .Select(m => ConnectSecureJsonReader.GetInt(m, "agent_id", "agentId"))
@@ -52,8 +63,11 @@ public sealed class ConnectSecureCompanyReviewService(ConnectSecureClient client
         await PopulateScanDatesAsync(result, agents, agentIdsWithCreds, agentIdsWithNetworks, companyId, ct);
         PopulateQuickWins(result);
 
+        cache.SetCompanyReview(companyId, result);
         return result;
     }
+
+    public void InvalidateReviewCache(int companyId) => cache.InvalidateCompanyReview(companyId);
 
     public static IReadOnlyList<CompanyReviewCheck> BuildChecks(CompanyReviewData data) =>
     [

@@ -1,0 +1,293 @@
+@page "/review/{SessionId}/deliverables"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Models
+@using VScanMagic.Core.Paths
+@using VScanMagic.Core.Services
+@using VScanMagic.Review
+@using VScanMagic.Review.Models
+@inject IReviewSessionRepository SessionRepo
+@inject TemplatesService TemplatesSvc
+@inject RemediationRuleService RemediationRules
+@inject SettingsService Settings
+@inject ReportPathResolver PathResolver
+@inject IJSRuntime Js
+
+<PageTitle>Deliverables</PageTitle>
+
+@if (_session is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+        <div>
+            <h1>@_session.ClientName <HelpTip Text="Copy-paste content for Manage PSA and client email — paste OneDrive share links on the Email tab after export." AlignEnd="true" /></h1>
+            <p class="text-muted mb-0">
+                Scan: @_session.ScanDate | Presenter: @_session.Presenter | Export set: @ExportSetLabel()
+                | Client type: @(_session.IsRmitPlus ? "RMIT+" : "RMIT/CMIT")
+            </p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-outline-secondary" href="@($"/review/{SessionId}")">Back to review</a>
+            <a class="btn btn-success" href="@($"/export/{SessionId}")">Export all</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_copyMessage))
+    {
+        <div class="alert alert-success py-2">@_copyMessage</div>
+    }
+
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <button type="button" class="nav-link @(_tab == "ticket" ? "active" : "")" @onclick='() => _tab = "ticket"'>
+                Ticket instructions
+            </button>
+        </li>
+        <li class="nav-item">
+            <button type="button" class="nav-link @(_tab == "email" ? "active" : "")" @onclick='() => _tab = "email"'>
+                Email template <HelpTip Text="Paste Top N and folder share links from Explorer after export. Scheduling link defaults from Settings." />
+            </button>
+        </li>
+        <li class="nav-item">
+            <button type="button" class="nav-link @(_tab == "time" ? "active" : "")" @onclick='() => _tab = "time"'>
+                Time estimate
+            </button>
+        </li>
+        <li class="nav-item">
+            <button type="button" class="nav-link @(_tab == "notes" ? "active" : "")" @onclick='() => _tab = "notes"'>
+                Ticket notes (Manage PSA)
+            </button>
+        </li>
+    </ul>
+
+    @if (_tab == "ticket")
+    {
+        <div class="alert alert-info py-2">
+            Use <strong>Copy subject</strong> / <strong>Copy section</strong> to paste into Manage PSA tickets, quotes, or technician assignments.
+        </div>
+
+        @if (_sections.Count == 0)
+        {
+            <div class="alert alert-warning mb-0">No export findings in this session.</div>
+        }
+        else
+        {
+            @foreach (var section in _sections)
+            {
+                var sectionId = section.SectionId;
+                var expanded = _expandedSections.Contains(sectionId);
+                <div class="card mb-2">
+                    <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                        <button type="button" class="btn btn-link text-start text-decoration-none flex-grow-1 p-0 deliverable-section-toggle"
+                                @onclick="() => ToggleSection(sectionId)">
+                            <span class="fw-semibold me-2">#@(section.Number)</span>
+                            <span>@(section.Subject)</span>
+                            <span class="text-muted ms-2">@(expanded ? "▾" : "▸")</span>
+                        </button>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button type="button" class="btn btn-primary btn-sm" @onclick="() => CopyTextAsync(section.Subject)">
+                                Copy subject
+                            </button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => CopyTextAsync(section.BodyText)">
+                                Copy section
+                            </button>
+                        </div>
+                    </div>
+                    @if (expanded)
+                    {
+                        <div class="card-body pt-0">
+                            <pre class="deliverable-text mb-0">@(section.BodyText)</pre>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    }
+    else if (_tab == "email")
+    {
+        <div class="card mb-3">
+            <div class="card-header">Email links for this deliverable</div>
+            <div class="card-body">
+                <p class="form-text">
+                    After you export reports, use <strong>Copy link</strong> in Windows Explorer (or SharePoint) for the Top N doc and quarterly folder, then paste below.
+                    The scheduling link defaults from <a href="/settings">Settings</a> unless you override it here.
+                </p>
+                <div class="mb-2">
+                    <label class="form-label">Top N report link <HelpTip Text="Share link for this quarter's Top N Word/PDF — from Copy link in Explorer after you export and sync." /></label>
+                    <input class="form-control form-control-sm" @bind="_session.TopNReportUrl" @bind:after="RefreshEmailPreview" placeholder="https://..." />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Quarterly reports folder link <HelpTip Text="Share link for the folder containing all quarterly reports for this client." /></label>
+                    <input class="form-control form-control-sm" @bind="_session.ReportsFolderUrl" @bind:after="RefreshEmailPreview" placeholder="https://..." />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Scheduling link (TimeZest)</label>
+                    <input class="form-control form-control-sm" @bind="_session.SchedulingLinkUrl" @bind:after="RefreshEmailPreview" placeholder="https://..." />
+                </div>
+                <button type="button" class="btn btn-outline-primary btn-sm" @onclick="SaveDeliverableLinksAsync">Save links on session</button>
+                @if (!string.IsNullOrEmpty(_linksStatus))
+                {
+                    <span class="text-muted small ms-2">@_linksStatus</span>
+                }
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => CopyTextAsync(_emailSubject)">
+                        Copy subject
+                    </button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => CopyTextAsync(_emailBodyForCopy)">
+                        Copy body
+                    </button>
+                </div>
+                <pre class="deliverable-text mb-0">@_emailContent</pre>
+            </div>
+        </div>
+    }
+    else if (_tab == "time")
+    {
+        <div class="card">
+            <div class="card-body">
+                <button type="button" class="btn btn-primary btn-sm mb-3" @onclick="() => CopyTextAsync(_timeEstimate)">
+                    Copy time estimate
+                </button>
+                <pre class="deliverable-text mb-0">@_timeEstimate</pre>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <button type="button" class="btn btn-primary btn-sm mb-3" @onclick="() => CopyTextAsync(_ticketNotes)">
+                    Copy ticket notes
+                </button>
+                <pre class="deliverable-text mb-0">@_ticketNotes</pre>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string SessionId { get; set; } = "";
+
+    private ReviewSession? _session;
+    private string _tab = "ticket";
+    private IReadOnlyList<TicketInstructionSection> _sections = [];
+    private string _emailContent = "";
+    private string _emailSubject = "";
+    private string _emailBodyForCopy = "";
+    private string _ticketNotes = "";
+    private string _timeEstimate = "";
+    private string? _copyMessage;
+    private string? _linksStatus;
+    private UserSettings _userSettings = new();
+    private readonly HashSet<string> _expandedSections = new(StringComparer.Ordinal);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _session = await SessionRepo.GetAsync(SessionId);
+        if (_session is null)
+            return;
+
+        _userSettings = Settings.LoadUserSettings();
+        if (string.IsNullOrWhiteSpace(_session.TopNReportUrl) &&
+            string.IsNullOrWhiteSpace(_session.ReportsFolderUrl) &&
+            string.IsNullOrWhiteSpace(_session.SchedulingLinkUrl))
+        {
+            DeliverableLinksResolver.ApplyDefaultsToSession(_session, _userSettings);
+            await SessionRepo.SaveAsync(_session);
+        }
+
+        RefreshDeliverableContent();
+    }
+
+    private void RefreshDeliverableContent()
+    {
+        if (_session is null)
+            return;
+
+        var companyId = int.TryParse(_session.CompanyId, out var id) ? id : 0;
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            _session.ClientName,
+            _session.ScanDate,
+            _userSettings.LastOutputDirectory);
+
+        var templates = TemplatesSvc.Load();
+        var links = DeliverableLinksResolver.Resolve(_session, _userSettings);
+        _sections = TicketInstructionBuilder.BuildSections(_session, RemediationRules, layout.ReportsPathPartial);
+        _emailContent = EmailTemplateBuilder.Build(_session, templates, links);
+        (_emailSubject, var emailBody) = EmailTemplateBuilder.SplitSubjectAndBody(_emailContent);
+        _emailBodyForCopy = emailBody.Replace("\n", "\r\n");
+        _ticketNotes = TicketNotesBuilder.Build(_session, templates.TicketNotes, _session.IsRmitPlus);
+        _timeEstimate = TimeEstimateBuilder.Build(_session, RemediationRules);
+    }
+
+    private void RefreshEmailPreview()
+    {
+        if (_session is null)
+            return;
+
+        var templates = TemplatesSvc.Load();
+        var links = DeliverableLinksResolver.Resolve(_session, _userSettings);
+        _emailContent = EmailTemplateBuilder.Build(_session, templates, links);
+        (_emailSubject, var emailBody) = EmailTemplateBuilder.SplitSubjectAndBody(_emailContent);
+        _emailBodyForCopy = emailBody.Replace("\n", "\r\n");
+        _linksStatus = null;
+    }
+
+    private async Task SaveDeliverableLinksAsync()
+    {
+        if (_session is null)
+            return;
+
+        _session.TopNReportUrl = _session.TopNReportUrl.Trim();
+        _session.ReportsFolderUrl = _session.ReportsFolderUrl.Trim();
+        _session.SchedulingLinkUrl = _session.SchedulingLinkUrl.Trim();
+        await SessionRepo.SaveAsync(_session);
+        RefreshEmailPreview();
+        _linksStatus = "Saved.";
+    }
+
+    private string ExportSetLabel()
+    {
+        if (_session is null)
+            return "";
+
+        var exportCount = ReviewSessionRanker.GetExportFindings(_session).Count;
+        var manual = _session.Findings.Count(f => f.IncludeInExport && f.ManuallyPromoted);
+        if (_session.ExportTopN <= 0)
+            return $"All ({exportCount})";
+
+        return manual > 0
+            ? $"{exportCount} in export (Top {_session.ExportTopN} suggested + {manual} added)"
+            : $"{exportCount} in export (Top {_session.ExportTopN})";
+    }
+
+    private async Task CopyTextAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            _copyMessage = "Copied to clipboard.";
+        }
+        catch
+        {
+            _copyMessage = "Copy failed — select the text manually.";
+        }
+    }
+
+    private void ToggleSection(string sectionId)
+    {
+        if (!_expandedSections.Add(sectionId))
+            _expandedSections.Remove(sectionId);
+    }
+}

@@ -10,6 +10,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IReviewSessionRepository, SqliteReviewSessionRepository>();
         services.AddSingleton<ReviewSessionFactory>();
+        services.AddSingleton<CveEnrichmentService>();
         return services;
     }
 }

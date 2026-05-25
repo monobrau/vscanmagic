@@ -14,7 +14,7 @@ This script provides a REST API server that allows triggering and downloading:
 .NOTES
 Version: 1.0.0
 Requires: Microsoft Excel and Microsoft Word installed.
-Author: River Run MSP
+Author: River Run
 #>
 
 # --- Add Required Assemblies ---

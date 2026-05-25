@@ -5,11 +5,14 @@ using Microsoft.AspNetCore.Components.Web;
 using VScanMagic.ConnectSecure;
 using VScanMagic.Core.Configuration;
 using VScanMagic.Core.Models;
+using VScanMagic.Data;
 using VScanMagic.Data.Parsing;
 using VScanMagic.Data.Scoring;
+using VScanMagic.Core.Nvd;
 using VScanMagic.Core.Risk;
 using VScanMagic.Core.Services;
 using VScanMagic.Review;
+using VScanMagic.Review.Services;
 using VScanMagic.Review.Models;
 using VScanMagic.Reports;
 
@@ -24,6 +27,17 @@ public class RiskScoreCalculatorTests
         var score = Core.Risk.RiskScoreCalculator.GetCompositeRiskScore(2, 1, 0, 0, 0.5, "Test App", 3, options);
         var expected = Math.Round((2 * 0.9 + 1 * 0.8) * 1.5, 2);
         Assert.Equal(expected, score);
+    }
+
+    [Fact]
+    public void CompositeRiskScore_BoostsCveOnlyFindingsBySeverityBand()
+    {
+        var options = new VScanMagicOptions();
+        var cveScore = RiskScoreCalculator.GetCompositeRiskScore(1, 0, 0, 0, 0.85, "CVE-2021-33558", 1, options);
+        var appScore = RiskScoreCalculator.GetCompositeRiskScore(0, 20, 0, 0, 0.3, "Google Chrome", 20, options);
+
+        Assert.True(cveScore > appScore);
+        Assert.Equal(Math.Round(9.0 * 1.5 * 1.85, 2), cveScore);
     }
 }
 
@@ -45,6 +59,99 @@ public class TopVulnerabilityScorerTests
         Assert.Equal(2, top.Count);
         Assert.Contains(top, t => t.Product == "Adobe Reader");
         Assert.True(top[0].RiskScore >= top[1].RiskScore);
+    }
+
+    [Fact]
+    public void GetTopVulnerabilities_IncludesCveOnlyProducts()
+    {
+        var options = new VScanMagicOptions();
+        var scorer = new TopVulnerabilityScorer(options);
+        var data = new List<VulnerabilityRecord>
+        {
+            new() { Product = "CVE-2021-33558", HostName = "PC1", Critical = 1, VulnerabilityCount = 1, EpssScore = 0.9, Cve = "CVE-2021-33558" },
+            new() { Product = "Google Chrome", HostName = "PC1", High = 3, VulnerabilityCount = 3, EpssScore = 0.5, Cve = "CVE-2024-1234" }
+        };
+
+        var top = scorer.GetTopVulnerabilities(data, new ReportFilters { TopN = 10, IncludeCritical = true, IncludeHigh = true });
+        Assert.Equal(2, top.Count);
+        Assert.Contains(top, item => item.Product == "CVE-2021-33558" && item.CveIds == "CVE-2021-33558");
+        Assert.Contains(top, item => item.Product == "Google Chrome" && item.CveIds == "CVE-2024-1234");
+    }
+
+    [Fact]
+    public void ScoreForReview_LoadsAllFiltered_AndAutoExportsApplicationOnly()
+    {
+        var options = new VScanMagicOptions();
+        var scorer = new TopVulnerabilityScorer(options);
+        var data = new List<VulnerabilityRecord>
+        {
+            new() { Product = "Google Chrome", HostName = "PC1", High = 20, VulnerabilityCount = 20, EpssScore = 0.5 },
+            new() { Product = "Mozilla Firefox", HostName = "PC1", High = 15, VulnerabilityCount = 15, EpssScore = 0.4 },
+            new() { Product = "SMB Signing", HostName = "(Network scan)", Source = "Network", High = 1, VulnerabilityCount = 1 },
+            new() { Product = "CVE-2021-33558", HostName = "PC2", Source = "Registry", Critical = 1, VulnerabilityCount = 1, EpssScore = 0.8 }
+        };
+
+        var scored = scorer.ScoreForReview(data, new ReportFilters { TopN = 1, IncludeHigh = true, IncludeCritical = true });
+        Assert.Equal(4, scored.AllFiltered.Count);
+        Assert.Single(scored.AutoExportApplication);
+        Assert.Equal("Google Chrome", scored.AutoExportApplication[0].Product);
+    }
+
+    [Fact]
+    public void GetTopVulnerabilities_PrioritizesCriticalCveOverBulkHighFindings()
+    {
+        var options = new VScanMagicOptions { MinHighSeverityCveInTopN = 0 };
+        var scorer = new TopVulnerabilityScorer(options);
+        var data = new List<VulnerabilityRecord>
+        {
+            new() { Product = "CVE-2021-33558", HostName = "PC1", Critical = 1, VulnerabilityCount = 1, EpssScore = 0.85, Cve = "CVE-2021-33558" },
+            new() { Product = "Google Chrome", HostName = "PC1", High = 20, VulnerabilityCount = 20, EpssScore = 0.3 },
+            new() { Product = "Mozilla Firefox", HostName = "PC2", High = 15, VulnerabilityCount = 15, EpssScore = 0.25 }
+        };
+
+        var top = scorer.GetTopVulnerabilities(data, new ReportFilters { TopN = 2, IncludeCritical = true, IncludeHigh = true });
+
+        Assert.Equal(2, top.Count);
+        Assert.Equal("CVE-2021-33558", top[0].Product);
+        Assert.Equal("Google Chrome", top[1].Product);
+    }
+
+    [Fact]
+    public void CreateFromScoredResult_KeepsNetworkAndRegistryAsCandidates()
+    {
+        var factory = new ReviewSessionFactory(new RemediationRuleService(), new VScanMagicOptions());
+        var scored = new ScoredVulnerabilityResult
+        {
+            AllFiltered =
+            [
+                new TopVulnerability { Source = "Application", Product = "Google Chrome", High = 5, RiskScore = 10, EpssScore = 0.5, VulnCount = 5 },
+                new TopVulnerability { Source = "Network", Product = "SMB Signing", High = 1, RiskScore = 2, VulnCount = 1 },
+                new TopVulnerability { Source = "Registry", Product = "CVE-2021-33558", Critical = 1, RiskScore = 8, EpssScore = 0.7, VulnCount = 1, CveIds = "CVE-2021-33558" }
+            ],
+            AutoExportApplication =
+            [
+                new TopVulnerability { Source = "Application", Product = "Google Chrome", High = 5, RiskScore = 10, EpssScore = 0.5, VulnCount = 5 }
+            ]
+        };
+
+        var session = factory.CreateFromScoredResult("Acme", "2026-05-23", scored, "Tech", exportTopN: 10);
+        Assert.Single(ReviewSessionRanker.GetExportFindings(session));
+        Assert.Equal(2, ReviewCandidatePool.CountCandidates(session));
+        Assert.Equal(1, ReviewCandidatePool.CountCandidates(session, VulnerabilitySourceHelper.Network));
+        Assert.Equal(1, ReviewCandidatePool.CountCandidates(session, VulnerabilitySourceHelper.Registry));
+    }
+
+    [Fact]
+    public void PromoteToExport_AllowsManualNetworkItemWithoutRemovingOthers()
+    {
+        var session = new ReviewSession { ExportTopN = 1 };
+        session.Findings.Add(new ReviewFinding { OriginalRank = 1, Product = "Chrome", Source = "Application", IncludeInExport = true });
+        session.Findings.Add(new ReviewFinding { OriginalRank = 2, Product = "SMB", Source = "Network", IncludeInExport = false });
+
+        ReviewSessionRanker.PromoteToExport(session, session.Findings[1]);
+
+        Assert.Equal(2, ReviewSessionRanker.GetExportFindings(session).Count);
+        Assert.True(session.Findings[1].ManuallyPromoted);
     }
 }
 
@@ -269,6 +376,133 @@ public class ReviewSessionRankerTests
         Assert.Equal(1, ReviewSessionRanker.GetExportRank(session, session.Findings[1]));
         Assert.Equal(2, ReviewSessionRanker.GetExportRank(session, session.Findings[2]));
     }
+
+    [Fact]
+    public void MarkConnectSecureSuppressed_RemovesFromExportAndSkipsRebalancePromotion()
+    {
+        var session = new ReviewSession { ExportTopN = 2 };
+        session.Findings.Add(new ReviewFinding { OriginalRank = 1, Rank = 1, Product = "A", IncludeInExport = true });
+        session.Findings.Add(new ReviewFinding { OriginalRank = 2, Rank = 2, Product = "B", IncludeInExport = true });
+        session.Findings.Add(new ReviewFinding { OriginalRank = 3, Rank = 3, Product = "C", IncludeInExport = false });
+
+        ReviewSessionRanker.MarkConnectSecureSuppressed(session, session.Findings[0], "False positive", "test");
+
+        Assert.True(session.Findings[0].ConnectSecureSuppressed);
+        Assert.Equal(FindingStatus.WontFix, session.Findings[0].Status);
+        Assert.Equal(["B", "C"], ReviewSessionRanker.GetExportFindings(session).Select(f => f.Product).ToArray());
+        Assert.True(session.Findings[0].ConnectSecureSuppressed);
+        Assert.Equal(0, ReviewCandidatePool.CountCandidates(session));
+    }
+
+    [Fact]
+    public void MarkConnectSecureUnsuppressed_ClearsSuppressStateAndRestoresOpenStatus()
+    {
+        var session = new ReviewSession { ExportTopN = 2 };
+        var finding = new ReviewFinding
+        {
+            OriginalRank = 1,
+            Rank = 1,
+            Product = "A",
+            ConnectSecureSuppressed = true,
+            ConnectSecureSuppressRecordId = 99,
+            ConnectSecureProblemId = 123,
+            SuppressionReason = "False positive",
+            SuppressionComments = "test",
+            Status = FindingStatus.WontFix,
+            ExcludedFromExport = true
+        };
+        session.Findings.Add(finding);
+
+        ReviewSessionRanker.MarkConnectSecureUnsuppressed(session, finding);
+
+        Assert.False(finding.ConnectSecureSuppressed);
+        Assert.Null(finding.ConnectSecureSuppressRecordId);
+        Assert.Null(finding.SuppressionReason);
+        Assert.Equal(FindingStatus.Open, finding.Status);
+        Assert.False(finding.ExcludedFromExport);
+        Assert.Equal(123, finding.ConnectSecureProblemId);
+    }
+
+    [Fact]
+    public void Rebalance_DoesNotPromoteSuppressedReserve()
+    {
+        var session = new ReviewSession { ExportTopN = 1 };
+        session.Findings.Add(new ReviewFinding { OriginalRank = 1, Rank = 1, Product = "A", IncludeInExport = true });
+        session.Findings.Add(new ReviewFinding { OriginalRank = 2, Rank = 2, Product = "B", IncludeInExport = false, ConnectSecureSuppressed = true });
+        session.Findings.Add(new ReviewFinding { OriginalRank = 3, Rank = 3, Product = "C", IncludeInExport = false });
+
+        session.Findings[0].IncludeInExport = false;
+        session.Findings[0].ExcludedFromExport = true;
+        ReviewSessionRanker.Rebalance(session);
+
+        Assert.Equal(["C"], ReviewSessionRanker.GetExportFindings(session).Select(f => f.Product).ToArray());
+    }
+}
+
+public class SuppressibleProblemMatcherTests
+{
+    [Fact]
+    public void Match_FindsExactCveProblem()
+    {
+        var entries = new List<SuppressibleProblemEntry>
+        {
+            new(42, "CVE-2021-33558", 3),
+            new(43, "CVE-2024-1234", 1)
+        };
+
+        var match = SuppressibleProblemMatcher.Match(entries, ["CVE-2021-33558"]);
+
+        Assert.True(match.HasMatch);
+        Assert.Equal(ReviewSuppressTargetKind.Problem, match.Entry!.Kind);
+        Assert.Equal(42, match.Entry.Id);
+    }
+}
+
+public class SuppressibleRemediationMatcherTests
+{
+    [Fact]
+    public void Match_PrefersExactProductName()
+    {
+        var entries = new List<SuppressibleRemediationEntry>
+        {
+            new(10, "Google Chrome", "fix", "High", "", true, 5),
+            new(11, "Chrome", "fix", "High", "", true, 2)
+        };
+
+        var match = SuppressibleRemediationMatcher.Match(entries, "Google Chrome");
+
+        Assert.True(match.HasMatch);
+        Assert.Equal(10, match.Entry!.SolutionId);
+    }
+
+    [Fact]
+    public void Match_UsesMajorVersionWhenNamesDifferByPatchLevel()
+    {
+        var entries = new List<SuppressibleRemediationEntry>
+        {
+            new(10, "MongoDB 3.4", "fix", "High", "", true, 5)
+        };
+
+        var match = SuppressibleRemediationMatcher.Match(entries, "MongoDB 3.4.24");
+
+        Assert.True(match.HasMatch);
+        Assert.Equal(10, match.Entry!.SolutionId);
+    }
+
+    [Fact]
+    public void Match_ReturnsAmbiguousWhenMultipleEqualScores()
+    {
+        var entries = new List<SuppressibleRemediationEntry>
+        {
+            new(10, "Widget", "fix", "High", "", true, 5),
+            new(11, "Widget", "fix", "High", "", true, 3)
+        };
+
+        var match = SuppressibleRemediationMatcher.Match(entries, "Widget");
+
+        Assert.False(match.HasMatch);
+        Assert.Equal(2, match.AmbiguousMatches.Count);
+    }
 }
 
 public class HostVulnerabilityReportExporterTests
@@ -348,7 +582,10 @@ public class CombinedReportHtmlExporterTests
             ]
         };
 
-        var html = new CombinedReportHtmlExporter(new TemplatesService(), new RemediationRuleService()).BuildHtml(session);
+        var html = new CombinedReportHtmlExporter(
+            new TemplatesService(),
+            new RemediationRuleService(),
+            new SettingsService()).BuildHtml(session);
 
         Assert.Contains("Ticket Instructions", html);
         Assert.Contains("Email Template", html);
@@ -687,6 +924,10 @@ public class TicketNotesBuilderTimeEstimateTests
 
         Assert.Contains("- Ticket created for Adobe Reader", notes);
     }
+}
+
+public class CveReferenceHelperTopNTests
+{
     [Fact]
     public void IsCveOnlyProduct_DetectsBareCveIds()
     {
@@ -694,25 +935,12 @@ public class TicketNotesBuilderTimeEstimateTests
         Assert.False(CveReferenceHelper.IsCveOnlyProduct("Windows 11"));
         Assert.False(CveReferenceHelper.IsCveOnlyProduct("Google Chrome CVE-2021-33558"));
     }
+}
 
+public class ReviewSessionRankerCveTests
+{
     [Fact]
-    public void GetTopVulnerabilities_ExcludesCveOnlyProducts()
-    {
-        var options = new VScanMagicOptions();
-        var scorer = new TopVulnerabilityScorer(options);
-        var data = new List<VulnerabilityRecord>
-        {
-            new() { Product = "CVE-2021-33558", HostName = "PC1", Critical = 1, VulnerabilityCount = 1, EpssScore = 0.9 },
-            new() { Product = "Google Chrome", HostName = "PC1", High = 3, VulnerabilityCount = 3, EpssScore = 0.5 }
-        };
-
-        var top = scorer.GetTopVulnerabilities(data, new ReportFilters { TopN = 10, IncludeCritical = true, IncludeHigh = true });
-        Assert.Single(top);
-        Assert.Equal("Google Chrome", top[0].Product);
-    }
-
-    [Fact]
-    public void EnsureLegacyFields_RemovesCveOnlyFindings()
+    public void EnsureLegacyFields_KeepsCveFindingsAndNormalizesCveIds()
     {
         var session = new ReviewSession
         {
@@ -720,15 +948,15 @@ public class TicketNotesBuilderTimeEstimateTests
             Findings =
             [
                 new ReviewFinding { OriginalRank = 1, Rank = 1, Product = "Windows 11", IncludeInExport = true, CveIds = "CVE-2024-1" },
-                new ReviewFinding { OriginalRank = 2, Rank = 2, Product = "CVE-2021-33558", IncludeInExport = false, CveIds = "CVE-2021-33558" }
+                new ReviewFinding { OriginalRank = 2, Rank = 2, Product = "CVE-2021-33558", IncludeInExport = true, CveIds = "" }
             ]
         };
 
         ReviewSessionRanker.EnsureLegacyFields(session);
 
-        Assert.Single(session.Findings);
-        Assert.Equal("Windows 11", session.Findings[0].Product);
-        Assert.Equal("", session.Findings[0].CveIds);
+        Assert.Equal(2, session.Findings.Count);
+        Assert.Equal("CVE-2024-1", session.Findings[0].CveIds);
+        Assert.Equal("CVE-2021-33558", session.Findings[1].CveIds);
     }
 }
 
@@ -900,6 +1128,36 @@ public class EmailTemplateBuilderTests
         Assert.Contains("RMIT body:", email);
         Assert.Contains("No remediation will begin without your approval", email);
     }
+
+    [Fact]
+    public void Build_SubstitutesDeliverableLinks()
+    {
+        var session = new ReviewSession
+        {
+            ClientName = "Acme",
+            Presenter = "Tech",
+            ExportTopN = 10,
+            TopNReportUrl = "https://sharepoint/topn",
+            ReportsFolderUrl = "https://sharepoint/folder",
+            SchedulingLinkUrl = "https://timezest/meet"
+        };
+        var template = new EmailTemplateSettings
+        {
+            Body = "Top: {TopNReportLink}\nFolder: {ReportsFolderLink}\nSchedule: {SchedulingLink}"
+        };
+        var links = new DeliverableLinks
+        {
+            TopNReportUrl = session.TopNReportUrl,
+            ReportsFolderUrl = session.ReportsFolderUrl,
+            SchedulingLinkUrl = session.SchedulingLinkUrl
+        };
+
+        var email = EmailTemplateBuilder.Build(session, template, isRmitPlus: false, links);
+
+        Assert.Contains("https://sharepoint/topn", email);
+        Assert.Contains("https://sharepoint/folder", email);
+        Assert.Contains("https://timezest/meet", email);
+    }
 }
 
 public class CveReferenceHelperTests
@@ -916,6 +1174,93 @@ public class CveReferenceHelperTests
     {
         Assert.Equal("https://nvd.nist.gov/vuln/detail/CVE-2021-33558",
             CveReferenceHelper.GetNvdDetailUrl("cve-2021-33558"));
+    }
+
+    [Fact]
+    public void MergeCveIds_DeduplicatesValues()
+    {
+        Assert.Equal("CVE-2021-33558; CVE-2020-15778",
+            CveReferenceHelper.MergeCveIds("CVE-2021-33558", "CVE-2020-15778; CVE-2021-33558"));
+    }
+}
+
+public class NvdRemediationFormatterTests
+{
+    [Fact]
+    public void BuildSummary_PrefersAdvisoryLinksAndDescription()
+    {
+        const string json = """
+            {
+              "cve": {
+                "descriptions": [{ "lang": "en", "value": "Example firmware vulnerability." }],
+                "references": [
+                  { "url": "https://vendor.example/security/advisory-123", "source": "vendor" },
+                  { "url": "https://example.com/other", "source": "misc" }
+                ]
+              }
+            }
+            """;
+
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var summary = NvdRemediationFormatter.BuildSummary(document.RootElement);
+
+        Assert.Contains("vendor.example/security/advisory-123", summary);
+        Assert.Contains("Example firmware vulnerability.", summary);
+    }
+}
+
+public class CveEnrichmentPolicyTests
+{
+    [Fact]
+    public void IngestEnrichmentTargets_IncludeOnlyExportFindings()
+    {
+        var session = new ReviewSession
+        {
+            Findings =
+            [
+                new ReviewFinding { Product = "Chrome", IncludeInExport = true },
+                new ReviewFinding { Product = "CVE-1", Source = "Registry", IncludeInExport = false }
+            ]
+        };
+
+        var targets = session.Findings.Where(f => f.IncludeInExport).ToList();
+        Assert.Single(targets);
+        Assert.Equal("Chrome", targets[0].Product);
+    }
+
+    [Fact]
+    public void AppendNvdContext_AddsSummaryWhenFixMissing()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "CVE-2021-33558",
+            CveIds = "CVE-2021-33558",
+            NvdEnrichment = "https://vendor.example/advisory | Example firmware vulnerability."
+        };
+
+        var text = CveEnrichmentPolicy.AppendNvdContext("Review vendor advisory.", finding);
+
+        Assert.Contains("Review vendor advisory.", text);
+        Assert.Contains("NVD / advisory context:", text);
+        Assert.Contains("vendor.example/advisory", text);
+    }
+
+    [Fact]
+    public void GetTicketRemediationText_IncludesNvdContextWhenFixMissing()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "CVE-2021-33558",
+            CveIds = "CVE-2021-33558",
+            OriginalRemediation = "Generic guidance",
+            RevisedRemediation = "Generic guidance",
+            NvdEnrichment = "https://vendor.example/advisory | Example firmware vulnerability."
+        };
+
+        var text = FindingRemediationExport.GetTicketRemediationText(finding, new RemediationRuleService());
+
+        Assert.Contains("NVD / advisory context:", text);
+        Assert.Contains("vendor.example/advisory", text);
     }
 }
 
@@ -1099,7 +1444,11 @@ public class ReportArchiveHelperTests
     [Fact]
     public void EnsureExtractedReportFile_UnwrapsNestedXlsxWrapper()
     {
-        var wrapper = "/home/cknospe/Documents/VScanMagic/Downloads/Accurate Metal Products Inc - All Vulnerabilities Report_2026-05-23_15-53-06.xlsx";
+        var wrapper = Path.Combine(
+            Path.GetTempPath(),
+            "VScanMagic",
+            "Downloads",
+            "Fabrikam Industries Inc - All Vulnerabilities Report_2026-05-23_15-53-06.xlsx");
         if (!File.Exists(wrapper)) return;
 
         var extracted = Core.IO.ReportArchiveHelper.EnsureExtractedReportFile(wrapper);

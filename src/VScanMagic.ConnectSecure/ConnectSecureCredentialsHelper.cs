@@ -13,7 +13,7 @@ public static class ConnectSecureCredentialsHelper
         var issues = new List<string>();
 
         if (string.IsNullOrWhiteSpace(credentials.BaseUrl))
-            issues.Add("Base URL is required (include https://, e.g. https://pod104.myconnectsecure.com).");
+            issues.Add("Base URL is required (include https://, e.g. https://pod0.myconnectsecure.com).");
         else if (!credentials.BaseUrl.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             issues.Add("Base URL should start with https://.");
 

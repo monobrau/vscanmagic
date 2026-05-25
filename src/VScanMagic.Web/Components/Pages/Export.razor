@@ -13,7 +13,7 @@
 
 <PageTitle>Export</PageTitle>
 
-<h1>Export Review Session</h1>
+<h1>Export Review Session <HelpTip Text="Writes DOCX, PDF, and XLSX to the output folder. Copy email and tickets from Deliverables — not generated here." /></h1>
 
 @if (_session is null)
 {
@@ -23,7 +23,7 @@ else
 {
     <p>@_session.ClientName — @_session.ScanDate | Client type: @(_session.IsRmitPlus ? "RMIT+" : "RMIT/CMIT")</p>
     <div class="mb-3">
-        <label class="form-label">Output Directory</label>
+        <label class="form-label">Output Directory <HelpTip Text="Local quarterly folder under Reports Base Path. After export, use Explorer Copy link for Deliverables email URLs." AlignEnd="true" /></label>
         <input class="form-control" @bind="_outputDir" @bind:after="OnOutputDirectoryChanged" />
         @if (!string.IsNullOrWhiteSpace(_pathHint))
         {
@@ -37,7 +37,7 @@ else
                 <input class="form-check-input" type="checkbox" @bind="_includeHostCounts" id="includeHostCounts"
                        disabled="@(!CanExportHostCounts)" />
                 <label class="form-check-label" for="includeHostCounts">
-                    Host vulnerability counts (PDF + XLSX)
+                    Host vulnerability counts (PDF + XLSX) <HelpTip Text="Optional per-host totals from the full All Vulnerabilities source file." />
                 </label>
             </div>
             @if (!CanExportHostCounts)
@@ -54,18 +54,19 @@ else
     {
         <div class="alert alert-danger">@_error</div>
     }
+    <div class="mb-3">
+        <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">
+            Open deliverables
+        </a>
+        <span class="form-text">Ticket instructions, email, time estimate, and Manage PSA notes — copy from Deliverables during review.</span>
+    </div>
     @if (_result is not null)
     {
         <div class="alert alert-success">
             <p class="mb-2"><strong>Reports folder:</strong> @_result.OutputDirectory</p>
             <ul class="mb-0">
-                <li><strong>HTML Report (copy/paste):</strong> <a href="@ToFileUrl(_result.HtmlPath)" target="_blank" rel="noopener">@_result.HtmlPath</a></li>
                 <li>DOCX: @_result.DocxPath</li>
                 <li>PDF: @_result.PdfPath</li>
-                <li>Ticket Instructions: @_result.TicketPath</li>
-                <li>Ticket Notes (Manage PSA): @_result.TicketNotesPath</li>
-                <li>Time Estimate: @_result.TimeEstimatePath</li>
-                <li>Email: @_result.EmailTextPath</li>
                 <li>XLSX: @_result.XlsxPath</li>
                 @if (!string.IsNullOrWhiteSpace(_result.HostCountsPdfPath))
                 {
@@ -78,7 +79,7 @@ else
             </ul>
         </div>
     }
-    <button class="btn btn-primary" disabled="@_busy" @onclick="RunExport">Export All</button>
+    <button class="btn btn-primary" disabled="@_busy" @onclick="RunExport">Export client reports</button>
 }
 
 @code {
@@ -128,8 +129,8 @@ else
         {
             _outputDir = layout.OutputDirectory;
             _pathHint = layout.ReportsPathPartial is not null
-                ? $"Resolved: ...\\{layout.ReportsPathPartial}. DOCX/PDF/XLSX in quarter folder; HTML, email, and ticket text in Misc\\."
-                : $"Resolved under Reports Base Path. Text/HTML exports go in {layout.TextOutputDirectory}.";
+                ? $"Resolved: ...\\{layout.ReportsPathPartial}. Client reports (DOCX, PDF, XLSX) export to this quarter folder."
+                : $"Resolved under Reports Base Path: {layout.OutputDirectory}.";
         }
     }
 
@@ -178,7 +179,4 @@ else
             _busy = false;
         }
     }
-
-    private static string ToFileUrl(string path) =>
-        "file://" + path.Replace('\\', '/');
 }

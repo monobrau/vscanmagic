@@ -38,7 +38,7 @@ public sealed class ReportPathResolverTests : IDisposable
         Directory.CreateDirectory(fallback);
 
         var settings = new UserSettings { LastOutputDirectory = fallback };
-        var layout = _resolver.Resolve(settings, 15998, "Accurate Metal Products Inc", "2026-03-15", fallback);
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-03-15", fallback);
 
         Assert.Equal(fallback, layout.OutputDirectory);
         Assert.Equal(fallback, layout.TextOutputDirectory);
@@ -47,21 +47,20 @@ public sealed class ReportPathResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_WithBasePath_CreatesQuarterFolderAndMisc()
+    public void Resolve_WithBasePath_CreatesQuarterFolder()
     {
         var basePath = Path.Combine(_root, "ReportsBase");
-        var clientFolder = Path.Combine(basePath, "Accurate Metal Products", "Network Documentation", "Vulnerability Scans");
+        var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
         Directory.CreateDirectory(clientFolder);
 
         var settings = new UserSettings { ReportsBasePath = basePath };
-        var layout = _resolver.Resolve(settings, 15998, "Accurate Metal Products Inc", "2026-03-15", _root);
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-03-15", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.True(layout.UsesMiscSubfolder);
+        Assert.False(layout.UsesMiscSubfolder);
         Assert.EndsWith(Path.Combine("2026 - Q1"), layout.OutputDirectory);
-        Assert.Equal(Path.Combine(layout.OutputDirectory, "Misc"), layout.TextOutputDirectory);
+        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
-        Assert.True(Directory.Exists(layout.TextOutputDirectory));
     }
 
     [Fact]
@@ -93,13 +92,13 @@ public sealed class ReportPathResolverTests : IDisposable
     {
         var fullPath = Path.Combine(
             _root,
-            "Accurate Metal Products",
+            "Fabrikam Industries",
             "Network Documentation",
             "Vulnerability Scans",
             "2026 - Q1");
 
-        var partial = ReportPathResolver.GetReportsPathPartial(fullPath, "Accurate Metal Products");
-        Assert.Equal(@"Accurate Metal Products\Network Documentation\Vulnerability Scans\2026 - Q1", partial);
+        var partial = ReportPathResolver.GetReportsPathPartial(fullPath, "Fabrikam Industries");
+        Assert.Equal(@"Fabrikam Industries\Network Documentation\Vulnerability Scans\2026 - Q1", partial);
     }
 
     [Fact]
@@ -133,11 +132,10 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 0, "Unknown Client", "2026-01-01", fallback);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.True(layout.UsesMiscSubfolder);
+        Assert.False(layout.UsesMiscSubfolder);
         Assert.EndsWith(Path.Combine("Unknown Client", "2026 - Q1"), layout.OutputDirectory);
-        Assert.Equal(Path.Combine(layout.OutputDirectory, "Misc"), layout.TextOutputDirectory);
+        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
-        Assert.True(Directory.Exists(layout.TextOutputDirectory));
     }
 
     [Fact]
@@ -150,11 +148,10 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 0, "Brand New Client LLC", "2026-05-23", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.True(layout.UsesMiscSubfolder);
+        Assert.False(layout.UsesMiscSubfolder);
         Assert.EndsWith(Path.Combine("Brand New Client LLC", "2026 - Q2"), layout.OutputDirectory);
-        Assert.Equal(Path.Combine(layout.OutputDirectory, "Misc"), layout.TextOutputDirectory);
+        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
-        Assert.True(Directory.Exists(layout.TextOutputDirectory));
     }
 
     [Fact]
@@ -171,11 +168,11 @@ public sealed class ReportPathResolverTests : IDisposable
     public void Resolve_WithBasePath_MatchesClientFolderByNameWithoutCompanyId()
     {
         var basePath = Path.Combine(_root, "ReportsBase");
-        var clientFolder = Path.Combine(basePath, "Accurate Metal Products", "Network Documentation", "Vulnerability Scans");
+        var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
         Directory.CreateDirectory(clientFolder);
 
         var settings = new UserSettings { ReportsBasePath = basePath };
-        var layout = _resolver.Resolve(settings, 0, "Accurate Metal Products Inc", "2026-03-15", _root);
+        var layout = _resolver.Resolve(settings, 0, "Fabrikam Industries Inc", "2026-03-15", _root);
 
         Assert.True(layout.UsesStructuredPaths);
         Assert.EndsWith(Path.Combine("2026 - Q1"), layout.OutputDirectory);
@@ -202,17 +199,17 @@ public sealed class ReportPathResolverTests : IDisposable
     {
         var basePath = Path.Combine(_root, "ReportsBase");
         Directory.CreateDirectory(basePath);
-        _folderMap.SetFolder(15998, "Accurate Metal Products/Network Documentation/Vulnerability Scans");
+        _folderMap.SetFolder(12345, "Fabrikam Industries/Network Documentation/Vulnerability Scans");
 
         var settings = new UserSettings { ReportsBasePath = basePath };
-        var layout = _resolver.Resolve(settings, 15998, "Accurate Metal Products Inc", "2026-05-23", _root);
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-05-23", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.Contains("Accurate Metal Products", layout.OutputDirectory);
+        Assert.Contains("Fabrikam Industries", layout.OutputDirectory);
         Assert.Contains("Network Documentation", layout.OutputDirectory);
         Assert.Contains("Vulnerability Scans", layout.OutputDirectory);
         Assert.EndsWith(Path.Combine("2026 - Q2"), layout.OutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
-        Assert.True(Directory.Exists(layout.TextOutputDirectory));
+        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
     }
 }

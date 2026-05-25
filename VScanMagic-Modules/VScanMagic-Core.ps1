@@ -5,7 +5,7 @@
 $script:Config = @{
     AppName = "VScanMagic v4"
     Version = if ($script:VScanMagicVersion) { $script:VScanMagicVersion } else { '0.0.0' }
-    Author = "River Run MSP"
+    Author = "River Run"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
     # Severity weights from ConnectSecure Problem Category Weightage (External Scan / Asset Risk)
@@ -71,7 +71,9 @@ $script:Config = @{
     SyntheticEPSSForNoEPSS = 0.1
 
     # Top N report: always include at least this many Network vulns regardless of score (ensures network findings are visible)
-    MinNetworkVulnsInTopN = 2
+    MinNetworkVulnsInTopN = 0
+    MinHighSeverityCveInTopN = 0
+    CveOnlyRiskScale = 1.5
 
     # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
     AIBatchChunkSize = 2
@@ -134,7 +136,7 @@ if ($oldSettingsPath -and (Test-Path $oldSettingsPath) -and -not (Test-Path $scr
     }
 }
 $script:UserSettings = @{
-    PreparedBy = "River Run MSP"
+    PreparedBy = "River Run"
     CompanyName = ""
     CompanyAddress = ""
     Email = ""
@@ -388,7 +390,7 @@ function Load-UserSettings {
 
     $json = Get-JsonFile -Path $script:SettingsPath
     if ($json) {
-        $script:UserSettings.PreparedBy = if ($json.PreparedBy) { $json.PreparedBy } else { "River Run MSP" }
+        $script:UserSettings.PreparedBy = if ($json.PreparedBy) { $json.PreparedBy } else { "River Run" }
         $script:UserSettings.CompanyName = if ($json.CompanyName) { $json.CompanyName } else { "" }
         $script:UserSettings.CompanyAddress = if ($json.CompanyAddress) { $json.CompanyAddress } else { "" }
         $script:UserSettings.Email = if ($json.Email) { $json.Email } else { "" }

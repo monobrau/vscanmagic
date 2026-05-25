@@ -24,9 +24,10 @@ builder.Services.AddVScanMagicData();
 builder.Services.AddVScanMagicReview();
 builder.Services.AddVScanMagicReports();
 builder.Services.AddVScanMagicConnectSecure();
-builder.Services.AddSingleton<VulnerabilityPipeline>();
 builder.Services.AddSingleton<ExportOrchestrator>();
 builder.Services.AddSingleton<AppRestartService>();
+builder.Services.AddScoped<CompanyListService>();
+builder.Services.AddScoped<LoadTimingDisplay>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

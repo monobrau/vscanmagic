@@ -63,4 +63,14 @@ public static class VScanMagicPaths
         Directory.CreateDirectory(dir);
         return Path.Combine(dir, $"{Guid.NewGuid():N}_{baseName}");
     }
+
+    public static string NvdCacheDirectory()
+    {
+        var dir = Path.Combine(GetConfigDirectory(), "nvd-cache");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    public static string NvdCacheFile(string cveId) =>
+        Path.Combine(NvdCacheDirectory(), $"{cveId.Trim().ToUpperInvariant()}.json");
 }

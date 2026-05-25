@@ -27,6 +27,8 @@ public static class ReviewSessionRanker
 
         foreach (var finding in session.Findings)
         {
+            finding.Source = VulnerabilitySourceHelper.Normalize(finding.Source);
+
             var cleaned = ProductNameNormalizer.FormatDisplayName(finding.Product, options);
             if (!string.IsNullOrWhiteSpace(cleaned))
                 finding.Product = cleaned;
@@ -37,13 +39,11 @@ public static class ReviewSessionRanker
                 finding.OriginalFix = readableFix;
             }
 
-            finding.CveIds = "";
+            finding.CveIds = CveReferenceHelper.NormalizeFindingCveIds(finding.CveIds, finding.Product);
         }
 
-        session.Findings.RemoveAll(f => CveReferenceHelper.IsCveOnlyProduct(f.Product));
-
         ReviewFindingTimeEstimate.EnsureDefaults(session);
-        Rebalance(session);
+        RefreshExportRanks(session);
     }
 
     public static IReadOnlyList<ReviewFinding> GetExportFindings(ReviewSession session) =>
@@ -69,26 +69,95 @@ public static class ReviewSessionRanker
         return null;
     }
 
+    public static void PromoteToExport(ReviewSession session, ReviewFinding finding)
+    {
+        if (finding.ConnectSecureSuppressed)
+            return;
+
+        finding.IncludeInExport = true;
+        finding.ExcludedFromExport = false;
+        finding.ManuallyPromoted = true;
+        RefreshExportRanks(session);
+    }
+
+    public static void SetExportIncluded(ReviewSession session, ReviewFinding finding, bool include)
+    {
+        if (finding.ConnectSecureSuppressed)
+            return;
+
+        if (include)
+        {
+            finding.IncludeInExport = true;
+            finding.ExcludedFromExport = false;
+        }
+        else
+        {
+            finding.IncludeInExport = false;
+            finding.ExcludedFromExport = true;
+            finding.ManuallyPromoted = false;
+        }
+
+        Rebalance(session);
+    }
+
     public static void Rebalance(ReviewSession session)
     {
         var target = session.ExportTopN <= 0 ? int.MaxValue : session.ExportTopN;
-        var included = session.Findings.Where(f => f.IncludeInExport).OrderBy(f => f.OriginalRank).ToList();
 
-        while (included.Count < target)
+        while (session.Findings.Count(f => f.IncludeInExport && !f.ManuallyPromoted) < target)
         {
             var next = session.Findings
-                .Where(f => !f.IncludeInExport && !f.ExcludedFromExport)
+                .Where(f => !f.IncludeInExport &&
+                            !f.ExcludedFromExport &&
+                            !f.ConnectSecureSuppressed &&
+                            VulnerabilitySourceHelper.IsApplication(f.Source))
                 .OrderBy(f => f.OriginalRank)
                 .FirstOrDefault();
             if (next is null)
                 break;
 
             next.IncludeInExport = true;
-            included.Add(next);
+            next.ManuallyPromoted = false;
         }
 
+        RefreshExportRanks(session);
+    }
+
+    public static void RefreshExportRanks(ReviewSession session)
+    {
         var exportOrder = session.Findings.Where(f => f.IncludeInExport).OrderBy(f => f.OriginalRank).ToList();
         for (var i = 0; i < exportOrder.Count; i++)
             exportOrder[i].Rank = i + 1;
     }
+
+    public static void MarkConnectSecureSuppressed(
+        ReviewSession session,
+        ReviewFinding finding,
+        string reason,
+        string? comments)
+    {
+        finding.ConnectSecureSuppressed = true;
+        finding.SuppressionReason = reason.Trim();
+        finding.SuppressionComments = string.IsNullOrWhiteSpace(comments) ? null : comments.Trim();
+        finding.SuppressedAt = DateTimeOffset.UtcNow;
+        finding.Status = FindingStatus.WontFix;
+        finding.IncludeInExport = false;
+        finding.ExcludedFromExport = true;
+        finding.ManuallyPromoted = false;
+        Rebalance(session);
+    }
+
+    public static void MarkConnectSecureUnsuppressed(ReviewSession session, ReviewFinding finding)
+    {
+        finding.ConnectSecureSuppressed = false;
+        finding.SuppressionReason = null;
+        finding.SuppressionComments = null;
+        finding.SuppressedAt = null;
+        finding.ConnectSecureSuppressRecordId = null;
+        finding.ExcludedFromExport = false;
+        if (finding.Status == FindingStatus.WontFix)
+            finding.Status = FindingStatus.Open;
+        Rebalance(session);
+    }
 }
+

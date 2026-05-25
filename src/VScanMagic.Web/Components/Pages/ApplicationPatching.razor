@@ -2,16 +2,20 @@
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Services
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
 @inject SettingsService Settings
+@inject CompanyListService CompanyList
+@inject LoadTimingDisplay LoadTiming
 
 <PageTitle>Application Patching</PageTitle>
 
 <h1>Application Patching</h1>
 <p class="text-muted">
     Patchable third-party apps from ConnectSecure remediation plan data. ConnectSecure may return multiple rows per product;
-    this page groups them by product and deduplicates hosts. Online and offline hosts are listed; patching requires online agents.
+    this page groups them by product and deduplicates hosts. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code> — not remediation <code>online_status</code>.
+    Only online agents can be patched.
     See also <a href="os-patching">OS Patching</a> and <a href="vulnerability-suppress">Suppress vulnerabilities</a>.
     <a href="company-review">Company Review</a> covers tenant configuration checks, scan targets, and scan triggers.
 </p>
@@ -42,6 +46,10 @@ else
                     <button class="btn btn-primary w-100" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="LoadPatchableApplicationsAsync">
                         Load patchable apps
                     </button>
+                    @if (!string.IsNullOrWhiteSpace(LoadTiming.ResultText))
+                    {
+                        <div class="form-text mt-1">@LoadTiming.ResultText</div>
+                    }
                 </div>
             </div>
         </div>
@@ -59,54 +67,14 @@ else
 
 @if (_loaded)
 {
-    <div class="card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <span>Recent patch activity</span>
-            <button type="button" class="btn btn-sm btn-outline-secondary"
-                    disabled="@(_busy || _loadingJobs || _companyId <= 0)"
-                    @onclick="RefreshPatchJobsAsync">
-                @(_loadingJobs ? "Refreshing…" : "Refresh jobs")
-            </button>
-        </div>
-        <div class="card-body">
-            @if (_loadingJobs)
-            {
-                <p class="text-muted mb-0">Loading patch jobs…</p>
-            }
-            else if (_patchJobs.Count == 0)
-            {
-                <p class="text-muted mb-0">No patch requests recorded for this company yet. ConnectSecure does not expose patch jobs in its jobs API; entries appear here after you send patches from VScanMagic.</p>
-            }
-            else
-            {
-                <div class="table-responsive">
-                    <table class="table table-sm mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Updated</th>
-                                <th>Type</th>
-                                <th>Status</th>
-                                <th>Host</th>
-                                <th>Description</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var job in _patchJobs)
-                            {
-                                <tr>
-                                    <td class="text-nowrap small">@(job.Updated?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
-                                    <td>@job.Type</td>
-                                    <td>@job.Status</td>
-                                    <td class="small">@(string.IsNullOrWhiteSpace(job.HostName) ? "—" : job.HostName)</td>
-                                    <td class="small text-muted">@job.Description</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </div>
-    </div>
+    <PatchActivityTable @ref="_patchActivityTable"
+                        CompanyId="_companyId"
+                        Jobs="_patchJobs"
+                        LoadingJobs="_loadingJobs"
+                        Busy="_busy"
+                        OnRefreshJobs="RefreshPatchJobsAsync"
+                        VerificationMessageChanged="SetVerificationMessage"
+                        VerificationErrorChanged="SetVerificationError" />
 
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -145,7 +113,7 @@ else
                 <div class="row g-2 align-items-end mb-3">
                     <div class="col-md-4">
                         <label class="form-label">Severity</label>
-                        <select class="form-select form-select-sm" @bind="_severityFilter">
+                        <select class="form-select form-select-sm" @bind="_severityFilter" @bind:after="OnPatchFiltersChangedAsync">
                             <option value="all">All</option>
                             <option value="critical">Critical only</option>
                             <option value="high+">Critical + High</option>
@@ -153,7 +121,7 @@ else
                     </div>
                     <div class="col-md-4">
                         <div class="form-check mt-4">
-                            <input class="form-check-input" type="checkbox" id="hideEol" @bind="_hideEndOfLife" />
+                            <input class="form-check-input" type="checkbox" id="hideEol" @bind="_hideEndOfLife" @bind:after="OnPatchFiltersChangedAsync" />
                             <label class="form-check-label" for="hideEol">Hide end-of-life products</label>
                         </div>
                     </div>
@@ -247,6 +215,7 @@ else
                                                                     <th style="width: 2rem;"></th>
                                                                     <th>Host</th>
                                                                     <th>IP</th>
+                                                                    <th>Agent</th>
                                                                     <th>Installed</th>
                                                                     <th>Connectivity</th>
                                                                     <th>Patch status</th>
@@ -259,7 +228,7 @@ else
                                                                     var agentId = target.AgentId;
                                                                     var selectable = CanSelectHost(host);
                                                                     var selected = agentId > 0 && _selectedPatchAgentIds.Contains(agentId);
-                                                                    <tr>
+                                                                    <tr class="@(target.OnlineStatus ? null : "table-warning")">
                                                                         <td>
                                                                             @if (selectable)
                                                                             {
@@ -272,19 +241,18 @@ else
                                                                                 <span class="text-muted small" title="No agent id reported">—</span>
                                                                             }
                                                                         </td>
-                                                                        <td>@target.HostName</td>
-                                                                        <td><code>@target.Ip</code></td>
-                                                                        <td class="small">@PatchCatalogHelper.FormatVersionSummary(target.Versions)</td>
                                                                         <td>
-                                                                            @if (target.OnlineStatus)
+                                                                            @target.HostName
+                                                                            @if (!string.IsNullOrWhiteSpace(target.RegisteredHostName) &&
+                                                                                 !string.Equals(target.HostName, target.RegisteredHostName, StringComparison.OrdinalIgnoreCase))
                                                                             {
-                                                                                <span class="text-success">Online</span>
-                                                                            }
-                                                                            else
-                                                                            {
-                                                                                <span class="text-warning">Offline</span>
+                                                                                <span class="text-muted small"> (agent: @target.RegisteredHostName)</span>
                                                                             }
                                                                         </td>
+                                                                        <td><code>@target.Ip</code></td>
+                                                                        <td><PatchAgentStatusCell Detail="target" /></td>
+                                                                        <td class="small">@PatchCatalogHelper.FormatVersionSummary(target.Versions)</td>
+                                                                        <td><PatchAgentConnectivityCell Detail="target" /></td>
                                                                         <td>
                                                                             <span class="@PatchStatusClass(host.Status)">@host.StatusLabel</span>
                                                                         </td>
@@ -346,6 +314,7 @@ else
     private string? _message;
     private bool _busy;
     private List<PatchableApplicationEntry> _patchableApps = [];
+    private List<PatchableApplicationEntry> _allPatchableApps = [];
     private List<PatchableProductGroup> _productGroups = [];
     private int _rawEntryCount;
     private string _severityFilter = "high+";
@@ -361,17 +330,15 @@ else
     private List<PatchHostView> _patchHostViews = [];
     private List<PatchJobEntry> _patchJobs = [];
     private readonly HashSet<int> _selectedPatchAgentIds = [];
+    private readonly Dictionary<string, List<PatchHostView>> _expandedHostCache = new(StringComparer.OrdinalIgnoreCase);
     private int _loadGeneration;
     private int _expandGeneration;
     private CancellationTokenSource? _loadCts;
+    private PatchActivityTable? _patchActivityTable;
 
     private CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
-    private IReadOnlyList<PatchableProductGroup> VisibleProductGroups =>
-        _productGroups
-            .Where(MatchesSeverityFilter)
-            .Where(group => !_hideEndOfLife || !group.IsEndOfLife)
-            .ToList();
+    private IReadOnlyList<PatchableProductGroup> VisibleProductGroups => _productGroups;
 
     protected override async Task OnInitializedAsync()
     {
@@ -396,7 +363,7 @@ else
         _busy = true;
         try
         {
-            _companies = (await ConnectSecure.GetCompaniesAsync(LoadCancellationToken)).ToList();
+            _companies = (await CompanyList.GetCompaniesAsync(LoadCancellationToken)).ToList();
         }
         catch (OperationCanceledException)
         {
@@ -435,6 +402,7 @@ else
         _error = null;
         _message = null;
         _patchableApps = [];
+        _allPatchableApps = [];
         _productGroups = [];
         _rawEntryCount = 0;
         _patchJobs = [];
@@ -444,7 +412,11 @@ else
         _patchAssetDetails = [];
         _patchHostViews = [];
         _selectedPatchAgentIds.Clear();
+        _expandedHostCache.Clear();
     }
+
+    private static string ExpandCacheKey(int companyId, PatchableProductGroup product) =>
+        $"{companyId}:{string.Join(',', product.SolutionIds.OrderBy(id => id))}";
 
     private async Task LoadPatchableApplicationsAsync()
     {
@@ -462,24 +434,36 @@ else
         _selectedPatchAgentIds.Clear();
         _busy = true;
         var generation = ++_loadGeneration;
+        LoadTiming.Start("Load patchable apps");
 
         try
         {
-            _patchableApps = (await PatchService.GetPatchableApplicationsAsync(_companyId, ct: LoadCancellationToken)).ToList();
+            _allPatchableApps = (await PatchService.GetPatchableApplicationsAsync(
+                _companyId,
+                loadOptions: new PatchApplicationLoadOptions
+                {
+                    SeverityFilter = "all",
+                    HideEndOfLife = false
+                },
+                ct: LoadCancellationToken)).ToList();
             if (generation != _loadGeneration)
                 return;
 
-            _rawEntryCount = _patchableApps.Count;
-            _productGroups = PatchCatalogHelper.GroupByProduct(_patchableApps).ToList();
+            ApplyPatchableAppFilters();
+            _expandedHostCache.Clear();
             await LoadPatchJobsAsync(generation);
+            LoadTiming.Complete($"{_allPatchableApps.Count} apps");
         }
         catch (OperationCanceledException)
         {
+            LoadTiming.Fail("cancelled");
         }
         catch (Exception ex)
         {
+            LoadTiming.Fail(ex.Message);
             _error = ex.Message;
             _patchableApps = [];
+            _allPatchableApps = [];
             _productGroups = [];
             _rawEntryCount = 0;
         }
@@ -559,6 +543,18 @@ else
         _loadingPatchAssets = true;
         try
         {
+            var cacheKey = ExpandCacheKey(_companyId, product);
+            if (_expandedHostCache.TryGetValue(cacheKey, out var cachedViews))
+            {
+                if (generation != _expandGeneration)
+                    return;
+
+                _patchHostViews = cachedViews;
+                _patchAssetDetails = cachedViews.Select(view => view.Detail).ToList();
+                SelectAllOnlinePatchAgents();
+                return;
+            }
+
             var details = (await PatchService.GetPatchingAssetDetailsForProductAsync(
                 _companyId,
                 product.SolutionIds,
@@ -571,6 +567,7 @@ else
                 _patchAssetDetails,
                 product.TargetFix,
                 product.IsEndOfLife).ToList();
+            _expandedHostCache[cacheKey] = _patchHostViews;
             SelectAllOnlinePatchAgents();
         }
         catch (OperationCanceledException)
@@ -586,13 +583,24 @@ else
         }
     }
 
-    private bool MatchesSeverityFilter(PatchableProductGroup group) =>
-        _severityFilter switch
-        {
-            "critical" => PatchCatalogHelper.SeverityRank(group.Severity) >= PatchCatalogHelper.SeverityRank("Critical"),
-            "high+" => PatchCatalogHelper.SeverityRank(group.Severity) >= PatchCatalogHelper.SeverityRank("High"),
-            _ => true
-        };
+    private async Task OnPatchFiltersChangedAsync()
+    {
+        if (!_loaded || _companyId <= 0)
+            return;
+
+        ApplyPatchableAppFilters();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyPatchableAppFilters()
+    {
+        _patchableApps = _allPatchableApps
+            .Where(entry => PatchCatalogHelper.MeetsSeverityFilter(entry.Severity, _severityFilter))
+            .Where(entry => !_hideEndOfLife || !PatchCatalogHelper.IsEndOfLifeProductFix(entry.Fix))
+            .ToList();
+        _rawEntryCount = _allPatchableApps.Count;
+        _productGroups = PatchCatalogHelper.GroupByProduct(_patchableApps).ToList();
+    }
 
     private static bool CanSelectHost(PatchHostView host) =>
         host.Detail.AgentId > 0 && host.Detail.OnlineStatus;
@@ -675,14 +683,19 @@ else
                     .Select(t => t.HostName)
                     .Where(name => !string.IsNullOrWhiteSpace(name))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList()
+                    .ToList(),
+                SolutionIds = product.SolutionIds,
+                TargetFix = product.TargetFix,
+                IsEndOfLife = product.IsEndOfLife
             });
 
-            _message = result.Message;
+            _message = $"{result.Message} Use Verify in patch activity after agents finish installing.";
             _confirmProduct = null;
             await LoadPatchJobsAsync();
             if (_expandedProductGroup is not null)
                 await RefreshExpandedHostsAsync();
+            if (!string.IsNullOrWhiteSpace(result.JobId) && _patchActivityTable is not null)
+                await _patchActivityTable.VerifyJobAsync(result.JobId);
         }
         catch (Exception ex)
         {
@@ -703,4 +716,18 @@ else
             HostPatchStatus.EndOfLife => "text-danger",
             _ => "text-muted"
         };
+
+    private Task SetVerificationMessage(string? message)
+    {
+        if (!string.IsNullOrWhiteSpace(message))
+            _message = message;
+        return Task.CompletedTask;
+    }
+
+    private Task SetVerificationError(string? error)
+    {
+        if (!string.IsNullOrWhiteSpace(error))
+            _error = error;
+        return Task.CompletedTask;
+    }
 }

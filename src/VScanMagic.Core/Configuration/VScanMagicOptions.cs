@@ -3,7 +3,7 @@ namespace VScanMagic.Core.Configuration;
 public sealed class VScanMagicOptions
 {
     public string AppName { get; set; } = "VScanMagic";
-    public string Author { get; set; } = "River Run MSP";
+    public string Author { get; set; } = "River Run";
 
     public SeverityWeights SeverityWeights { get; set; } = new();
     public CvssEquivalent CvssEquivalent { get; set; } = new();
@@ -20,7 +20,11 @@ public sealed class VScanMagicOptions
         ["Windows 10 (all versions)"] = ["Windows 10", "Windows 1022H2"]
     };
     public double SyntheticEpssForNoEpss { get; set; } = 0.1;
-    public int MinNetworkVulnsInTopN { get; set; } = 2;
+    public int MinNetworkVulnsInTopN { get; set; } = 0;
+    /// <summary>Legacy auto-reserve for critical/high CVE-only findings (0 = technician picks in review).</summary>
+    public int MinHighSeverityCveInTopN { get; set; } = 0;
+    /// <summary>Scales CVE-only severity onto the same range as multi-vuln product buckets.</summary>
+    public double CveOnlyRiskScale { get; set; } = 1.5;
 }
 
 public sealed class SeverityWeights

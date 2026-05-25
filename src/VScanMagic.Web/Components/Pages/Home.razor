@@ -1,9 +1,11 @@
 ﻿@page "/"
 @rendermode InteractiveServer
+@using VScanMagic.Data
 @using VScanMagic.ConnectSecure
 @using VScanMagic.Core.Paths
 @using VScanMagic.Core.Services
 @using VScanMagic.Review
+@using VScanMagic.Review.Services
 @inject VulnerabilityPipeline Pipeline
 @inject ReviewSessionFactory SessionFactory
 @inject IReviewSessionRepository SessionRepo
@@ -17,7 +19,11 @@
 
 <PageTitle>VScanMagic - Ingest</PageTitle>
 
-<h1>VScanMagic</h1>
+<h1>VScanMagic <HelpTip Text="Quarterly vulnerability review for ConnectSecure data. See Help in the sidebar for the full workflow." /></h1>
+
+<div class="alert alert-light border mb-3 py-2 small">
+    New here? Read the <a href="/help">Help &amp; workflow guide</a> — prep, export, email client, then live review on a call.
+</div>
 
 <div class="card mb-3">
     <div class="card-header">1. Download from ConnectSecure</div>
@@ -30,7 +36,7 @@
         {
             <div class="row mb-3">
                 <div class="col-md-6">
-                    <label class="form-label">Company</label>
+                    <label class="form-label">Company <HelpTip Text="ConnectSecure tenant company. Used for downloads, folder mapping, and session company id." /></label>
                     <div class="input-group">
                         <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanyChanged">
                             <option value="">-- Select company --</option>
@@ -47,13 +53,13 @@
                     <input class="form-control" value="@SelectedCompanyName" readonly />
                     <div class="form-check mt-2">
                         <input class="form-check-input" type="checkbox" @bind="_isRmitPlus" id="rmitPlusDownload" />
-                        <label class="form-check-label" for="rmitPlusDownload">RMIT+</label>
+                        <label class="form-check-label" for="rmitPlusDownload">RMIT+ <HelpTip Text="RMIT+ agreement clients: tickets and email note assume covered remediation. Hourly (RMIT/CMIT) clients require approval before work begins." /></label>
                     </div>
                 </div>
             </div>
             <div class="row mb-3">
                 <div class="col-md-12">
-                    <label class="form-label">Output Directory</label>
+                    <label class="form-label">Output Directory <HelpTip Text="Local folder for downloaded ConnectSecure reports. Usually the quarterly path under Reports Base Path (Settings). Synced OneDrive folders work here." AlignEnd="true" /></label>
                     <input class="form-control" @bind="_outputDirectory" @bind:after="OnOutputDirectoryChanged" />
                     @if (!string.IsNullOrWhiteSpace(_resolvedPathHint))
                     {
@@ -62,7 +68,7 @@
                 </div>
             </div>
 
-            <p class="fw-semibold mb-2">Standard reports</p>
+            <p class="fw-semibold mb-2">Standard reports <HelpTip Text="ConnectSecure standard report bundle. Include All Vulnerabilities — required to start a review session." /></p>
             <div class="row mb-1">
                 @for (var ri = 0; ri < _standardReports.Count; ri++)
                 {
@@ -116,7 +122,7 @@
 <div class="card mb-3">
     <div class="card-header">2. Start review from XLSX</div>
     <div class="card-body">
-        <p class="text-muted">Upload or specify a local All Vulnerabilities XLSX to start a client review session.</p>
+        <p class="text-muted">Upload or specify a local All Vulnerabilities XLSX to start a client review session. Network and registry findings load as candidates — use the review session <strong>Add to export</strong> tab before the client call.</p>
         @if (CsClient.IsConfigured)
         {
             <div class="mb-3">
@@ -126,17 +132,17 @@
             </div>
         }
         <div class="mb-3">
-            <label class="form-label">Scan Date</label>
+            <label class="form-label">Scan Date <HelpTip Text="Quarterly scan date shown on exports and used to resolve the year-quarter output folder." /></label>
             <input class="form-control" type="date" @bind="_scanDate" @bind:after="RefreshResolvedOutputPath" />
         </div>
         <div class="mb-3">
-            <label class="form-label">Presenter</label>
+            <label class="form-label">Presenter <HelpTip Text="Your name — appears as Prepared By in client email templates and exports." /></label>
             <input class="form-control" @bind="_presenter" />
         </div>
         <div class="mb-3">
             <div class="form-check">
                 <input class="form-check-input" type="checkbox" @bind="_isRmitPlus" id="rmitPlusReview" />
-                <label class="form-check-label" for="rmitPlusReview">RMIT+ client</label>
+                <label class="form-check-label" for="rmitPlusReview">RMIT+ client <HelpTip Text="Sets client type for this review session. Affects email wording, ticket suffixes, and time-estimate billing fields." /></label>
             </div>
             <div class="form-text">
                 Affects email template wording and ticket subject suffixes in HTML exports.
@@ -144,7 +150,7 @@
             </div>
         </div>
         <div class="mb-3">
-            <label class="form-label">Upload XLSX</label>
+            <label class="form-label">Upload XLSX <HelpTip Text="Must be ConnectSecure All Vulnerabilities export — not Top Ten Data alone." AlignEnd="true" /></label>
             <InputFile OnChange="OnFileSelected" accept=".xlsx,.xls" class="form-control" />
         </div>
         <div class="mb-3">
@@ -224,8 +230,8 @@
         {
             _outputDirectory = layout.OutputDirectory;
             _resolvedPathHint = layout.ReportsPathPartial is not null
-                ? $"Resolved under Reports Base Path: ...\\{layout.ReportsPathPartial}. ConnectSecure downloads land in the quarter folder; ticket/email HTML goes in Misc\\."
-                : $"Resolved under Reports Base Path: {layout.OutputDirectory}. Ticket/email HTML goes in Misc\\.";
+                ? $"Resolved under Reports Base Path: ...\\{layout.ReportsPathPartial}. ConnectSecure downloads and client exports land in the quarter folder."
+                : $"Resolved under Reports Base Path: {layout.OutputDirectory}.";
         }
         else
         {
@@ -388,9 +394,14 @@
         try
         {
             var settings = Settings.LoadUserSettings();
-            var exportTopN = ReportFilters.ParseTopN(settings.FilterTopN);
-            var result = Pipeline.ProcessFile(path, ReportFilters.CandidatePoolFilters(settings));
-            if (result.TopVulnerabilities.Count == 0)
+            var exportFilters = ReportFilters.FromUserSettings(settings);
+            var exportTopN = exportFilters.TopN;
+            var ingestOptions = new VulnerabilityIngestOptions(
+                SupplementDirectory: Path.GetDirectoryName(path),
+                CompanyId: int.TryParse(_selectedCompanyId, out var cid) ? cid : null);
+
+            var result = await Pipeline.ProcessFileAsync(path, exportFilters, ingestOptions);
+            if (result.Scored.AllFiltered.Count == 0)
             {
                 _error = result.AllRecords.Count == 0
                     ? "No vulnerabilities found in this file. Use the ConnectSecure All Vulnerabilities XLSX — not a Top Ten Data export."
@@ -398,17 +409,19 @@
                 return;
             }
 
-            var session = SessionFactory.CreateFromTopVulnerabilities(
+            var session = SessionFactory.CreateFromScoredResult(
                 clientName,
                 _scanDate.ToString("yyyy-MM-dd"),
-                result.TopVulnerabilities,
+                result.Scored,
                 _presenter,
                 path,
                 _selectedCompanyId,
                 exportTopN,
                 _isRmitPlus);
             HostOsThresholdApplier.Apply(session, settings);
+            DeliverableLinksResolver.ApplyDefaultsToSession(session, settings);
             RmitPlusSettings.Set(clientName, _isRmitPlus);
+
             await SessionRepo.SaveAsync(session);
             Nav.NavigateTo($"/review/{session.Id}");
         }

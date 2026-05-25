@@ -1,11 +1,15 @@
 using System.Net;
 using System.Text;
 using VScanMagic.Core.Services;
+using VScanMagic.Review;
 using VScanMagic.Review.Models;
 
 namespace VScanMagic.Reports;
 
-public sealed class CombinedReportHtmlExporter(TemplatesService templatesService, RemediationRuleService remediationRules)
+public sealed class CombinedReportHtmlExporter(
+    TemplatesService templatesService,
+    RemediationRuleService remediationRules,
+    SettingsService settingsService)
 {
     public void Export(ReviewSession session, string outputPath, string? reportsPathPartial = null)
     {
@@ -23,7 +27,8 @@ public sealed class CombinedReportHtmlExporter(TemplatesService templatesService
         templates ??= templatesService.Load();
         var sections = TicketInstructionBuilder.BuildSections(session, remediationRules, reportsPathPartial);
         var ticketInstructionsHtml = BuildTicketInstructionsPanel(sections);
-        var emailContent = EmailTemplateBuilder.Build(session, templates);
+        var links = DeliverableLinksResolver.Resolve(session, settingsService.LoadUserSettings());
+        var emailContent = EmailTemplateBuilder.Build(session, templates, links);
         var (emailSubject, _) = EmailTemplateBuilder.SplitSubjectAndBody(emailContent);
         var emailPanelHtml = BuildCopyPanel(
             panelId: "email",
@@ -34,7 +39,7 @@ public sealed class CombinedReportHtmlExporter(TemplatesService templatesService
                 """,
             contentId: "email-content",
             content: emailContent,
-            useTextarea: true,
+            useTextarea: false,
             dataAttributes: $"data-email-subject=\"{Html(emailSubject)}\"");
 
         var ticketNotes = TicketNotesBuilder.Build(session, templates.TicketNotes, session.IsRmitPlus);
@@ -118,9 +123,8 @@ public sealed class CombinedReportHtmlExporter(TemplatesService templatesService
         .tab-actions { margin-bottom: 12px; }
         .tab-actions .copy-btn, .section-actions button { margin-right: 8px; padding: 8px 16px; cursor: pointer; background: #0066cc; color: #fff; border: none; border-radius: 4px; font-size: 13px; }
         .tab-actions .copy-btn:hover, .section-actions button:hover { background: #0052a3; }
-        .tab-pre, .section-text { white-space: pre-wrap; overflow-x: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; min-width: min(80ch, 100%); word-break: break-word; }
+        .tab-pre, .section-text { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; margin: 0; min-width: min(80ch, 100%); word-break: break-word; overflow-wrap: anywhere; }
         .tab-pre { padding: 20px; background: #fff; border-radius: 8px; border: 1px solid #ddd; }
-        textarea.tab-pre.email-template-text { display: block; width: 100%; box-sizing: border-box; min-height: 22rem; resize: vertical; border: 1px solid #ddd; overflow-wrap: anywhere; }
         .vuln-section { background: #fff; padding: 20px; margin-bottom: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
         .vuln-section h2 { margin: 0 0 12px 0; font-size: 18px; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
         .subject-line { font-size: 13px; color: #333; margin: 8px 0 12px 0; }
@@ -234,9 +238,9 @@ public sealed class CombinedReportHtmlExporter(TemplatesService templatesService
           copyText(subject);
         }
         function copyEmailBody() {
-          var ta = document.getElementById('email-content');
-          if (!ta || typeof ta.value !== 'string') return;
-          var full = ta.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          var el = document.getElementById('email-content');
+          if (!el) return;
+          var full = (el.innerText || el.textContent || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
           var lines = full.split('\n');
           var body = full;
           if (lines.length > 0 && /^Subject:\s*/i.test(lines[0])) {

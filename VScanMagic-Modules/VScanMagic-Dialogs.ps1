@@ -2247,7 +2247,7 @@ function Show-ConnectSecureSettingsDialog {
     $txtTenant = New-Object System.Windows.Forms.TextBox
     $txtTenant.Location = New-Object System.Drawing.Point(140, $y)
     $txtTenant.Size = New-Object System.Drawing.Size(200, 20)
-    $txtTenant.Text = "river-run"
+    $txtTenant.Text = "example-tenant"
     $dlg.Controls.Add($txtTenant)
     $y += 35
 
@@ -2319,7 +2319,7 @@ function Show-ConnectSecureSettingsDialog {
     $btnClear.Text = "Clear"
     $btnClear.Add_Click({
         $txtBaseUrl.Text = "https://pod0.myconnectsecure.com"
-        $txtTenant.Text = "river-run"
+        $txtTenant.Text = "example-tenant"
         $txtClientId.Text = ""
         $txtClientSecret.Text = ""
     })
@@ -3716,7 +3716,7 @@ function Show-SettingsDialog {
     $btnBrowseReportsBase.Text = "Browse..."
     $btnBrowseReportsBase.Add_Click({
         $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-        $folderBrowser.Description = "Select base folder for client output (e.g. OneDrive root). When mapping companies, you can select subfolders at any depth (e.g. ...\General\Accurate Metal\Network Documentation\Vulnerability Scans)."
+        $folderBrowser.Description = "Select base folder for client output (e.g. OneDrive root). When mapping companies, you can select subfolders at any depth (e.g. ...\General\Fabrikam\Network Documentation\Vulnerability Scans)."
         $folderBrowser.ShowNewFolderButton = $true
         $startPath = $txtReportsBasePath.Text.Trim()
         if ($startPath -and (Test-Path $startPath)) { $folderBrowser.SelectedPath = $startPath }
@@ -4193,7 +4193,7 @@ STEP 3: Copy each value
      Example: https://pod0.myconnectsecure.com
 
    - Tenant Name
-     The name you use to log in. Example: river-run
+     The name you use to log in. Example: example-tenant
      Often appears in the ConnectSecure portal or API Key page.
 
    - Client ID

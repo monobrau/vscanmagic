@@ -16,22 +16,24 @@ public static class FindingRemediationExport
     }
 
     public static string GetWordRemediationText(ReviewFinding finding) =>
-        FindingExportDetails.GetRemediationText(finding);
+        CveEnrichmentPolicy.AppendNvdContext(FindingExportDetails.GetRemediationText(finding), finding);
 
     public static string GetTicketRemediationText(ReviewFinding finding, RemediationRuleService remediationRules)
     {
         if (IsRemediationEdited(finding))
-            return FindingExportDetails.GetRemediationText(finding);
+            return CveEnrichmentPolicy.AppendNvdContext(FindingExportDetails.GetRemediationText(finding), finding);
 
-        return remediationRules.GetGuidance(finding.Product, forWord: false);
+        var guidance = remediationRules.GetGuidance(finding.Product, forWord: false);
+        return CveEnrichmentPolicy.AppendNvdContext(guidance, finding);
     }
 
     public static string GetTimeEstimateRemediationText(ReviewFinding finding, RemediationRuleService remediationRules)
     {
         if (IsRemediationEdited(finding))
-            return FindingExportDetails.GetRemediationText(finding);
+            return CveEnrichmentPolicy.AppendNvdContext(FindingExportDetails.GetRemediationText(finding), finding);
 
-        return remediationRules.GetGuidance(finding.Product, forWord: false);
+        var guidance = remediationRules.GetGuidance(finding.Product, forWord: false);
+        return CveEnrichmentPolicy.AppendNvdContext(guidance, finding);
     }
 
     public static string? GetConnectSecureSolution(ReviewFinding finding)

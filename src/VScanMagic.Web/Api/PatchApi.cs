@@ -18,7 +18,7 @@ public static class PatchApi
             if (companyId <= 0)
                 return Results.BadRequest(new { error = "companyId is required." });
 
-            var apps = await patchService.GetPatchableApplicationsAsync(companyId, patchableOnly, ct);
+            var apps = await patchService.GetPatchableApplicationsAsync(companyId, patchableOnly, ct: ct);
             return Results.Ok(apps);
         });
 

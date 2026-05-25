@@ -26,6 +26,16 @@ public static class RiskScoreCalculator
         if (IsEolProduct(productName, options))
             severityWeightedSum += vulnCount * 1.0;
 
+        if (CveReferenceHelper.IsCveOnlyProduct(productName))
+        {
+            // CVE-only rows are one finding per product name; score by severity band + EPSS, not host vuln count.
+            var avgCvss = GetAverageCvss(critical, high, medium, low, options.CvssEquivalent);
+            if (avgCvss > 0)
+            {
+                severityWeightedSum = Math.Max(severityWeightedSum, avgCvss * options.CveOnlyRiskScale);
+            }
+        }
+
         var effectiveEpss = epssScore;
         if (double.IsNaN(effectiveEpss))
             effectiveEpss = options.SyntheticEpssForNoEpss;

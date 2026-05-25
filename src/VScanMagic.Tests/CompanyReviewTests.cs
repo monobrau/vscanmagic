@@ -9,8 +9,9 @@ public sealed class CompanyReviewServiceTests
     [Fact]
     public void CompanyQuery_UsesConditionNotCompanyIdParam()
     {
-        var query = ConnectSecureCompanyReviewService.CompanyQuery(15998, limit: 500, orderBy: "updated desc");
-        Assert.Equal("company_id=15998", query["condition"]);
+        const int companyId = 12345;
+        var query = ConnectSecureCompanyReviewService.CompanyQuery(companyId, limit: 500, orderBy: "updated desc");
+        Assert.Equal("company_id=12345", query["condition"]);
         Assert.Equal("500", query["limit"]);
         Assert.Equal("0", query["skip"]);
         Assert.Equal("updated desc", query["order_by"]);
@@ -20,8 +21,9 @@ public sealed class CompanyReviewServiceTests
     [Fact]
     public void LightweightAssetsQuery_UsesCompanyIdParam()
     {
-        var query = ConnectSecureCompanyReviewService.LightweightAssetsQuery(15998);
-        Assert.Equal("15998", query["company_id"]);
+        const int companyId = 12345;
+        var query = ConnectSecureCompanyReviewService.LightweightAssetsQuery(companyId);
+        Assert.Equal("12345", query["company_id"]);
         Assert.Equal("5000", query["limit"]);
     }
 

@@ -34,7 +34,7 @@
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
 .EXAMPLE
-    .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+    .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Example Client" -UseSavedCredentials -UniqueProductsOnly
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -NvdApiKey $env:NVD_API_KEY -OutputPath ".\baseline.csv"
 #>

@@ -17,6 +17,7 @@ public sealed class ConnectSecureClient
     private readonly HttpClient _http;
     private readonly RateLimiter _rateLimiter;
     private readonly ConnectSecureOptions _options;
+    private readonly ConnectSecureCacheService _cache;
 
     private readonly SemaphoreSlim _stateLock = new(1, 1);
 
@@ -25,11 +26,16 @@ public sealed class ConnectSecureClient
     private DateTimeOffset _tokenExpiry = DateTimeOffset.MinValue;
     private ConnectSecureCredentials? _credentials;
 
-    public ConnectSecureClient(HttpClient http, RateLimiter rateLimiter, ConnectSecureOptions options)
+    public ConnectSecureClient(
+        HttpClient http,
+        RateLimiter rateLimiter,
+        ConnectSecureOptions options,
+        ConnectSecureCacheService cache)
     {
         _http = http;
         _rateLimiter = rateLimiter;
         _options = options;
+        _cache = cache;
     }
 
     public bool IsConfigured => _credentials is not null &&
@@ -79,6 +85,9 @@ public sealed class ConnectSecureClient
 
     public async Task<IReadOnlyList<CompanyInfo>> GetCompaniesAsync(CancellationToken ct = default)
     {
+        if (_cache.TryGet<IReadOnlyList<CompanyInfo>>("companies", out var cached) && cached is not null)
+            return cached;
+
         var response = await InvokeAsync(HttpMethod.Get, "/r/company/companies",
             new Dictionary<string, string> { ["limit"] = "5000", ["skip"] = "0" }, ct: ct);
 
@@ -94,11 +103,13 @@ public sealed class ConnectSecureClient
                 .ToList();
         }
 
-        return companies
+        var parsed = companies
             .Select(ParseCompanyInfo)
             .Where(c => !string.IsNullOrWhiteSpace(c.Id))
             .OrderBy(c => c.Name)
             .ToList();
+        _cache.Set("companies", parsed, ConnectSecureCacheService.CompaniesTtl);
+        return parsed;
     }
 
     public async Task<IReadOnlyList<StandardReportDescriptor>> GetStandardReportsAsync(int companyId = 0, CancellationToken ct = default)
@@ -351,40 +362,65 @@ public sealed class ConnectSecureClient
             if (method != HttpMethod.Get && body is not null)
                 request.Content = JsonContent.Create(body);
 
-            using var response = await _http.SendAsync(request, ct);
-            var content = await response.Content.ReadAsStringAsync(ct);
-
-            if (response.StatusCode == HttpStatusCode.TooManyRequests && attempt < retryCount)
+            try
             {
-                await Task.Delay(TimeSpan.FromSeconds(60), ct);
-                continue;
-            }
+                return await ConnectSecureRequestMetrics.TrackAsync(
+                    endpoint,
+                    query,
+                    async () =>
+                    {
+                        using var response = await _http.SendAsync(request, ct);
+                        var responseBody = await response.Content.ReadAsStringAsync(ct);
 
-            if (response.StatusCode == HttpStatusCode.Unauthorized && attempt < retryCount)
+                        if (response.StatusCode == HttpStatusCode.TooManyRequests && attempt < retryCount)
+                            throw new ConnectSecureRetryException(HttpStatusCode.TooManyRequests);
+
+                        if (response.StatusCode == HttpStatusCode.Unauthorized && attempt < retryCount)
+                            throw new ConnectSecureRetryException(HttpStatusCode.Unauthorized);
+
+                        if (response.StatusCode == HttpStatusCode.BadGateway && attempt < retryCount)
+                            throw new ConnectSecureRetryException(HttpStatusCode.BadGateway);
+
+                        if (!response.IsSuccessStatusCode)
+                            throw new HttpRequestException(
+                                $"ConnectSecure request failed ({(int)response.StatusCode}): {Truncate(responseBody, 500)}",
+                                null,
+                                response.StatusCode);
+
+                        if (string.IsNullOrWhiteSpace(responseBody))
+                            return JsonSerializer.SerializeToElement(new { status = true, data = Array.Empty<object>() }, JsonOptions);
+
+                        return JsonSerializer.Deserialize<JsonElement>(responseBody, JsonOptions);
+                    });
+            }
+            catch (ConnectSecureRetryException ex) when (attempt < retryCount)
             {
-                await InvalidateAuthAsync(ct);
-                continue;
+                if (ex.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(60), ct);
+                    continue;
+                }
+
+                if (ex.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    await InvalidateAuthAsync(ct);
+                    continue;
+                }
+
+                if (ex.StatusCode == HttpStatusCode.BadGateway)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                    continue;
+                }
             }
-
-            if (response.StatusCode == HttpStatusCode.BadGateway && attempt < retryCount)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                continue;
-            }
-
-            if (!response.IsSuccessStatusCode)
-                throw new HttpRequestException(
-                    $"ConnectSecure request failed ({(int)response.StatusCode}): {Truncate(content, 500)}",
-                    null,
-                    response.StatusCode);
-
-            if (string.IsNullOrWhiteSpace(content))
-                return JsonSerializer.SerializeToElement(new { status = true, data = Array.Empty<object>() }, JsonOptions);
-
-            return JsonSerializer.Deserialize<JsonElement>(content, JsonOptions);
         }
 
         throw new InvalidOperationException($"ConnectSecure request failed after {retryCount} attempts: {endpoint}");
+    }
+
+    private sealed class ConnectSecureRetryException(HttpStatusCode statusCode) : Exception
+    {
+        public HttpStatusCode StatusCode { get; } = statusCode;
     }
 
     private string BuildUrl(string endpoint, Dictionary<string, string>? query)

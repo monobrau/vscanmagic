@@ -13,7 +13,7 @@ Implementation is split into dot-sourced parts for maintainability:
 
 .NOTES
 Version: 1.0.0
-Author: River Run MSP
+Author: River Run
 #>
 
 Add-Type -AssemblyName System.Web

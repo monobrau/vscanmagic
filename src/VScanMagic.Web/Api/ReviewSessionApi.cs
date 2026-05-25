@@ -38,13 +38,14 @@ public static class ReviewSessionApi
             var userSettings = settings.LoadUserSettings();
             var filters = request.Filters ?? ReportFilters.FromUserSettings(userSettings);
             var result = pipeline.ProcessFile(request.ExcelPath, filters);
-            var session = factory.CreateFromTopVulnerabilities(
+            var session = factory.CreateFromScoredResult(
                 request.ClientName,
                 request.ScanDate,
-                result.TopVulnerabilities,
+                result.Scored,
                 request.Presenter ?? userSettings.PreparedBy,
                 request.ExcelPath,
-                request.CompanyId);
+                request.CompanyId,
+                filters.TopN);
             await repo.SaveAsync(session, ct);
             return Results.Created($"/api/review-sessions/{session.Id}", session);
         });

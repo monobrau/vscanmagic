@@ -35,10 +35,10 @@ public sealed class EmailTemplateSettings
         Your quarterly vulnerability scan report has been completed and is available in your client folder.
 
         Recommended remediation priorities ({TopNLabel}):
-        <link to top ten report from onedrive>
+        {TopNReportLink}
 
         Complete report package:
-        <onedrive link to folder containing reports>
+        {ReportsFolderLink}
 
         The folder contains the following reports:
         • Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
@@ -50,7 +50,7 @@ public sealed class EmailTemplateSettings
         Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
 
         Schedule time with me
-        <scheduling link>
+        {SchedulingLink}
 
         {NoteText}
 

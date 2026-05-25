@@ -1,3 +1,4 @@
+using System.Text.Json;
 using VScanMagic.ConnectSecure;
 
 namespace VScanMagic.Tests;
@@ -185,5 +186,185 @@ public sealed class PatchCatalogHelperTests
 
         Assert.Single(views);
         Assert.Equal(HostPatchStatus.AtTarget, views[0].Status);
+    }
+
+    [Fact]
+    public void BuildVerificationResult_MarksVerifiedWhenAllOnlineHostsAtTarget()
+    {
+        var result = PatchCatalogHelper.BuildVerificationResult(
+            "job-1",
+            [10, 11],
+            [
+                new PatchHostView(
+                    new PatchAssetDetail(1, "10.0.0.1", "host-a", 10, true, ["App"], ["2.0"], []),
+                    HostPatchStatus.AtTarget,
+                    "At target"),
+                new PatchHostView(
+                    new PatchAssetDetail(2, "10.0.0.2", "host-b", 11, true, ["App"], ["2.0"], []),
+                    HostPatchStatus.AtTarget,
+                    "At target")
+            ]);
+
+        Assert.Equal("Verified", result.Status);
+        Assert.Equal(2, result.AtTargetCount);
+        Assert.Equal(2, result.TotalHosts);
+        Assert.Contains("2/2 at target", result.Summary);
+    }
+
+    [Fact]
+    public void BuildVerificationResult_MarksPartialWhenSomeHostsPending()
+    {
+        var result = PatchCatalogHelper.BuildVerificationResult(
+            "job-2",
+            [10, 11],
+            [
+                new PatchHostView(
+                    new PatchAssetDetail(1, "10.0.0.1", "host-a", 10, true, ["App"], ["2.0"], []),
+                    HostPatchStatus.AtTarget,
+                    "At target"),
+                new PatchHostView(
+                    new PatchAssetDetail(2, "10.0.0.2", "host-b", 11, true, ["App"], ["1.0"], []),
+                    HostPatchStatus.Pending,
+                    "Pending patch")
+            ]);
+
+        Assert.Equal("Partial", result.Status);
+        Assert.Equal(1, result.AtTargetCount);
+        Assert.Equal(1, result.PendingCount);
+    }
+
+    [Fact]
+    public void BuildVerificationResult_ExcludesOfflineFromVerifiedCount()
+    {
+        var result = PatchCatalogHelper.BuildVerificationResult(
+            "job-3",
+            [10, 11],
+            [
+                new PatchHostView(
+                    new PatchAssetDetail(1, "10.0.0.1", "host-a", 10, true, ["App"], ["2.0"], []),
+                    HostPatchStatus.AtTarget,
+                    "At target"),
+                new PatchHostView(
+                    new PatchAssetDetail(2, "10.0.0.2", "host-b", 11, false, ["App"], ["1.0"], []),
+                    HostPatchStatus.Offline,
+                    "Offline")
+            ]);
+
+        Assert.Equal("Verified", result.Status);
+        Assert.Equal(1, result.OfflineCount);
+    }
+}
+
+public sealed class AgentConnectivityHelperTests
+{
+    [Fact]
+    public void IsOnlineFromLastPing_UsesLastPingNotLastReported()
+    {
+        var now = new DateTime(2026, 5, 24, 18, 0, 0, DateTimeKind.Utc);
+        var lastPing = "2026-05-14T14:45:18.696462";
+        var lastReported = "2026-05-24T13:25:08.143486";
+
+        Assert.False(AgentConnectivityHelper.IsOnlineFromLastPing(lastPing, now));
+        Assert.False(AgentConnectivityHelper.IsOnlineFromAgentTimestamps(lastPing, lastReported, now));
+        Assert.False(AgentConnectivityHelper.IsOnlineFromAgentTimestamps(null, lastReported, now));
+        Assert.True(AgentConnectivityHelper.IsOnlineFromAgentTimestamps(null, "2026-05-24T17:30:00", now));
+    }
+
+    [Fact]
+    public void IsOnlineFromLastPing_UsesOneHourThreshold()
+    {
+        var now = new DateTime(2026, 5, 24, 18, 0, 0, DateTimeKind.Utc);
+        Assert.True(AgentConnectivityHelper.IsOnlineFromLastPing("2026-05-24T17:30:00Z", now));
+        Assert.False(AgentConnectivityHelper.IsOnlineFromLastPing("2026-05-24T15:00:00Z", now));
+    }
+
+    [Fact]
+    public void FormatAgentTypeLabel_ProbeAndLightweight()
+    {
+        Assert.Equal("Probe", AgentConnectivityHelper.FormatAgentTypeLabel("PROBE"));
+        Assert.Equal("Lightweight", AgentConnectivityHelper.FormatAgentTypeLabel("LIGHTWEIGHT"));
+    }
+}
+
+public sealed class ConnectSecurePagedQueryTests
+{
+    [Fact]
+    public async Task FetchCompanyScopedPagesAsync_StopsAfterCompanyRowsEnd()
+    {
+        var pages = new List<List<(int CompanyId, int Id)>>
+        {
+            Enumerable.Range(1, 5000).Select(i => (CompanyId: i <= 25 ? 100 : 200, Id: i)).ToList(),
+            Enumerable.Range(1, 5000).Select(i => (CompanyId: i <= 57 ? 100 : 200, Id: 5000 + i)).ToList(),
+            Enumerable.Range(1, 90).Select(i => (CompanyId: 200, Id: 10000 + i)).ToList(),
+        };
+
+        var call = 0;
+        Task<List<JsonElement>> Fetch(Dictionary<string, string> query, CancellationToken _)
+        {
+            var page = call++;
+            if (page >= pages.Count)
+                return Task.FromResult(new List<JsonElement>());
+
+            var json = pages[page]
+                .Select(row =>
+                {
+                    using var doc = JsonDocument.Parse($"{{\"company_id\":{row.CompanyId},\"id\":{row.Id}}}");
+                    return doc.RootElement.Clone();
+                })
+                .ToList();
+            return Task.FromResult(json);
+        }
+
+        var rows = await ConnectSecurePagedQuery.FetchCompanyScopedPagesAsync(
+            Fetch,
+            new Dictionary<string, string> { ["order_by"] = "affected_assets desc" },
+            companyId: 100,
+            CancellationToken.None,
+            pageSize: 5000,
+            maxPages: 10);
+
+        Assert.Equal(82, rows.Count);
+        Assert.All(rows, row => Assert.Equal(100, ConnectSecureJsonReader.GetInt(row, "company_id")));
+    }
+
+    [Fact]
+    public void MeetsSeverityFilter_UsesMinimumRank()
+    {
+        Assert.True(PatchCatalogHelper.MeetsSeverityFilter("Critical", "high+"));
+        Assert.True(PatchCatalogHelper.MeetsSeverityFilter("High", "high+"));
+        Assert.False(PatchCatalogHelper.MeetsSeverityFilter("Medium", "high+"));
+        Assert.False(PatchCatalogHelper.MeetsSeverityFilter("High", "critical"));
+    }
+}
+
+public sealed class ConnectSecureCacheServiceTests
+{
+    [Fact]
+    public void RemediationPlanCache_ExpiresAfterInvalidate()
+    {
+        var cache = new ConnectSecureCacheService();
+        var rows = new List<JsonElement>();
+        cache.SetRemediationPlan(42, rows);
+
+        Assert.True(cache.TryGetRemediationPlan(42, out var cached));
+        Assert.Same(rows, cached);
+
+        cache.InvalidateRemediationPlan(42);
+        Assert.False(cache.TryGetRemediationPlan(42, out _));
+    }
+
+    [Fact]
+    public void PatchHostsCache_IsScopedBySolution()
+    {
+        var cache = new ConnectSecureCacheService();
+        var hosts = new List<PatchAssetDetail>
+        {
+            new(1, "10.0.0.1", "host-a", 10, true, [], [], [])
+        };
+
+        cache.SetPatchHosts(7, 15, hosts);
+        Assert.True(cache.TryGetPatchHosts(7, 15, out var cached));
+        Assert.Single(cached);
+        Assert.False(cache.TryGetPatchHosts(7, 16, out _));
     }
 }

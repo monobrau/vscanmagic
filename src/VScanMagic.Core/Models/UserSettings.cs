@@ -27,4 +27,13 @@ public sealed class UserSettings
 
     /// <summary>Linux, macOS, and other non-Windows OS findings. 0 = off.</summary>
     public int HostVulnThresholdOtherOs { get; set; }
+
+    /// <summary>Optional NVD API key for higher rate limits when enriching CVE details.</summary>
+    public string NvdApiKey { get; set; } = "";
+
+    /// <summary>Fetch NVD summaries for CVE findings when starting a review session.</summary>
+    public bool NvdEnrichOnIngest { get; set; } = true;
+
+    /// <summary>Default TimeZest or other scheduling link inserted into deliverable email templates.</summary>
+    public string SchedulingLinkUrl { get; set; } = "";
 }

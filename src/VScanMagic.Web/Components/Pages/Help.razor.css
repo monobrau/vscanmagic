@@ -1,0 +1,40 @@
+.help-testimonial {
+    height: 100%;
+    padding: 0.85rem 1rem;
+    background: #f8f9fa;
+    border-left: 3px solid #ffc107;
+    border-radius: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.help-testimonial p {
+    margin-bottom: 0.5rem;
+}
+
+.help-testimonial footer {
+    font-size: 0.8rem;
+    color: #6c757d;
+    font-style: italic;
+}
+
+.help-testimonial-featured {
+    background: linear-gradient(135deg, #fff9e6 0%, #f8f9fa 100%);
+    border-left-width: 4px;
+    border-left-color: #fd7e14;
+}
+
+.help-glossary dt {
+    font-weight: 600;
+}
+
+.help-glossary dd {
+    margin-bottom: 0.75rem;
+}
+
+.help-page-nav .list-group-item {
+    border-left: 3px solid transparent;
+}
+
+.help-page-nav .list-group-item.active {
+    border-left-color: #0d6efd;
+}

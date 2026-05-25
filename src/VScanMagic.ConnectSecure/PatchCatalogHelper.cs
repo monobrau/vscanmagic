@@ -130,8 +130,22 @@ public static class PatchCatalogHelper
     }
 
     private static bool IsEndOfLifeFix(string? fix) =>
+        IsEndOfLifeProductFix(fix);
+
+    public static bool IsEndOfLifeProductFix(string? fix) =>
         !string.IsNullOrWhiteSpace(fix) &&
         fix.Contains("end of life", StringComparison.OrdinalIgnoreCase);
+
+    public static bool MeetsSeverityFilter(string? severity, string filter) =>
+        SeverityRank(severity) >= MinimumSeverityRank(filter);
+
+    public static int MinimumSeverityRank(string filter) =>
+        filter switch
+        {
+            "critical" => SeverityRank("Critical"),
+            "high+" => SeverityRank("High"),
+            _ => 0
+        };
 
     private static IReadOnlyList<string> DistinctVersions(IEnumerable<string> versions) =>
         NormalizeVersions(versions);
@@ -178,6 +192,107 @@ public static class PatchCatalogHelper
                 return new PatchHostView(detail, status, StatusLabel(status));
             })
             .ToList();
+
+    public static PatchVerificationResult BuildVerificationResult(
+        string jobId,
+        IReadOnlyList<int> targetedAgentIds,
+        IEnumerable<PatchHostView> hostViews,
+        DateTimeOffset? verifiedAt = null)
+    {
+        var agentSet = targetedAgentIds.Where(id => id > 0).ToHashSet();
+        var matched = hostViews
+            .Where(view => agentSet.Contains(view.Detail.AgentId))
+            .ToList();
+
+        var hostResults = matched
+            .Select(view => new PatchVerificationHostResult(
+                view.Detail.AgentId,
+                view.Detail.HostName,
+                view.Status,
+                FormatVersionSummary(view.Detail.Versions),
+                view.StatusLabel))
+            .OrderBy(result => result.HostName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var atTarget = hostResults.Count(r => r.Status == HostPatchStatus.AtTarget);
+        var pending = hostResults.Count(r => r.Status == HostPatchStatus.Pending);
+        var offline = hostResults.Count(r => r.Status == HostPatchStatus.Offline);
+        var endOfLife = hostResults.Count(r => r.Status == HostPatchStatus.EndOfLife);
+        var unknown = hostResults.Count(r => r.Status == HostPatchStatus.Unknown);
+        var total = hostResults.Count;
+        var verified = verifiedAt ?? DateTimeOffset.Now;
+
+        var status = DetermineVerificationStatus(atTarget, pending, offline, endOfLife, unknown, total);
+        var summary = FormatVerificationSummary(status, atTarget, pending, offline, endOfLife, unknown, total);
+
+        return new PatchVerificationResult(
+            jobId,
+            status,
+            atTarget,
+            pending,
+            offline,
+            endOfLife,
+            unknown,
+            total,
+            summary,
+            hostResults,
+            verified);
+    }
+
+    public static string DetermineVerificationStatus(
+        int atTarget,
+        int pending,
+        int offline,
+        int endOfLife,
+        int unknown,
+        int total)
+    {
+        if (total == 0)
+            return "Unverifiable";
+
+        var verifiableOnline = total - offline;
+        if (verifiableOnline <= 0)
+            return "Pending verification";
+
+        if (atTarget == verifiableOnline)
+            return "Verified";
+
+        if (atTarget > 0)
+            return "Partial";
+
+        if (pending > 0 || unknown > 0)
+            return "Pending verification";
+
+        if (endOfLife > 0 && atTarget == 0 && pending == 0)
+            return "End of life";
+
+        return "Failed";
+    }
+
+    public static string FormatVerificationSummary(
+        string status,
+        int atTarget,
+        int pending,
+        int offline,
+        int endOfLife,
+        int unknown,
+        int total)
+    {
+        if (total == 0)
+            return "No matching hosts found to verify.";
+
+        var parts = new List<string> { $"{atTarget}/{total} at target" };
+        if (pending > 0)
+            parts.Add($"{pending} pending");
+        if (offline > 0)
+            parts.Add($"{offline} offline");
+        if (endOfLife > 0)
+            parts.Add($"{endOfLife} EOL");
+        if (unknown > 0)
+            parts.Add($"{unknown} unknown");
+
+        return $"{status}: {string.Join(", ", parts)}.";
+    }
 
     internal static bool IsAtTargetVersion(IReadOnlyList<string> installedVersions, string targetFix)
     {

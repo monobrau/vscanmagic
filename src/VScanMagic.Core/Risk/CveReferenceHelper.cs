@@ -28,6 +28,24 @@ public static partial class CveReferenceHelper
         return string.Join(separator, cves);
     }
 
+    public static string MergeCveIds(IEnumerable<string?>? sources)
+    {
+        var merged = (sources ?? [])
+            .SelectMany(value => SplitCveIds(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return merged.Count == 0 ? "" : string.Join("; ", merged);
+    }
+
+    public static string MergeCveIds(params string?[] values) => MergeCveIds(values.AsEnumerable());
+
+    public static string NormalizeFindingCveIds(string? cveIds, string? product) =>
+        MergeCveIds(cveIds, IsCveOnlyProduct(product) ? product : null);
+
+    public static bool IsHighSeverityCveOnlyProduct(string? productName, int critical, int high) =>
+        IsCveOnlyProduct(productName) && (critical > 0 || high > 0);
+
     /// <summary>True when the product/name field is only a CVE identifier (not a real software product).</summary>
     public static bool IsCveOnlyProduct(string? productName)
     {

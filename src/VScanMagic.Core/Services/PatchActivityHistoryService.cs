@@ -12,7 +12,16 @@ public sealed record PatchActivityEntry(
     string? HostName,
     string? AgentIp,
     DateTimeOffset RequestedAt,
-    string? ConnectSecureMessage);
+    string? ConnectSecureMessage,
+    IReadOnlyList<int>? AgentIds = null,
+    IReadOnlyList<int>? SolutionIds = null,
+    string? Product = null,
+    string? TargetFix = null,
+    bool IsOsPatch = false,
+    bool IsEndOfLife = false,
+    IReadOnlyList<int>? OsAssetIds = null,
+    string? VerificationSummary = null,
+    DateTimeOffset? VerifiedAt = null);
 
 public sealed class PatchActivityHistoryService(string? configDirectory = null)
 {
@@ -33,6 +42,41 @@ public sealed class PatchActivityHistoryService(string? configDirectory = null)
                 .OrderByDescending(entry => entry.RequestedAt)
                 .Take(limit)
                 .ToList();
+        }
+    }
+
+    public PatchActivityEntry? GetByJobId(int companyId, string jobId)
+    {
+        if (companyId <= 0 || string.IsNullOrWhiteSpace(jobId))
+            return null;
+
+        lock (_lock)
+        {
+            return LoadDocumentUnsafe()
+                .Entries
+                .FirstOrDefault(entry =>
+                    entry.CompanyId == companyId &&
+                    string.Equals(entry.JobId, jobId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public bool UpdateEntry(PatchActivityEntry updated)
+    {
+        if (updated.CompanyId <= 0 || string.IsNullOrWhiteSpace(updated.JobId))
+            return false;
+
+        lock (_lock)
+        {
+            var document = LoadDocumentUnsafe();
+            var index = document.Entries.FindIndex(entry =>
+                entry.CompanyId == updated.CompanyId &&
+                string.Equals(entry.JobId, updated.JobId, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+                return false;
+
+            document.Entries[index] = updated;
+            SaveDocumentUnsafe(document);
+            return true;
         }
     }
 

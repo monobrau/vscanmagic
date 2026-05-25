@@ -66,36 +66,47 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
                 }
 
                 progress?.Report($"Waiting for reports... ({pending.Count} pending)");
-                var stillPending = new List<(StandardReportRequest Report, string JobId, string Path)>();
-
-                foreach (var p in pending)
+                var pollTasks = pending.Select(async p =>
                 {
                     try
                     {
                         var url = await client.GetReportDownloadLinkAsync(p.JobId, isGlobal, companyId, ct);
                         if (string.IsNullOrWhiteSpace(url))
-                        {
-                            stillPending.Add(p);
-                            continue;
-                        }
+                            return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)null);
 
                         await client.DownloadFileFromUrlAsync(url, p.Path, ct);
                         ReportArchiveHelper.NormalizeDownloadedReportFile(p.Path);
-                        succeeded.Add(new DownloadedReport(p.Report.Type, p.Report.Name, p.Path));
+                        return (Pending: p, Success: (DownloadedReport?)new DownloadedReport(p.Report.Type, p.Report.Name, p.Path), Failed: (FailedReport?)null);
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
-                        stillPending.Add(p);
+                        return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)null);
                     }
                     catch (Exception ex)
                     {
-                        failed.Add(new FailedReport(p.Report.Type, p.Report.Name, ex.Message));
+                        return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)new FailedReport(p.Report.Type, p.Report.Name, ex.Message));
                     }
+                }).ToList();
+
+                var pollResults = await Task.WhenAll(pollTasks);
+                var stillPending = new List<(StandardReportRequest Report, string JobId, string Path)>();
+                foreach (var result in pollResults)
+                {
+                    if (result.Success is not null)
+                        succeeded.Add(result.Success);
+                    else if (result.Failed is not null)
+                        failed.Add(result.Failed);
+                    else
+                        stillPending.Add(result.Pending);
                 }
 
                 pending = stillPending;
                 if (pending.Count > 0)
-                    await Task.Delay(PollInterval, ct);
+                {
+                    var elapsedSeconds = (DateTimeOffset.UtcNow - start).TotalSeconds;
+                    var delay = elapsedSeconds >= 30 ? TimeSpan.FromSeconds(4) : PollInterval;
+                    await Task.Delay(delay, ct);
+                }
             }
         }
 

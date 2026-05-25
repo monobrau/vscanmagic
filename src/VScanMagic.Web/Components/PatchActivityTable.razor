@@ -1,0 +1,163 @@
+@using VScanMagic.ConnectSecure
+@inject ConnectSecurePatchService PatchService
+
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>Recent patch activity</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+                disabled="@(Busy || LoadingJobs || CompanyId <= 0)"
+                @onclick="OnRefreshJobs">
+            @(LoadingJobs ? "Refreshing…" : "Refresh jobs")
+        </button>
+    </div>
+    <div class="card-body">
+        @if (LoadingJobs)
+        {
+            <p class="text-muted mb-0">Loading patch jobs…</p>
+        }
+        else if (Jobs.Count == 0)
+        {
+            <p class="text-muted mb-0">
+                No patch requests recorded for this company yet. Entries appear here after you send patches from VScanMagic.
+                Use <strong>Verify</strong> to re-check installed versions against the remediation target.
+            </p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Updated</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Host</th>
+                            <th>Description</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in Jobs)
+                        {
+                            <tr class="@(string.Equals(_expandedJobId, job.JobId, StringComparison.OrdinalIgnoreCase) ? "table-active" : null)">
+                                <td class="text-nowrap small">@(job.Updated?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                                <td>@job.Type</td>
+                                <td>
+                                    <span class="@VerificationStatusClass(job.Status)">@job.Status</span>
+                                </td>
+                                <td class="small">@(string.IsNullOrWhiteSpace(job.HostName) ? "—" : job.HostName)</td>
+                                <td class="small text-muted">@job.Description</td>
+                                <td class="text-end text-nowrap">
+                                    @if (job.CanVerify)
+                                    {
+                                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                                disabled="@(_verifyingJobId is not null)"
+                                                @onclick="() => VerifyJobAsync(job.JobId)">
+                                            @(_verifyingJobId == job.JobId ? "Verifying…" : "Verify")
+                                        </button>
+                                    }
+                                </td>
+                            </tr>
+                            @if (string.Equals(_expandedJobId, job.JobId, StringComparison.OrdinalIgnoreCase) &&
+                                 _verificationResult is not null)
+                            {
+                                <tr>
+                                    <td colspan="6" class="bg-light">
+                                        <p class="small mb-2"><strong>@_verificationResult.Summary</strong></p>
+                                        @if (_verificationResult.Hosts.Count > 0)
+                                        {
+                                            <div class="table-responsive">
+                                                <table class="table table-sm mb-0">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Host</th>
+                                                            <th>Installed</th>
+                                                            <th>Result</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        @foreach (var host in _verificationResult.Hosts)
+                                                        {
+                                                            <tr>
+                                                                <td>@host.HostName</td>
+                                                                <td class="small">@(host.InstalledVersion ?? "—")</td>
+                                                                <td>
+                                                                    <span class="@HostStatusClass(host.Status)">@host.StatusLabel</span>
+                                                                </td>
+                                                            </tr>
+                                                        }
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int CompanyId { get; set; }
+    [Parameter] public IReadOnlyList<PatchJobEntry> Jobs { get; set; } = [];
+    [Parameter] public bool LoadingJobs { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnRefreshJobs { get; set; }
+    [Parameter] public EventCallback<string?> VerificationMessageChanged { get; set; }
+    [Parameter] public EventCallback<string?> VerificationErrorChanged { get; set; }
+
+    private string? _verifyingJobId;
+    private string? _expandedJobId;
+    private PatchVerificationResult? _verificationResult;
+
+    public async Task VerifyJobAsync(string jobId)
+    {
+        if (CompanyId <= 0 || string.IsNullOrWhiteSpace(jobId))
+            return;
+
+        _verifyingJobId = jobId;
+        _expandedJobId = jobId;
+        _verificationResult = null;
+        await VerificationErrorChanged.InvokeAsync(null);
+        await VerificationMessageChanged.InvokeAsync(null);
+
+        try
+        {
+            _verificationResult = await PatchService.VerifyPatchActivityAsync(CompanyId, jobId);
+            await VerificationMessageChanged.InvokeAsync(_verificationResult.Summary);
+            await OnRefreshJobs.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            await VerificationErrorChanged.InvokeAsync(ex.Message);
+        }
+        finally
+        {
+            _verifyingJobId = null;
+        }
+    }
+
+    private static string VerificationStatusClass(string status) =>
+        status switch
+        {
+            "Verified" => "text-success fw-semibold",
+            "Partial" => "text-warning fw-semibold",
+            "Failed" => "text-danger fw-semibold",
+            "Pending verification" => "text-primary",
+            _ => ""
+        };
+
+    private static string HostStatusClass(HostPatchStatus status) =>
+        status switch
+        {
+            HostPatchStatus.AtTarget => "text-success",
+            HostPatchStatus.Pending => "text-primary",
+            HostPatchStatus.Offline => "text-warning",
+            HostPatchStatus.EndOfLife => "text-danger",
+            _ => "text-muted"
+        };
+}

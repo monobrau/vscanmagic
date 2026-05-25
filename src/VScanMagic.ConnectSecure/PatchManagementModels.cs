@@ -30,7 +30,11 @@ public sealed record PatchAssetDetail(
     bool OnlineStatus,
     IReadOnlyList<string> ApplicationNames,
     IReadOnlyList<string> Versions,
-    IReadOnlyList<string> Paths);
+    IReadOnlyList<string> Paths,
+    string? RegisteredHostName = null,
+    string? AgentType = null,
+    string? AgentVersion = null,
+    string? LastPingTime = null);
 
 public class ApplicationPatchRequest
 {
@@ -45,6 +49,10 @@ public class ApplicationPatchRequest
     public Dictionary<string, string> FromVersions { get; set; } = new(StringComparer.Ordinal);
     public ConnectSecurePatchType PatchType { get; set; } = ConnectSecurePatchType.App;
     public bool TriggerReboot { get; set; }
+    public IReadOnlyList<int> SolutionIds { get; set; } = [];
+    public string? TargetFix { get; set; }
+    public bool IsEndOfLife { get; set; }
+    public IReadOnlyList<int> OsAssetIds { get; set; } = [];
 
     public ApplicationPatchRequest Clone() =>
         new()
@@ -59,7 +67,11 @@ public class ApplicationPatchRequest
             TargetHostNames = TargetHostNames.ToList(),
             FromVersions = new Dictionary<string, string>(FromVersions, StringComparer.Ordinal),
             PatchType = PatchType,
-            TriggerReboot = TriggerReboot
+            TriggerReboot = TriggerReboot,
+            SolutionIds = SolutionIds.ToList(),
+            TargetFix = TargetFix,
+            IsEndOfLife = IsEndOfLife,
+            OsAssetIds = OsAssetIds.ToList()
         };
 }
 
@@ -68,7 +80,27 @@ public sealed class ScheduledApplicationPatchRequest : ApplicationPatchRequest
     public DateTime ScheduledAt { get; set; }
 }
 
-public sealed record PatchOperationResult(bool Success, string Message);
+public sealed record PatchOperationResult(bool Success, string Message, string? JobId = null);
+
+public sealed record PatchVerificationHostResult(
+    int AgentId,
+    string HostName,
+    HostPatchStatus Status,
+    string? InstalledVersion,
+    string StatusLabel);
+
+public sealed record PatchVerificationResult(
+    string JobId,
+    string Status,
+    int AtTargetCount,
+    int PendingCount,
+    int OfflineCount,
+    int EndOfLifeCount,
+    int UnknownCount,
+    int TotalHosts,
+    string Summary,
+    IReadOnlyList<PatchVerificationHostResult> Hosts,
+    DateTimeOffset VerifiedAt);
 
 public enum HostPatchStatus
 {
@@ -91,7 +123,10 @@ public sealed record PatchJobEntry(
     string Description,
     string? HostName,
     string? AgentIp,
-    DateTimeOffset? Updated);
+    DateTimeOffset? Updated,
+    bool IsLocal = false,
+    bool CanVerify = false,
+    string? VerificationSummary = null);
 
 public sealed record OsPendingPatchEntry(
     string OsName,
@@ -113,6 +148,7 @@ public sealed record SuppressVulnerabilityRequest
 {
     public int CompanyId { get; set; }
     public int SolutionId { get; set; }
+    public int ProblemId { get; set; }
     public int AssetId { get; set; }
     public string Product { get; set; } = "";
     public string Reason { get; set; } = "";

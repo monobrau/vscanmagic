@@ -1,0 +1,29 @@
+@using VScanMagic.ConnectSecure
+
+<div class="small">
+    @if (!string.IsNullOrWhiteSpace(Detail.AgentType))
+    {
+        <span class="badge text-bg-light border me-1">@AgentConnectivityHelper.FormatAgentTypeLabel(Detail.AgentType)</span>
+    }
+    @if (!string.IsNullOrWhiteSpace(Detail.RegisteredHostName))
+    {
+        <span>@Detail.RegisteredHostName</span>
+    }
+    else if (Detail.AgentId > 0)
+    {
+        <span class="text-muted">Agent #@Detail.AgentId</span>
+    }
+    else
+    {
+        <span class="text-muted">—</span>
+    }
+    @if (!string.IsNullOrWhiteSpace(Detail.AgentVersion))
+    {
+        <span class="text-muted"> · v@Detail.AgentVersion</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public PatchAssetDetail Detail { get; set; } = null!;
+}

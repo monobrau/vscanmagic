@@ -37,14 +37,13 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
         if (TryResolveStructuredPath(basePath, companyId, displayName, scanDate, out var structuredPath))
         {
             EnsureDirectory(structuredPath);
-            EnsureDirectory(Path.Combine(structuredPath, "Misc"));
 
             return new ReportOutputLayout
             {
                 OutputDirectory = structuredPath,
-                TextOutputDirectory = Path.Combine(structuredPath, "Misc"),
+                TextOutputDirectory = structuredPath,
                 UsesStructuredPaths = true,
-                UsesMiscSubfolder = true,
+                UsesMiscSubfolder = false,
                 ReportsPathPartial = GetReportsPathPartial(structuredPath, displayName)
             };
         }
@@ -68,14 +67,13 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
         var clientPath = Path.Combine(root, SanitizeClientFolderName(companyName));
         var outputPath = BuildQuarterOutputPath(clientPath, scanDate);
         EnsureDirectory(outputPath);
-        EnsureDirectory(Path.Combine(outputPath, "Misc"));
 
         return new ReportOutputLayout
         {
             OutputDirectory = outputPath,
-            TextOutputDirectory = Path.Combine(outputPath, "Misc"),
+            TextOutputDirectory = outputPath,
             UsesStructuredPaths = true,
-            UsesMiscSubfolder = true,
+            UsesMiscSubfolder = false,
             ReportsPathPartial = GetReportsPathPartial(outputPath, companyName)
         };
     }

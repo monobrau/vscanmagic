@@ -89,4 +89,40 @@ public sealed class PatchActivityHistoryServiceTests : IDisposable
         var company100 = _service.GetEntries(100, limit: 200);
         Assert.Equal(100, company100.Count);
     }
+
+    [Fact]
+    public void GetByJobIdAndUpdateEntry_PersistsVerification()
+    {
+        _service.Record(new PatchActivityEntry(
+            100,
+            "job-verify",
+            "Application Patch",
+            "Submitted",
+            "Chrome on HOST1",
+            "HOST1",
+            null,
+            DateTimeOffset.UtcNow,
+            "Patch request accepted.",
+            [10],
+            [42],
+            "Google Chrome",
+            "148.0.1"));
+
+        var found = _service.GetByJobId(100, "job-verify");
+        Assert.NotNull(found);
+        Assert.Equal("Submitted", found!.Status);
+
+        var updated = found with
+        {
+            Status = "Verified",
+            VerificationSummary = "Verified: 1/1 at target.",
+            VerifiedAt = DateTimeOffset.UtcNow
+        };
+        Assert.True(_service.UpdateEntry(updated));
+
+        var reloaded = _service.GetByJobId(100, "job-verify");
+        Assert.NotNull(reloaded);
+        Assert.Equal("Verified", reloaded!.Status);
+        Assert.Equal("Verified: 1/1 at target.", reloaded.VerificationSummary);
+    }
 }

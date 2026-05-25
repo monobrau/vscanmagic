@@ -2,12 +2,15 @@
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Services
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecureCompanyReviewService ReviewService
 @inject ConnectSecureAgentService AgentService
 @inject ConnectSecureDiscoverySettingsService DiscoverySettingsService
 @inject ConnectSecureScanService ScanService
 @inject SettingsService Settings
+@inject CompanyListService CompanyList
+@inject LoadTimingDisplay LoadTiming
 
 <PageTitle>Company Review</PageTitle>
 
@@ -40,6 +43,10 @@ else
                     <button class="btn btn-primary w-100" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="RunReview">
                         Run Company Review
                     </button>
+                    @if (!string.IsNullOrWhiteSpace(LoadTiming.ResultText))
+                    {
+                        <div class="form-text mt-1">@LoadTiming.ResultText</div>
+                    }
                 </div>
             </div>
         </div>
@@ -591,7 +598,7 @@ else
         _busy = true;
         try
         {
-            _companies = (await ConnectSecure.GetCompaniesAsync(LoadCancellationToken)).ToList();
+            _companies = (await CompanyList.GetCompaniesAsync(LoadCancellationToken)).ToList();
         }
         catch (OperationCanceledException)
         {
@@ -641,6 +648,7 @@ else
         ResetInternalFieldsOnly();
         _busy = true;
         var generation = ++_reviewGeneration;
+        LoadTiming.Start("Company review");
         try
         {
             var name = _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
@@ -653,12 +661,15 @@ else
             foreach (var probe in _data.ProbeAgentsNmapInfo)
                 SeedSelection(probe);
             SeedInternalProbeSelection();
+            LoadTiming.Complete($"{_data.AgentCount} agents");
         }
         catch (OperationCanceledException)
         {
+            LoadTiming.Fail("cancelled");
         }
         catch (Exception ex)
         {
+            LoadTiming.Fail(ex.Message);
             _error = ex.Message;
         }
         finally
@@ -1108,6 +1119,7 @@ else
         if (_data is null)
             return;
 
+        ReviewService.InvalidateReviewCache(_data.CompanyId);
         var refreshed = await ReviewService.GetReviewDataAsync(_data.CompanyId, _data.CompanyName);
         _data.InternalSubnets.Clear();
         _data.InternalSubnets.AddRange(refreshed.InternalSubnets);

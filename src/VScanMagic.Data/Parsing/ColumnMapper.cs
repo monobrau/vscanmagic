@@ -13,6 +13,8 @@ public static class ColumnMapper
         ["Fix"] = ["Solution", "Fix", "Remediation", "FIX"],
         ["Username"] = ["Username", "User Name", "User", "Account", "Login", "Login Name", "Last User", "Last Logged In User", "Last Logged In User Name", "Logged In User", "Owner", "Asset Owner", "Primary User"],
         ["CVE"] = ["CVE ID", "CVE", "Problem Name", "problem_name"],
+        ["CVSS"] = ["CVSS Score", "CVSS", "Base Score", "base_score"],
+        ["AffectedAssets"] = ["Affected Assets", "Affected Assets Count", "affected_assets"],
         ["Critical"] = ["Critical"],
         ["High"] = ["High"],
         ["Medium"] = ["Medium"],
