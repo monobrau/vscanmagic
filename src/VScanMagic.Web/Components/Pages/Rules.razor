@@ -33,6 +33,10 @@
                 <button class="accordion-button @(!IsExpanded(index) ? "collapsed" : "")" type="button" @onclick="() => ToggleRule(index)">
                     <code class="me-2">@rule.Pattern</code>
                     @if (rule.IsDefault) { <span class="badge bg-secondary ms-2">Default</span> }
+                    @if (rule.GuidanceStyle != RemediationGuidanceStyle.Standard)
+                    {
+                        <span class="badge bg-info text-dark ms-2">@rule.GuidanceStyle</span>
+                    }
                 </button>
             </h2>
             <div class="accordion-collapse collapse @(IsExpanded(index) ? "show" : "")">
@@ -48,10 +52,24 @@
                                 <label class="form-check-label" for="@($"def-{index}")">Default rule (* fallback)</label>
                             </div>
                         </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Guidance style</label>
+                            <select class="form-select form-select-sm" @bind="_rules[index].GuidanceStyle">
+                                @foreach (var style in Enum.GetValues<RemediationGuidanceStyle>())
+                                {
+                                    <option value="@style">@style</option>
+                                }
+                            </select>
+                        </div>
                         <div class="col-md-4 text-md-end">
-                            <button class="btn btn-outline-danger btn-sm mt-3" @onclick="() => RemoveRule(index)">Remove</button>
+                            <button class="btn btn-outline-danger btn-sm mt-4" @onclick="() => RemoveRule(index)">Remove</button>
                         </div>
                     </div>
+                    <p class="small text-muted mb-2">
+                        <strong>AutoUpdate</strong> uses rule text in review/Word even when ConnectSecure supplies a version fix; target version stays in ConnectSecure Solution on tickets.
+                    </p>
                     <div class="mb-2">
                         <label class="form-label">Word text (DOCX / client reports)</label>
                         <textarea class="form-control form-control-sm" rows="4" @bind="_rules[index].WordText"></textarea>
@@ -89,7 +107,8 @@
             Pattern = r.Pattern,
             WordText = r.WordText,
             TicketText = r.TicketText,
-            IsDefault = r.IsDefault
+            IsDefault = r.IsDefault,
+            GuidanceStyle = r.GuidanceStyle
         }).ToList();
         _expandedIndices = _rules.Count > 0 ? [0] : [];
         _message = null;

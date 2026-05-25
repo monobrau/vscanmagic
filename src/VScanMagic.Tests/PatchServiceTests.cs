@@ -367,4 +367,23 @@ public sealed class ConnectSecureCacheServiceTests
         Assert.Single(cached);
         Assert.False(cache.TryGetPatchHosts(7, 16, out _));
     }
+
+    [Fact]
+    public void InvalidateCompany_ClearsPatchHosts()
+    {
+        var cache = new ConnectSecureCacheService();
+        var hosts = new List<PatchAssetDetail>
+        {
+            new(1, "10.0.0.1", "host-a", 10, true, [], [], [])
+        };
+
+        cache.SetPatchHosts(42, 99, hosts);
+        cache.SetRemediationPlan(42, []);
+        Assert.True(cache.TryGetPatchHosts(42, 99, out _));
+
+        cache.InvalidateCompany(42);
+
+        Assert.False(cache.TryGetPatchHosts(42, 99, out _));
+        Assert.False(cache.TryGetRemediationPlan(42, out _));
+    }
 }

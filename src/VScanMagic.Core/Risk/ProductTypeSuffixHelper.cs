@@ -18,8 +18,6 @@ public static class ProductTypeSuffixHelper
         "VMware Workstation", "VMware Player", "VMware Horizon", "vRealize", "vCloud", "NSX"
     ];
 
-    private static readonly string[] AutoUpdatePatterns = ["Google Chrome", "Mozilla Firefox"];
-
     public static string GetSuffix(string? productName, bool isRmitPlus = false)
     {
         if (string.IsNullOrWhiteSpace(productName))
@@ -48,14 +46,14 @@ public static class ProductTypeSuffixHelper
         if (Contains(productName, "Microsoft Teams"))
             return " - Application Update Required";
 
+        if (AutoUpdateSoftwareHelper.IsAutoUpdating(productName))
+            return " - This software updates automatically";
+
         if (isRmitPlus && IsMicrosoftApplication(productName))
             return " - Updates Required";
 
         if (isRmitPlus && IsVmwareProduct(productName))
             return " - Update Required";
-
-        if (IsAutoUpdatingSoftware(productName))
-            return " - This software updates automatically";
 
         return " - Update Required";
     }
@@ -65,9 +63,6 @@ public static class ProductTypeSuffixHelper
 
     private static bool IsVmwareProduct(string productName) =>
         VmwarePatterns.Any(p => Contains(productName, p));
-
-    private static bool IsAutoUpdatingSoftware(string productName) =>
-        AutoUpdatePatterns.Any(p => Contains(productName, p));
 
     private static bool Contains(string haystack, string needle) =>
         haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);

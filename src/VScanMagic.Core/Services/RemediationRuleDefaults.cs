@@ -4,6 +4,11 @@ namespace VScanMagic.Core.Services;
 
 public static class RemediationRuleDefaults
 {
+    /// <summary>
+    /// Increment when built-in rule text or metadata changes so persisted rules resync on load.
+    /// </summary>
+    public const int Revision = 2;
+
     public static List<RemediationRule> GetAll() =>
     [
         new RemediationRule
@@ -127,16 +132,39 @@ public static class RemediationRuleDefaults
         },
         new RemediationRule
         {
+            Pattern = "*Microsoft Visual C++ (all versions)*",
+            GuidanceStyle = RemediationGuidanceStyle.SideBySideRuntime,
+            WordText = "Microsoft Visual C++ Redistributables are side-by-side runtime libraries. Different major release lines (2008, 2010, 2012, 2013, and 2015–2022/v14) normally coexist on the same machine because applications depend on the line they were built against. Do not remove an older major line unless you have verified no installed application still requires it. Within the Visual Studio 2015–2022 (v14) line, Microsoft documents binary compatibility — install the latest v14 redistributable build for that architecture; it will not downgrade a newer v14 already present. Remediation is to patch within the same major line (latest vc_redist for that line, or Windows Update for centrally deployed runtimes), not to delete unrelated year packages. Updating the parent application may install a newer redistributable, but other software may still depend on older major lines.",
+            TicketText = "- Visual C++ redistributables are side-by-side across major release lines (2008, 2010, 2012, 2013, 2015–2022/v14)\r\n  - Do NOT remove an older major line without verifying dependent applications\r\n  - Major lines are not interchangeable (2013 ≠ 2015–2022)\r\n  - Within 2015–2022/v14: install latest v14 build for the architecture; binary compatible per Microsoft\r\n  - Remediate by patching within the same major line via vc_redist or Windows Update\r\n  - Multiple Visual C++ versions on one host is normal",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Visual C++*",
+            GuidanceStyle = RemediationGuidanceStyle.SideBySideRuntime,
+            WordText = "Microsoft Visual C++ Redistributables are side-by-side runtime libraries. Different major release lines (2008, 2010, 2012, 2013, and 2015–2022/v14) normally coexist on the same machine because applications depend on the line they were built against. Do not remove an older major line unless you have verified no installed application still requires it. Within the Visual Studio 2015–2022 (v14) line, Microsoft documents binary compatibility — install the latest v14 redistributable build for that architecture; it will not downgrade a newer v14 already present. Remediation is to patch within the same major line (latest vc_redist for that line, or Windows Update for centrally deployed runtimes), not to delete unrelated year packages. Updating the parent application may install a newer redistributable, but other software may still depend on older major lines.",
+            TicketText = "- Visual C++ redistributables are side-by-side across major release lines (2008, 2010, 2012, 2013, 2015–2022/v14)\r\n  - Do NOT remove an older major line without verifying dependent applications\r\n  - Major lines are not interchangeable (2013 ≠ 2015–2022)\r\n  - Within 2015–2022/v14: install latest v14 build for the architecture; binary compatible per Microsoft\r\n  - Remediate by patching within the same major line via vc_redist or Windows Update\r\n  - Multiple Visual C++ versions on one host is normal",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Visual C#*",
+            WordText = "ConnectSecure sometimes groups atypical product names with Visual C++ redistributable findings. Verify the actual installed product on affected hosts before remediating. If it is a Visual C++ Redistributable, apply the same side-by-side guidance: patch within the same major release line and do not remove older major lines without verifying dependent applications.",
+            TicketText = "- Verify actual product on affected hosts (may be Visual C++ redistributable data)\r\n  - If Visual C++ redistributable: patch within same major release line\r\n  - Do NOT remove older major redistributable lines without dependency check",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
             Pattern = "*Microsoft .NET (all versions)*",
-            WordText = "Legacy and modern .NET runtimes are consolidated in this finding. .NET Framework cannot be upgraded to modern .NET without a migration project; modern .NET versions should be kept current or retargeted to .NET 8 (LTS). Out-of-support versions stop receiving security patches.",
-            TicketText = "- Consolidated .NET finding (Framework, Core, Runtime)\r\n  - .NET Framework: migration project required to modern .NET; no in-place upgrade\r\n  - Modern .NET: retarget to .NET 8 (LTS) with minimal code changes where possible\r\n  - Main driver: security patches; out-of-support versions receive none",
+            WordText = "Microsoft .NET has two incompatible families — the break is between .NET Framework and modern .NET, not at a single version number. Legacy .NET Framework (through 4.8) is not backward compatible with modern .NET (.NET Core 3.x and .NET 5+). .NET 5 was the rebranding of .NET Core; it continues the modern lineage with strong backward compatibility from Core 3.1 onward and between modern releases (5→8→10). Framework applications cannot move to modern .NET without a migration project. Modern .NET apps can usually retarget to a supported LTS release (.NET 8 or .NET 10) with minimal changes. For runtime-only findings, keep the matching branch current via Windows Update or vendor installers — installing a modern runtime does not satisfy a .NET Framework-only application. .NET 6 reached end of support on November 12, 2024.",
+            TicketText = "- Two incompatible .NET families: .NET Framework vs modern .NET (Core 3.x / .NET 5+)\r\n  - The break is Framework vs modern — NOT \"before .NET 5 vs after .NET 5\" within Framework\r\n  - .NET Framework (through 4.8): migration project required; no in-place upgrade to modern .NET\r\n  - Modern .NET (.NET 5+): continues Core lineage; largely backward compatible within modern versions only\r\n  - .NET 6 out of support since November 12, 2024 — retarget to .NET 8 or .NET 10 LTS\r\n  - Patch supported runtimes via Windows Update; do not install modern .NET expecting it to replace Framework",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Framework*",
-            WordText = "Legacy .NET: .NET Framework (1.0 through 4.8) cannot be upgraded in-place to modern .NET (5, 6, 7, 8, 9). There is no direct upgrade path; attempting to switch runtimes without migration will likely break the application. Modern .NET is a different runtime with different APIs - some Framework APIs do not exist or behave differently. The older the Framework version (e.g. 3.5, 4.0), the more painful the migration. Migration is a real project: retarget the application to .NET 8 (LTS) or later, update deprecated or incompatible APIs, and test thoroughly. For MSP/client conversations: the main reason to migrate is that Framework versions go out of support and stop receiving security patches - not because end users will notice any difference.",
-            TicketText = "- .NET Framework cannot be upgraded to modern .NET (5, 6, 7, 8, 9) without migration\r\n  - No direct upgrade path; switching runtimes without migration will likely break the app\r\n  - Modern .NET is a different runtime; many APIs differ or are missing\r\n  - Older Framework versions (3.5, 4.0) are more painful to migrate than 4.x\r\n  - Migration is a real project: retarget to .NET 8 (LTS), update APIs, test thoroughly\r\n  - Main driver: security patches (Framework goes out of support) - not user experience",
+            WordText = "Legacy .NET Framework (1.0 through 4.8) is a separate runtime from modern .NET (.NET Core 3.x and .NET 5+). They are not backward compatible — Framework cannot be upgraded in-place to modern .NET. There is no direct upgrade path; attempting to switch runtimes without migration will likely break the application. Modern .NET is a different runtime with different APIs; some Framework APIs do not exist or behave differently. The older the Framework version (e.g. 3.5, 4.0), the more painful the migration. Migration is a real project: retarget the application to .NET 8 LTS or .NET 10 LTS, update deprecated or incompatible APIs, and test thoroughly. Installing modern .NET on a server does not remediate a .NET Framework 4.x dependency. Note: .NET Framework 4.8 on a supported Windows version still receives security updates via Windows Update — migration to modern .NET is recommended for long-term support but is not the only way to stay patched on supported OS versions.",
+            TicketText = "- .NET Framework is NOT backward compatible with modern .NET (5+)\r\n  - No in-place upgrade path; switching runtimes without migration will likely break the app\r\n  - Installing modern .NET does not replace or satisfy .NET Framework dependencies\r\n  - Modern .NET is a different runtime; many APIs differ or are missing\r\n  - Migration is a real project: retarget to .NET 8/10 LTS, update APIs, test thoroughly\r\n  - .NET Framework 4.8 on supported Windows still gets WU security updates\r\n  - Main driver for migration: long-term support lifecycle, not immediate patch gap on 4.8",
             IsDefault = false
         },
         new RemediationRule
@@ -149,15 +177,15 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Core 3.*",
-            WordText = "Legacy .NET: .NET Core 3.x (including 3.1 LTS) has reached or is nearing end of support. Migration to modern .NET 8 (LTS) is recommended. Within the modern .NET lineage, retargeting is usually a project file edit and minimal code changes. The main driver is security: out-of-support versions stop receiving patches.",
-            TicketText = "- Legacy .NET Core 3.x: end of support or nearing\r\n  - Retarget to .NET 8 (LTS) with minimal code changes\r\n  - Main driver: security patches; out-of-support versions receive none\r\n  - LTS versions (6, 8, 10) get 3 years support",
+            WordText = "Legacy .NET: .NET Core 3.x (including 3.1 LTS) reached end of support on December 13, 2022. Retarget to .NET 8 or .NET 10 (LTS) with minimal code changes within the modern .NET lineage. The main driver is security: out-of-support versions no longer receive patches.",
+            TicketText = "- Legacy .NET Core 3.x: end of support since December 13, 2022\r\n  - Retarget to .NET 8 or .NET 10 (LTS) with minimal code changes\r\n  - Main driver: security patches; out-of-support versions receive none\r\n  - LTS versions get 3 years support",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Core*",
-            WordText = "Legacy .NET: .NET Core (1.x, 2.x, 3.x) is the predecessor to modern .NET (5+). Core 2.x and 3.x are out of support. Migration to .NET 8 (LTS) is recommended. .NET Framework requires a full migration project; apps on Core can usually retarget with minimal changes. The main driver is security patches.",
-            TicketText = "- Legacy .NET Core: out of support or nearing\r\n  - Retarget to .NET 8 (LTS) or later\r\n  - Main driver: security patches; out-of-support versions receive none\r\n  - .NET Framework migration is a real project; Core retarget is usually low friction",
+            WordText = "Modern .NET lineage: .NET Core (1.x–3.x) is the predecessor to .NET 5+ — same family, not .NET Framework. Core 2.x and 3.x are out of support. Retargeting to .NET 8 (LTS) is usually a project file edit and minimal code changes because modern .NET maintains backward compatibility within this lineage. .NET Framework is a separate, incompatible family requiring a full migration project. The main driver is security patches.",
+            TicketText = "- .NET Core is the modern .NET lineage (continues as .NET 5+), NOT .NET Framework\r\n  - Retarget to .NET 8 (LTS) with minimal code changes within the modern lineage\r\n  - .NET Framework migration is a separate, incompatible project\r\n  - Main driver: security patches; out-of-support versions receive none",
             IsDefault = false
         },
         new RemediationRule
@@ -170,8 +198,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Runtime 6.*",
-            WordText = "Modern .NET: .NET 6 (LTS) maintains strong backwards compatibility. Retargeting to .NET 8 (LTS) is usually a project file edit and minimal code changes. The main reason to upgrade is support lifecycle: LTS versions get 3 years; staying current ensures security patches. End users typically notice nothing; value is security patches and lower infrastructure costs.",
-            TicketText = "- Modern .NET 6: largely drop-in upgradeable to .NET 8\r\n  - Retarget to .NET 8 (LTS) with minimal code changes\r\n  - Main driver: support lifecycle and security patches\r\n  - LTS versions get 3 years support",
+            WordText = "Modern .NET: .NET 6 reached end of support on November 12, 2024 and no longer receives security updates. Retarget applications to .NET 8 LTS (through November 2026) or .NET 10 LTS. Remaining on .NET 6 is an unsupported-state risk, not a patchable finding.",
+            TicketText = "- .NET 6 end of support: November 12, 2024 (no further security patches)\r\n  - Retarget apps to .NET 8 LTS or .NET 10 LTS\r\n  - Do not rely on Windows Update for ongoing .NET 6 security fixes\r\n  - Not interchangeable with .NET Framework",
             IsDefault = false
         },
         new RemediationRule
@@ -184,8 +212,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Runtime 8.*",
-            WordText = "Modern .NET: .NET 8 (LTS) is the current long-term support release with 3 years of support. Keep current with patch updates. If a newer LTS (e.g. .NET 10) is available, retargeting is usually minimal. End users typically notice nothing; value is security patches and lower infrastructure costs.",
-            TicketText = "- Modern .NET 8 (LTS): keep current with patch updates\r\n  - 3 years support\r\n  - Retarget to newer LTS when available with minimal changes\r\n  - Main driver: security patches",
+            WordText = "Modern .NET: .NET 8 LTS is supported through November 2026. .NET 10 LTS (November 2025) is the newer long-term option. Keep the installed runtime patched via Windows Update or vendor installers. Retargeting between supported LTS releases is usually minimal. End users typically notice nothing; value is security patches.",
+            TicketText = "- Modern .NET 8 LTS: supported through November 2026\r\n  - .NET 10 LTS is the newer long-term option\r\n  - Keep current with patch updates via WU or vendor installer\r\n  - Main driver: security patches",
             IsDefault = false
         },
         new RemediationRule
@@ -198,8 +226,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET Runtime*",
-            WordText = "Modern .NET: .NET 5+ (Runtime) maintains strong backwards compatibility. Retargeting between versions is usually a project file edit and minimal code changes. The main reason to upgrade is support: LTS versions (6, 8, 10) get 3 years; non-LTS get 18 months. End users typically notice nothing; for MSP/client conversations, the value is security patches and lower infrastructure costs - not user-facing improvements.",
-            TicketText = "- Modern .NET: largely drop-in upgradeable between versions\r\n  - Retarget to .NET 8 (LTS) with minimal code changes\r\n  - Main driver: security patches (older versions go out of support) - not user experience\r\n  - LTS versions get 3 years support; non-LTS get 18 months",
+            WordText = "Modern .NET (.NET 5 and later, continuing the .NET Core lineage) maintains strong backward compatibility within this family only — not with .NET Framework. Retargeting between modern versions (5→8→10) is usually a project file edit and minimal code changes. The main reason to upgrade is support lifecycle: LTS versions (8, 10) get 3 years; non-LTS get 18 months. End users typically notice nothing; for MSP/client conversations, the value is security patches — not user-facing improvements. Do not install a modern runtime expecting it to satisfy .NET Framework dependencies.",
+            TicketText = "- Modern .NET (.NET 5+): backward compatible within modern lineage only — NOT with .NET Framework\r\n  - Retarget to .NET 8 LTS or .NET 10 LTS with minimal code changes\r\n  - Does not replace .NET Framework; Framework apps need a migration project\r\n  - Main driver: security patches (out-of-support versions receive none)\r\n  - LTS versions get 3 years support; non-LTS get 18 months",
             IsDefault = false
         },
         new RemediationRule
@@ -212,8 +240,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET 6.*",
-            WordText = "Modern .NET: .NET 6 (LTS) is largely drop-in upgradeable to .NET 8 (LTS). Retargeting is usually a project file edit and minimal code changes. The main driver is support lifecycle and security patches. End users typically notice nothing.",
-            TicketText = "- Modern .NET 6: largely drop-in upgradeable to .NET 8\r\n  - Retarget to .NET 8 (LTS) with minimal code changes\r\n  - Main driver: support lifecycle and security patches",
+            WordText = "Modern .NET: .NET 6 reached end of support on November 12, 2024. Retarget to .NET 8 LTS or .NET 10 LTS with minimal code changes. End users typically notice nothing; the driver is security support.",
+            TicketText = "- Modern .NET 6: out of support since November 12, 2024\r\n  - Retarget to .NET 8 LTS or .NET 10 LTS with minimal code changes\r\n  - Main driver: security patches no longer available on .NET 6",
             IsDefault = false
         },
         new RemediationRule
@@ -226,8 +254,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft .NET 8.*",
-            WordText = "Modern .NET: .NET 8 (LTS) is the current long-term support release with 3 years of support. Keep current with patch updates. End users typically notice nothing; value is security patches and lower infrastructure costs.",
-            TicketText = "- Modern .NET 8 (LTS): keep current with patch updates\r\n  - 3 years support\r\n  - Main driver: security patches",
+            WordText = "Modern .NET: .NET 8 LTS is supported through November 2026. .NET 10 LTS (November 2025) is the newer long-term option. Keep current with patch updates. End users typically notice nothing; value is security patches.",
+            TicketText = "- Modern .NET 8 LTS: supported through November 2026\r\n  - .NET 10 LTS is the newer long-term option\r\n  - Keep current with patch updates\r\n  - Main driver: security patches",
             IsDefault = false
         },
         new RemediationRule
@@ -235,6 +263,173 @@ public static class RemediationRuleDefaults
             Pattern = "*Microsoft .NET 9.*",
             WordText = "Modern .NET: .NET 9 (non-LTS) has an 18-month support window. For long-term support, consider .NET 8 (LTS) or plan for .NET 10 (LTS). Upgrades within modern .NET are largely drop-in.",
             TicketText = "- Modern .NET 9: non-LTS (18 months support)\r\n  - Consider .NET 8 or .NET 10 (LTS) for longer support\r\n  - Largely drop-in upgradeable",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Dot Net 6*",
+            WordText = "Modern .NET: .NET 6 reached end of support on November 12, 2024 and no longer receives security updates. Retarget applications to .NET 8 LTS or .NET 10 LTS. This is the modern .NET lineage — not .NET Framework.",
+            TicketText = "- .NET 6 out of support since November 12, 2024 (no security patches)\r\n  - Retarget apps to .NET 8 LTS or .NET 10 LTS\r\n  - Not interchangeable with .NET Framework",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*ASP.NET Core*",
+            WordText = "ASP.NET Core is part of the modern .NET lineage (not .NET Framework). Keep the installed ASP.NET Core hosting/runtime bundle current via Windows Update or the vendor installer matching the app's target band (e.g. 8.0.x). Retarget applications to a supported LTS release (.NET 8 or .NET 10) when the reported runtime is out of support.",
+            TicketText = "- ASP.NET Core is modern .NET, not .NET Framework\r\n  - Patch hosting/runtime bundle to latest patch in the same band\r\n  - Retarget out-of-support apps to .NET 8 or .NET 10 LTS\r\n  - Verify version after update on affected hosts",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Google Chrome*",
+            GuidanceStyle = RemediationGuidanceStyle.AutoUpdate,
+            WordText = "Google Chrome updates via the Google Update service (background scheduled tasks on Windows), not only when a user opens the browser. For this finding, confirm affected hosts reach the ConnectSecure target version during the normal update cycle rather than treating this as a manual patch project. Users may need to relaunch Chrome for an already-downloaded update to apply. If versions remain stale, check update policies and Google Update task health, then consider ConnectWise Automate or ConnectSecure Patch Now on managed hosts.",
+            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Chrome updates via Google Update (background); relaunch may be needed to apply\r\n  - If still behind: check Chrome update policy / Google Update scheduled tasks\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script\r\n  - ConnectSecure Solution below lists the target version",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Mozilla Firefox*",
+            GuidanceStyle = RemediationGuidanceStyle.AutoUpdate,
+            WordText = "Mozilla Firefox updates via Mozilla Maintenance Service and background update mechanisms, not only when a user opens the browser. Confirm affected hosts reach the ConnectSecure target version during the normal update cycle. Users may need to relaunch Firefox for an already-downloaded update to apply. If versions stay stale, check update settings and maintenance service status, then consider ConnectWise Automate or ConnectSecure Patch Now on managed hosts.",
+            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Firefox updates in background; relaunch may be needed to apply\r\n  - If still behind: check Firefox update settings / Maintenance Service\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script\r\n  - ConnectSecure Solution below lists the target version",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Microsoft Edge*",
+            GuidanceStyle = RemediationGuidanceStyle.AutoUpdate,
+            WordText = "Microsoft Edge updates primarily through the Microsoft Edge Update service (scheduled background tasks). Windows Update may also deliver Edge on some systems. Confirm affected hosts reach the ConnectSecure target version during the normal update cycle rather than treating this as a manual patch project. Users may need to relaunch Edge for an already-downloaded update to apply. If versions remain stale, check Edge Update task status and update channel, then consider managed deployment tools.",
+            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Edge updates via Microsoft Edge Update (primary); WU may also apply updates\r\n  - Relaunch may be needed for a downloaded update to take effect\r\n  - If still behind on managed hosts: ConnectSecure Patch Now or RMM script\r\n  - ConnectSecure Solution below lists the target version",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*7-Zip*",
+            WordText = "7-Zip can be remediated via ConnectSecure Patch Now (application patch) when agents are online. Verify installed version on affected hosts after the patch job completes; offline agents remain pending until they check in.",
+            TicketText = "- Update 7-Zip to the ConnectSecure fix target\r\n  - Deploy via ConnectSecure Patch Now when agent is online\r\n  - Verify version on affected hosts after patch completes\r\n  - Offline agents: pending until next check-in",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Notepad++*",
+            WordText = "Notepad++ can be remediated via ConnectSecure Patch Now (application patch) when agents are online. Verify installed version on affected hosts after patching; offline agents remain pending until check-in.",
+            TicketText = "- Update Notepad++ to the ConnectSecure fix target\r\n  - Deploy via ConnectSecure Patch Now when agent is online\r\n  - Verify version on affected hosts\r\n  - Offline agents: pending until next check-in",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Adobe Acrobat*",
+            WordText = "Adobe Acrobat updates are often per-user or delivered through Adobe's own updater rather than a simple enterprise patch. Check whether ConnectSecure Patch Now applies; otherwise use Adobe's managed update tooling or manual install on affected hosts. Verify version after update.",
+            TicketText = "- Update Adobe Acrobat to the ConnectSecure fix target\r\n  - Check ConnectSecure Patch Now applicability first\r\n  - Otherwise use Adobe updater or manual install on affected hosts\r\n  - Verify version after update",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Adobe Reader*",
+            WordText = "Adobe Reader updates are often per-user or delivered through Adobe's own updater. Check whether ConnectSecure Patch Now applies; otherwise use Adobe's managed update tooling or manual install on affected hosts. Verify version after update.",
+            TicketText = "- Update Adobe Reader to the ConnectSecure fix target\r\n  - Check ConnectSecure Patch Now applicability first\r\n  - Otherwise use Adobe updater or manual install\r\n  - Verify version after update",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*TeamViewer*",
+            WordText = "TeamViewer should be updated to the ConnectSecure fix target. When patchable, deploy via ConnectSecure Patch Now on online agents and verify version afterward. Otherwise use TeamViewer's built-in updater, ConnectWise Automate/RMM, or vendor installer.",
+            TicketText = "- Update TeamViewer to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable and agent is online\r\n  - Verify version on affected hosts\r\n  - Fallback: vendor updater, RMM, or manual install",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Zoom*",
+            WordText = "Zoom client updates should match the ConnectSecure fix target. Deploy via ConnectSecure Patch Now when patchable, or use Zoom's installer/updater or ConnectWise Automate/RMM. Verify version on affected hosts after update.",
+            TicketText = "- Update Zoom to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable\r\n  - Otherwise vendor updater, RMM, or manual install\r\n  - Verify version on affected hosts",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Cisco Webex*",
+            WordText = "Cisco Webex should be updated to the ConnectSecure fix target. When patchable, use ConnectSecure Patch Now on online agents; otherwise deploy via vendor installer or RMM. Verify version after update.",
+            TicketText = "- Update Cisco Webex to the ConnectSecure fix target\r\n  - Deploy via ConnectSecure Patch Now when patchable\r\n  - Verify version on affected hosts\r\n  - Fallback: vendor installer or RMM",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Microsoft Defender*",
+            WordText = "Microsoft Defender platform and signature updates are normally delivered through Windows Update or Microsoft Defender management policies. Verify the reported engine/platform version against Windows Update history or ConnectWise Automate patch status on affected hosts.",
+            TicketText = "- Update Microsoft Defender platform/signatures\r\n  - Verify via Windows Update or Defender management policy\r\n  - Check ConnectWise Automate patch status on affected hosts\r\n  - Confirm engine/platform version after update",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*Microsoft 365*",
+            WordText = "Microsoft 365 Apps updates are typically delivered through Office Click-to-Run / Microsoft 365 update channels rather than generic application patching. Verify update channel configuration and deployment in Microsoft 365 admin or Intune; use ConnectWise Automate Office update workflows where configured.",
+            TicketText = "- Update Microsoft 365 Apps to latest supported build\r\n  - Verify Office update channel (Current Channel, etc.)\r\n  - Use Intune or ConnectWise Automate Office update workflow if configured\r\n  - Confirm version on affected hosts",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*OS-OUT-OF-SUPPORT*",
+            GuidanceStyle = RemediationGuidanceStyle.Infrastructure,
+            WordText = "The operating system on affected hosts is out of vendor support. This is an infrastructure upgrade project — migrate to a supported Windows release or retire the system. Patching individual applications will not remediate OS-level out-of-support findings.",
+            TicketText = "- Operating system is out of vendor support\r\n  - Plan upgrade to supported Windows version or retire system\r\n  - Not resolved by application patching alone\r\n  - Treat as infrastructure project",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*TLSv1.0*",
+            GuidanceStyle = RemediationGuidanceStyle.Configuration,
+            WordText = "TLS 1.0 is deprecated and should be disabled on servers, applications, and devices where it is explicitly enabled. On many current Windows 10/11 clients, Schannel may still allow TLS 1.0 by default — confirm whether the finding is on an application, server role, appliance, or OS hardening target before changing defaults. Disable TLS 1.0 in favor of TLS 1.2 or 1.3. May require vendor guidance or registry/Schannel hardening on Windows.",
+            TicketText = "- Disable TLS 1.0 on affected services where it is enabled\r\n  - Prefer TLS 1.2 or 1.3 only\r\n  - Confirm scope: app, server, appliance, or OS Schannel setting\r\n  - Windows: legacy TLS may still be enabled by default on some in-market releases\r\n  - Test dependent applications after change",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*TLSv1.1*",
+            GuidanceStyle = RemediationGuidanceStyle.Configuration,
+            WordText = "TLS 1.1 is deprecated and should be disabled on servers, applications, and devices where it is explicitly enabled. On many current Windows 10/11 clients, Schannel may still allow TLS 1.1 by default — confirm whether the finding is on an application, server role, appliance, or OS hardening target. Disable TLS 1.1 in favor of TLS 1.2 or 1.3. May require vendor guidance or Schannel hardening on Windows.",
+            TicketText = "- Disable TLS 1.1 on affected services where it is enabled\r\n  - Prefer TLS 1.2 or 1.3 only\r\n  - Confirm scope: app, server, appliance, or OS Schannel setting\r\n  - Windows: legacy TLS may still be enabled by default on some in-market releases\r\n  - Test dependent applications after change",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*SSL_CA_Expired*",
+            WordText = "An SSL/TLS certificate on the affected service has expired. Renew the certificate with a trusted public CA or appropriate internal PKI, install the new cert chain, and verify clients no longer receive certificate errors. Include intermediate certificates as needed.",
+            TicketText = "- Renew expired SSL/TLS certificate\r\n  - Use trusted public CA or internal PKI as appropriate\r\n  - Install full cert chain on the service\r\n  - Verify no client certificate warnings remain",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*SSL_SelfSigned_CA*",
+            WordText = "The affected service is using a self-signed or untrusted certificate authority. Replace with a certificate issued by a trusted CA (public or internal PKI) unless this is a deliberate lab/dev exception documented and segmented.",
+            TicketText = "- Replace self-signed/untrusted certificate\r\n  - Issue cert from trusted public CA or internal PKI\r\n  - Document and segment deliberate dev/lab exceptions only\r\n  - Verify trust chain on clients",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*SSL_CA_Validity*",
+            WordText = "Review SSL/TLS certificate validity on the affected service — expiration horizon, chain completeness, and trusted issuer. Renew or replace certificates before expiry and ensure intermediate CAs are installed correctly.",
+            TicketText = "- Review SSL/TLS certificate validity\r\n  - Check expiration date and full chain\r\n  - Renew or replace before expiry\r\n  - Ensure intermediate CAs are installed",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*smb-protocols*",
+            WordText = "Legacy or insecure SMB protocol versions may be enabled on the affected host or appliance. Disable SMBv1 where possible and prefer SMB signing/encryption per Microsoft hardening guidance. Verify dependent file/print shares after changes.",
+            TicketText = "- Harden SMB configuration\r\n  - Disable SMBv1 where possible\r\n  - Enable SMB signing/encryption per vendor guidance\r\n  - Test file/print shares after changes",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*http-server-header*",
+            WordText = "HTTP server banner/header disclosure is an informational finding. Where practical, configure the web server or appliance to suppress or minimize version banners (IIS, Apache, nginx, embedded devices). This is configuration hardening, not a version upgrade.",
+            TicketText = "- Reduce HTTP server version banner disclosure\r\n  - Configure web server/appliance to minimize headers\r\n  - Configuration hardening — not necessarily a version upgrade\r\n  - Verify service still functions after change",
+            IsDefault = false
+        },
+        new RemediationRule
+        {
+            Pattern = "*whois-ip*",
+            WordText = "WHOIS/IP information disclosure is typically an external scan informational finding. Review whether the exposed asset should be reachable from the internet; restrict exposure, use CDN/WAF masking where appropriate, and document accepted risk if the service must remain public.",
+            TicketText = "- Review internet-exposed asset and WHOIS/IP disclosure\r\n  - Restrict exposure or segment if not required publicly\r\n  - Consider CDN/WAF where appropriate\r\n  - Document accepted risk if exposure is required",
             IsDefault = false
         },
         new RemediationRule

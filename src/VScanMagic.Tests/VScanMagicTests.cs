@@ -9,6 +9,7 @@ using VScanMagic.Data;
 using VScanMagic.Data.Parsing;
 using VScanMagic.Data.Scoring;
 using VScanMagic.Core.Nvd;
+using VScanMagic.Core.Paths;
 using VScanMagic.Core.Risk;
 using VScanMagic.Core.Services;
 using VScanMagic.Review;
@@ -153,6 +154,48 @@ public class TopVulnerabilityScorerTests
         Assert.Equal(2, ReviewSessionRanker.GetExportFindings(session).Count);
         Assert.True(session.Findings[1].ManuallyPromoted);
     }
+
+    [Fact]
+    public void CreateFromScoredResult_AutoUpdateBrowser_PrefersRuleGuidanceOverVersionFix()
+    {
+        var factory = new ReviewSessionFactory(new RemediationRuleService(), new VScanMagicOptions());
+        var scored = new ScoredVulnerabilityResult
+        {
+            AllFiltered =
+            [
+                new TopVulnerability
+                {
+                    Source = "Application",
+                    Product = "Brave",
+                    Fix = "1.67.123",
+                    High = 5,
+                    RiskScore = 10,
+                    EpssScore = 0.5,
+                    VulnCount = 5
+                }
+            ],
+            AutoExportApplication =
+            [
+                new TopVulnerability
+                {
+                    Source = "Application",
+                    Product = "Brave",
+                    Fix = "1.67.123",
+                    High = 5,
+                    RiskScore = 10,
+                    EpssScore = 0.5,
+                    VulnCount = 5
+                }
+            ]
+        };
+
+        var session = factory.CreateFromScoredResult("Acme", "2026-05-23", scored, "Tech", exportTopN: 10);
+        var finding = Assert.Single(session.Findings);
+
+        Assert.DoesNotContain("1.67.123", finding.RevisedRemediation);
+        Assert.NotEqual("Update to version 1.67.123 or later", finding.RevisedRemediation);
+        Assert.Contains("1.67.123", finding.OriginalFix);
+    }
 }
 
 public class ExcelReaderTests
@@ -282,6 +325,45 @@ public class ReviewSessionRepositoryTests
         Assert.NotNull(loaded);
         Assert.Equal("Test Co", loaded!.ClientName);
         Assert.Single(loaded.Findings);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RemovesSession()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vscanmagic_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        using var repo = new Review.Storage.SqliteReviewSessionRepository(dir);
+        var session = new Review.Models.ReviewSession { ClientName = "Delete Me", ScanDate = "2026-01-01" };
+        await repo.SaveAsync(session);
+        await repo.DeleteAsync(session.Id);
+
+        Assert.Null(await repo.GetAsync(session.Id));
+    }
+
+    [Fact]
+    public async Task ListAsync_ExcludesArchivedUnlessRequested()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vscanmagic_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        using var repo = new Review.Storage.SqliteReviewSessionRepository(dir);
+        var active = new Review.Models.ReviewSession { ClientName = "Active", ScanDate = "2026-01-01" };
+        var archived = new Review.Models.ReviewSession
+        {
+            ClientName = "Archived",
+            ScanDate = "2026-01-01",
+            ArchivedAt = DateTimeOffset.UtcNow
+        };
+        await repo.SaveAsync(active);
+        await repo.SaveAsync(archived);
+
+        var visible = await repo.ListAsync(includeArchived: false);
+        var all = await repo.ListAsync(includeArchived: true);
+
+        Assert.Single(visible);
+        Assert.Equal("Active", visible[0].ClientName);
+        Assert.Equal(2, all.Count);
     }
 }
 
@@ -608,7 +690,7 @@ public class TicketInstructionBuilderTests
         var finding = new ReviewFinding { Product = "Microsoft Edge" };
         var subject = TicketInstructionBuilder.BuildSubject(finding, isRmitPlus: true);
         Assert.Contains("Microsoft Edge", subject);
-        Assert.Contains("Updates Required", subject);
+        Assert.Contains("This software updates automatically", subject);
     }
 
     [Fact]
@@ -666,10 +748,10 @@ public class TicketInstructionBuilderTests
     public void BuildBodyText_UsesTicketFormatWhenRemediationUnedited()
     {
         var rules = CreateRules();
-        var wordGuidance = rules.GetGuidance("Microsoft Edge", forWord: true);
+        var wordGuidance = rules.GetGuidance("Contoso Legacy Widget", forWord: true);
         var finding = new ReviewFinding
         {
-            Product = "Microsoft Edge",
+            Product = "Contoso Legacy Widget",
             OriginalRemediation = wordGuidance,
             RevisedRemediation = wordGuidance
         };
@@ -857,7 +939,7 @@ public class TimeEstimateBuilderTests
 
         var text = TimeEstimateBuilder.Build(session, new RemediationRuleService());
 
-        Assert.Contains("Consolidated .NET finding", text);
+        Assert.Contains("Two incompatible .NET families", text);
         Assert.DoesNotContain("Reached end of life on 12 Nov 2024", text);
     }
 
@@ -1058,8 +1140,8 @@ public class ProductTypeSuffixHelperTests
 {
     [Theory]
     [InlineData("Windows 11", false, "Updates Required")]
-    [InlineData("Microsoft Edge", true, "Updates Required")]
-    [InlineData("Microsoft Edge", false, "Update Required")]
+    [InlineData("Microsoft Edge", true, "This software updates automatically")]
+    [InlineData("Microsoft Edge", false, "This software updates automatically")]
     [InlineData("Google Chrome", false, "This software updates automatically")]
     public void GetSuffix_MatchesPowerShellRules(string product, bool isRmitPlus, string expectedFragment)
     {
@@ -1372,6 +1454,93 @@ public class ProductDisplayFormatterTests
     [InlineData("Google Chrome", "Google Chrome")]
     public void GetTimeEstimateGroupKey_GroupsDotNetAndVisualCppVariants(string input, string expected) =>
         Assert.Equal(expected, ProductConsolidator.GetTimeEstimateGroupKey(input));
+}
+
+public class RemediationRuleGuidanceTests
+{
+    private static RemediationRule GetDefaultRule(string pattern) =>
+        RemediationRuleDefaults.GetAll().First(r => r.Pattern == pattern);
+
+    [Fact]
+    public void DefaultRules_VisualCpp_ExplainsSideBySideYearLockIn()
+    {
+        var rule = GetDefaultRule("*Visual C++*");
+
+        Assert.Contains("side-by-side", rule.WordText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("major release lines", rule.WordText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("2015–2022", rule.WordText);
+        Assert.Contains("not interchangeable", rule.TicketText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DefaultRules_DotNetAllVersions_ExplainsFrameworkVsModernBreak()
+    {
+        var rule = GetDefaultRule("*Microsoft .NET (all versions)*");
+
+        Assert.Contains(".NET Framework", rule.WordText);
+        Assert.Contains("modern .NET", rule.WordText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".NET 5", rule.WordText);
+        Assert.Contains("not backward compatible", rule.WordText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DefaultRules_Chrome_UsesAutoUpdateStyleAndVerifyFirstGuidance()
+    {
+        var rule = GetDefaultRule("*Google Chrome*");
+        Assert.Equal(RemediationGuidanceStyle.AutoUpdate, rule.GuidanceStyle);
+        Assert.Contains("Google Update", rule.WordText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("verify first", rule.TicketText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DefaultRules_Tls10_IsConfigurationGuidance()
+    {
+        var rule = GetDefaultRule("*TLSv1.0*");
+        Assert.Contains("TLS 1.0", rule.WordText);
+        Assert.Contains("disable", rule.WordText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LoadRules_UpgradesStalePersistedDefaultsWhenRevisionIncreases()
+    {
+        var configDir = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(configDir);
+
+        try
+        {
+            var path = VScanMagicPaths.RemediationRulesFile(configDir);
+            var staleRules = RemediationRuleDefaults.GetAll()
+                .Select(r => new RemediationRule
+                {
+                    Pattern = r.Pattern,
+                    WordText = r.Pattern == "*Google Chrome*" ? "Old Chrome guidance." : r.WordText,
+                    TicketText = r.Pattern == "*Dot Net 6*" ? "- Patch .NET 6 runtime via Windows Update until migrated" : r.TicketText,
+                    IsDefault = r.IsDefault,
+                    GuidanceStyle = r.GuidanceStyle
+                })
+                .ToList();
+
+            File.WriteAllText(path, JsonSerializer.Serialize(staleRules));
+
+            var service = new RemediationRuleService(configDir);
+            var rules = service.LoadRules();
+
+            var chrome = rules.First(r => r.Pattern == "*Google Chrome*");
+            Assert.Contains("Google Update", chrome.WordText, StringComparison.OrdinalIgnoreCase);
+
+            var dotNet6 = rules.First(r => r.Pattern == "*Dot Net 6*");
+            Assert.Contains("November 12, 2024", dotNet6.WordText);
+            Assert.DoesNotContain("Patch .NET 6 runtime via Windows Update", dotNet6.TicketText);
+
+            Assert.Equal(RemediationRuleDefaults.Revision.ToString(),
+                File.ReadAllText(Path.ChangeExtension(path, ".defaults_revision")).Trim());
+        }
+        finally
+        {
+            if (Directory.Exists(configDir))
+                Directory.Delete(configDir, recursive: true);
+        }
+    }
 }
 
 public class ProductNameNormalizerTests

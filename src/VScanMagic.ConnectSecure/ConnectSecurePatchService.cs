@@ -264,30 +264,32 @@ public sealed class ConnectSecurePatchService(
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var merged = new Dictionary<string, SuppressibleProblemEntry>(StringComparer.OrdinalIgnoreCase);
-
         var assetWiseTask = CollectSuppressibleProblemsAsync(
-            merged,
             companyId,
             "/r/report_queries/asset_wise_vulnerabilities",
             AssetWiseQuery($"company_id={companyId}"),
             ct);
 
         var registryTask = CollectSuppressibleProblemsAsync(
-            merged,
             companyId,
             "/r/report_queries/registry_problems_remediation",
             ReportQuery($"company_id={companyId} and is_suppressed=false and is_remediated = false"),
             ct);
 
         var networkTask = CollectSuppressibleProblemsAsync(
-            merged,
             companyId,
             "/r/report_queries/application_vulnerabilities_net",
             ReportQuery($"company_id={companyId} and software_type='networksoftware' and unconfirmed = 'false'"),
             ct);
 
-        await Task.WhenAll(assetWiseTask, registryTask, networkTask);
+        var batches = await Task.WhenAll(assetWiseTask, registryTask, networkTask);
+
+        var merged = new Dictionary<string, SuppressibleProblemEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var batch in batches)
+        {
+            foreach (var entry in batch)
+                ConnectSecureSuppressLookup.MergeProblem(merged, entry);
+        }
 
         return merged.Values
             .OrderByDescending(entry => entry.AffectedAssets)
@@ -1191,21 +1193,23 @@ public sealed class ConnectSecurePatchService(
     private static string EscapeConditionValue(string value) =>
         value.Replace("'", "\\'", StringComparison.Ordinal);
 
-    private async Task CollectSuppressibleProblemsAsync(
-        IDictionary<string, SuppressibleProblemEntry> merged,
+    private async Task<List<SuppressibleProblemEntry>> CollectSuppressibleProblemsAsync(
         int companyId,
         string endpoint,
         Dictionary<string, string> query,
         CancellationToken ct)
     {
         var rows = await FetchAllPagesAsync(endpoint, query, ct);
+        var results = new List<SuppressibleProblemEntry>();
         foreach (var row in rows)
         {
             if (!MatchesCompanyInIds(row, companyId))
                 continue;
 
-            ConnectSecureSuppressLookup.MergeProblem(merged, ParseSuppressibleProblem(row));
+            results.Add(ParseSuppressibleProblem(row));
         }
+
+        return results;
     }
 
     private async Task<SuppressibleProblemEntry?> LookupApplicationProblemFastAsync(

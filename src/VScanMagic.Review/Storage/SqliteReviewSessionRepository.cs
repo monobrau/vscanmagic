@@ -7,7 +7,7 @@ namespace VScanMagic.Review.Storage;
 
 public interface IReviewSessionRepository
 {
-    Task<IReadOnlyList<ReviewSession>> ListAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<ReviewSession>> ListAsync(bool includeArchived = false, CancellationToken ct = default);
     Task<ReviewSession?> GetAsync(string id, CancellationToken ct = default);
     Task SaveAsync(ReviewSession session, CancellationToken ct = default);
     Task DeleteAsync(string id, CancellationToken ct = default);
@@ -50,7 +50,7 @@ public sealed class SqliteReviewSessionRepository : IReviewSessionRepository, ID
         cmd.ExecuteNonQuery();
     }
 
-    public async Task<IReadOnlyList<ReviewSession>> ListAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<ReviewSession>> ListAsync(bool includeArchived = false, CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
@@ -65,11 +65,14 @@ public sealed class SqliteReviewSessionRepository : IReviewSessionRepository, ID
             {
                 var json = reader.GetString(0);
                 var session = JsonSerializer.Deserialize<ReviewSession>(json, JsonOptions);
-                if (session is not null)
-                {
-                    session.Findings ??= [];
-                    results.Add(session);
-                }
+                if (session is null)
+                    continue;
+
+                session.Findings ??= [];
+                if (!includeArchived && session.IsArchived)
+                    continue;
+
+                results.Add(session);
             }
             return results;
         }

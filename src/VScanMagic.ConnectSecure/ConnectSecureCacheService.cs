@@ -52,6 +52,7 @@ public sealed class ConnectSecureCacheService
 
         _entries.TryRemove(RemediationPlanKey(companyId), out _);
         _entries.TryRemove(CompanyReviewKey(companyId), out _);
+        InvalidatePatchHosts(companyId);
     }
 
     public void InvalidatePatchHosts(int companyId)

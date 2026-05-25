@@ -6,4 +6,5 @@ public sealed class RemediationRule
     public string WordText { get; set; } = "";
     public string TicketText { get; set; } = "";
     public bool IsDefault { get; set; }
+    public RemediationGuidanceStyle GuidanceStyle { get; set; } = RemediationGuidanceStyle.Standard;
 }

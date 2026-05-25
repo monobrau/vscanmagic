@@ -15,8 +15,16 @@ public static class ReviewSessionApi
     {
         var group = app.MapGroup("/api/review-sessions");
 
-        group.MapGet("/", async (IReviewSessionRepository repo, CancellationToken ct) =>
-            Results.Ok(await repo.ListAsync(ct)));
+        group.MapGet("/", async (IReviewSessionRepository repo, bool includeArchived, CancellationToken ct) =>
+            Results.Ok(await repo.ListAsync(includeArchived, ct)));
+
+        group.MapDelete("/{id}", async (string id, IReviewSessionRepository repo, CancellationToken ct) =>
+        {
+            var existing = await repo.GetAsync(id, ct);
+            if (existing is null) return Results.NotFound();
+            await repo.DeleteAsync(id, ct);
+            return Results.NoContent();
+        });
 
         group.MapGet("/{id}", async (string id, IReviewSessionRepository repo, CancellationToken ct) =>
         {
@@ -59,6 +67,7 @@ public static class ReviewSessionApi
             existing.ScanDate = patch.ScanDate ?? existing.ScanDate;
             existing.Presenter = patch.Presenter ?? existing.Presenter;
             existing.IsRmitPlus = patch.IsRmitPlus;
+            existing.ArchivedAt = patch.ArchivedAt;
             await repo.SaveAsync(existing, ct);
             return Results.Ok(existing);
         });

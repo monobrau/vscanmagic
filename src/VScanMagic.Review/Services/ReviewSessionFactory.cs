@@ -152,6 +152,9 @@ public sealed class ReviewSessionFactory(RemediationRuleService remediationRules
 
     private string ResolveInitialRemediation(string displayProduct, string? rawFix)
     {
+        if (remediationRules.PrefersRuleGuidanceOverConnectSecureFix(displayProduct))
+            return remediationRules.GetGuidance(displayProduct, forWord: true);
+
         if (!string.IsNullOrWhiteSpace(rawFix) && !ConnectSecureFixFormatter.IsPlaceholder(rawFix))
         {
             var readable = ConnectSecureFixFormatter.ToReadableText(rawFix);

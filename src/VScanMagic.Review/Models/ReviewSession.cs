@@ -89,5 +89,9 @@ public sealed class ReviewSession
     public string SchedulingLinkUrl { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>When set, the review is hidden from the default list but kept for reference.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
     public List<ReviewFinding> Findings { get; set; } = [];
+
+    public bool IsArchived => ArchivedAt is not null;
 }
