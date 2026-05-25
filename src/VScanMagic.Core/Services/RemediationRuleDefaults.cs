@@ -7,7 +7,7 @@ public static class RemediationRuleDefaults
     /// <summary>
     /// Increment when built-in rule text or metadata changes so persisted rules resync on load.
     /// </summary>
-    public const int Revision = 2;
+    public const int Revision = 3;
 
     public static List<RemediationRule> GetAll() =>
     [
@@ -35,15 +35,15 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Windows 10*",
-            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate.",
-            TicketText = "- Windows 10 reached End of Life on October 14, 2025\r\n  - No longer supported unless you have extended support licensing\r\n  - If Windows Updates are functional and no extension licensing in place:\r\n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine\r\n  - For systems with extension licensing:\r\n    * Continue to verify Windows Update status through ConnectWise Automate",
+            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through RMM if the client has patch management deployed.",
+            TicketText = "- Windows 10 reached End of Life on October 14, 2025\r\n  - No longer supported unless you have extended support licensing\r\n  - If Windows Updates are functional and no extension licensing in place:\r\n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine\r\n  - For systems with extension licensing:\r\n    * Verify Windows Update status via RMM if patch management is deployed for the client",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Windows*",
-            WordText = "Windows patch inconsistencies should be investigated via ConnectWise Automate. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation.",
-            TicketText = "- Investigate via ConnectWise Automate\r\n  - Verify Windows Update status on affected systems\r\n  - Check for any issues preventing patch installation",
+            WordText = "Windows patch inconsistencies should be investigated via RMM when the client has patch management deployed. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation.",
+            TicketText = "- Investigate via RMM if patch management is deployed for the client\r\n  - Verify Windows Update status on affected systems\r\n  - Check for any issues preventing patch installation",
             IsDefault = false
         },
         new RemediationRule
@@ -77,8 +77,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft Teams*",
-            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can be remediated by cleaning up unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM.",
-            TicketText = "- Update via RMM script deployed through ConnectWise Automate\r\n  - Can be remediated by cleaning up unused user profile installed versions\r\n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM",
+            WordText = "Microsoft Teams can be updated via RMM script when the client has patch management deployed. Unused user profile-installed versions can be cleaned up in RMM (example path in ConnectWise Automate: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation).",
+            TicketText = "- Update via RMM script if patch management is deployed for the client\r\n  - Can remediate by cleaning up unused user profile-installed versions\r\n  - Example script path (ConnectWise Automate): RR - Custom > R-Security - Teams Classic Cleanup Remediation",
             IsDefault = false
         },
         new RemediationRule
@@ -283,16 +283,16 @@ public static class RemediationRuleDefaults
         {
             Pattern = "*Google Chrome*",
             GuidanceStyle = RemediationGuidanceStyle.AutoUpdate,
-            WordText = "Google Chrome updates via the Google Update service (background scheduled tasks on Windows), not only when a user opens the browser. For this finding, confirm affected hosts reach the ConnectSecure target version during the normal update cycle rather than treating this as a manual patch project. Users may need to relaunch Chrome for an already-downloaded update to apply. If versions remain stale, check update policies and Google Update task health, then consider ConnectWise Automate or ConnectSecure Patch Now on managed hosts.",
-            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Chrome updates via Google Update (background); relaunch may be needed to apply\r\n  - If still behind: check Chrome update policy / Google Update scheduled tasks\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script\r\n  - ConnectSecure Solution below lists the target version",
+            WordText = "Google Chrome updates via the Google Update service (background scheduled tasks on Windows), not only when a user opens the browser. For this finding, confirm affected hosts reach the ConnectSecure target version during the normal update cycle rather than treating this as a manual patch project. Users may need to relaunch Chrome for an already-downloaded update to apply. If versions remain stale, check update policies and Google Update task health, then consider RMM (if deployed) or ConnectSecure Patch Now on managed hosts.",
+            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Chrome updates via Google Update (background); relaunch may be needed to apply\r\n  - If still behind: check Chrome update policy / Google Update scheduled tasks\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script (if deployed)\r\n  - ConnectSecure Solution below lists the target version",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Mozilla Firefox*",
             GuidanceStyle = RemediationGuidanceStyle.AutoUpdate,
-            WordText = "Mozilla Firefox updates via Mozilla Maintenance Service and background update mechanisms, not only when a user opens the browser. Confirm affected hosts reach the ConnectSecure target version during the normal update cycle. Users may need to relaunch Firefox for an already-downloaded update to apply. If versions stay stale, check update settings and maintenance service status, then consider ConnectWise Automate or ConnectSecure Patch Now on managed hosts.",
-            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Firefox updates in background; relaunch may be needed to apply\r\n  - If still behind: check Firefox update settings / Maintenance Service\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script\r\n  - ConnectSecure Solution below lists the target version",
+            WordText = "Mozilla Firefox updates via Mozilla Maintenance Service and background update mechanisms, not only when a user opens the browser. Confirm affected hosts reach the ConnectSecure target version during the normal update cycle. Users may need to relaunch Firefox for an already-downloaded update to apply. If versions stay stale, check update settings and maintenance service status, then consider RMM (if deployed) or ConnectSecure Patch Now on managed hosts.",
+            TicketText = "- Auto-updating software: verify first, patch only if stale\r\n  - Confirm installed version against ConnectSecure target on affected hosts\r\n  - Firefox updates in background; relaunch may be needed to apply\r\n  - If still behind: check Firefox update settings / Maintenance Service\r\n  - Last resort on managed hosts: ConnectSecure Patch Now or RMM script (if deployed)\r\n  - ConnectSecure Solution below lists the target version",
             IsDefault = false
         },
         new RemediationRule
@@ -334,15 +334,15 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*TeamViewer*",
-            WordText = "TeamViewer should be updated to the ConnectSecure fix target. When patchable, deploy via ConnectSecure Patch Now on online agents and verify version afterward. Otherwise use TeamViewer's built-in updater, ConnectWise Automate/RMM, or vendor installer.",
-            TicketText = "- Update TeamViewer to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable and agent is online\r\n  - Verify version on affected hosts\r\n  - Fallback: vendor updater, RMM, or manual install",
+            WordText = "TeamViewer should be updated to the ConnectSecure fix target. When patchable, deploy via ConnectSecure Patch Now on online agents and verify version afterward. Otherwise use TeamViewer's built-in updater, RMM (if deployed), or vendor installer.",
+            TicketText = "- Update TeamViewer to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable and agent is online\r\n  - Verify version on affected hosts\r\n  - Fallback: vendor updater, RMM (if deployed), or manual install",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Zoom*",
-            WordText = "Zoom client updates should match the ConnectSecure fix target. Deploy via ConnectSecure Patch Now when patchable, or use Zoom's installer/updater or ConnectWise Automate/RMM. Verify version on affected hosts after update.",
-            TicketText = "- Update Zoom to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable\r\n  - Otherwise vendor updater, RMM, or manual install\r\n  - Verify version on affected hosts",
+            WordText = "Zoom client updates should match the ConnectSecure fix target. Deploy via ConnectSecure Patch Now when patchable, or use Zoom's installer/updater or RMM (if deployed). Verify version on affected hosts after update.",
+            TicketText = "- Update Zoom to the ConnectSecure fix target\r\n  - Use ConnectSecure Patch Now when patchable\r\n  - Otherwise vendor updater, RMM (if deployed), or manual install\r\n  - Verify version on affected hosts",
             IsDefault = false
         },
         new RemediationRule
@@ -355,15 +355,15 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*Microsoft Defender*",
-            WordText = "Microsoft Defender platform and signature updates are normally delivered through Windows Update or Microsoft Defender management policies. Verify the reported engine/platform version against Windows Update history or ConnectWise Automate patch status on affected hosts.",
-            TicketText = "- Update Microsoft Defender platform/signatures\r\n  - Verify via Windows Update or Defender management policy\r\n  - Check ConnectWise Automate patch status on affected hosts\r\n  - Confirm engine/platform version after update",
+            WordText = "Microsoft Defender platform and signature updates are normally delivered through Windows Update or Microsoft Defender management policies. Verify the reported engine/platform version against Windows Update history or RMM patch status when patch management is deployed for the client.",
+            TicketText = "- Update Microsoft Defender platform/signatures\r\n  - Verify via Windows Update or Defender management policy\r\n  - Check RMM patch status on affected hosts if patch management is deployed\r\n  - Confirm engine/platform version after update",
             IsDefault = false
         },
         new RemediationRule
         {
             Pattern = "*Microsoft 365*",
-            WordText = "Microsoft 365 Apps updates are typically delivered through Office Click-to-Run / Microsoft 365 update channels rather than generic application patching. Verify update channel configuration and deployment in Microsoft 365 admin or Intune; use ConnectWise Automate Office update workflows where configured.",
-            TicketText = "- Update Microsoft 365 Apps to latest supported build\r\n  - Verify Office update channel (Current Channel, etc.)\r\n  - Use Intune or ConnectWise Automate Office update workflow if configured\r\n  - Confirm version on affected hosts",
+            WordText = "Microsoft 365 Apps updates are typically delivered through Office Click-to-Run / Microsoft 365 update channels rather than generic application patching. Verify update channel configuration and deployment in Microsoft 365 admin or Intune; use RMM or Intune Office update workflows where configured.",
+            TicketText = "- Update Microsoft 365 Apps to latest supported build\r\n  - Verify Office update channel (Current Channel, etc.)\r\n  - Use Intune or RMM Office update workflow if configured\r\n  - Confirm version on affected hosts",
             IsDefault = false
         },
         new RemediationRule
@@ -435,8 +435,8 @@ public static class RemediationRuleDefaults
         new RemediationRule
         {
             Pattern = "*",
-            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If available via ConnectWise Automate/RMM, deploy updates via patch management or scripts; otherwise, manual updates may be required.",
-            TicketText = "- Determine device/software identity (Product/OS, affected hosts)\r\n  - Review manufacturer security advisories and vulnerability data\r\n  - Check for firmware updates or patches\r\n  - Consider configuration mitigations where patching not possible\r\n  - Deploy via ConnectWise Automate/RMM if available; otherwise manual updates",
+            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If the client has RMM or scripting available, deploy updates via patch management or scripts; otherwise, manual updates may be required.",
+            TicketText = "- Determine device/software identity (Product/OS, affected hosts)\r\n  - Review manufacturer security advisories and vulnerability data\r\n  - Check for firmware updates or patches\r\n  - Consider configuration mitigations where patching not possible\r\n  - Deploy via RMM or scripting if available for the client; otherwise manual updates",
             IsDefault = true
         },
     ];

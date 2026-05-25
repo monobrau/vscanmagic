@@ -861,14 +861,14 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Windows 10*"
-            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate."
-            TicketText = "- Windows 10 reached End of Life on October 14, 2025`r`n  - No longer supported unless you have extended support licensing`r`n  - If Windows Updates are functional and no extension licensing in place:`r`n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine`r`n  - For systems with extension licensing:`r`n    * Continue to verify Windows Update status through ConnectWise Automate"
+            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through RMM if the client has patch management deployed."
+            TicketText = "- Windows 10 reached End of Life on October 14, 2025`r`n  - No longer supported unless you have extended support licensing`r`n  - If Windows Updates are functional and no extension licensing in place:`r`n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine`r`n  - For systems with extension licensing:`r`n    * Verify Windows Update status via RMM if patch management is deployed for the client"
             IsDefault = $false
         },
         @{
             Pattern = "*Windows*"
-            WordText = "Windows patch inconsistencies should be investigated via ConnectWise Automate. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation."
-            TicketText = "- Investigate via ConnectWise Automate`r`n  - Verify Windows Update status on affected systems`r`n  - Check for any issues preventing patch installation"
+            WordText = "Windows patch inconsistencies should be investigated via RMM when the client has patch management deployed. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation."
+            TicketText = "- Investigate via RMM if patch management is deployed for the client`r`n  - Verify Windows Update status on affected systems`r`n  - Check for any issues preventing patch installation"
             IsDefault = $false
         },
         @{
@@ -897,8 +897,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Microsoft Teams*"
-            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can be remediated by cleaning up unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM."
-            TicketText = "- Update via RMM script deployed through ConnectWise Automate`r`n  - Can be remediated by cleaning up unused user profile installed versions`r`n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM"
+            WordText = "Microsoft Teams can be updated via RMM script when the client has patch management deployed. Unused user profile-installed versions can be cleaned up in RMM (example path in ConnectWise Automate: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation)."
+            TicketText = "- Update via RMM script if patch management is deployed for the client`r`n  - Can remediate by cleaning up unused user profile-installed versions`r`n  - Example script path (ConnectWise Automate): RR - Custom > R-Security - Teams Classic Cleanup Remediation"
             IsDefault = $false
         },
         @{
@@ -1053,8 +1053,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*"
-            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If available via ConnectWise Automate/RMM, deploy updates via patch management or scripts; otherwise, manual updates may be required."
-            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via ConnectWise Automate/RMM if available; otherwise manual updates"
+            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If the client has RMM or scripting available, deploy updates via patch management or scripts; otherwise, manual updates may be required."
+            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via RMM or scripting if available for the client; otherwise manual updates"
             IsDefault = $true
         }
     )

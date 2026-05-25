@@ -155,8 +155,8 @@ public sealed class RemediationRuleService
             return forWord ? defaultRule.WordText : defaultRule.TicketText;
 
         return forWord
-            ? "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
-            : "- Update to latest version\r\n  - Deploy via ConnectWise Automate/RMM or scripting if available\r\n  - Otherwise, manual updates required on affected systems";
+            ? "This application should be updated to the latest version. If the client has RMM or scripting available, deploy updates using patch management or scripts. Otherwise, manual updates may be required on affected systems."
+            : "- Update to latest version\r\n  - Deploy via RMM or scripting if available for the client\r\n  - Otherwise, manual updates required on affected systems";
     }
 
     public bool TryGetSpecificGuidance(string productName, bool forWord, out string guidance)

@@ -760,7 +760,7 @@ public class TicketInstructionBuilderTests
 
         Assert.Contains("Remediation Instructions:", body);
         Assert.Contains("- Determine device/software identity", body);
-        Assert.DoesNotContain("If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system", body);
+        Assert.DoesNotContain("If the client has RMM or scripting available, deploy updates using patch management", body);
     }
 
     [Fact]
