@@ -16,6 +16,7 @@
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
 @inject ConnectSecureReviewSuppressService ReviewSuppress
+@inject ConnectSecureUsernameLookupService UsernameLookup
 
 <PageTitle>Review Session</PageTitle>
 
@@ -38,18 +39,31 @@ else
                     <input class="form-check-input" type="checkbox" @bind="_session.IsRmitPlus" @bind:after="OnClientTypeChanged" id="sessionRmitPlus" />
                     <label class="form-check-label" for="sessionRmitPlus">RMIT+ client (affects email and ticket HTML exports)</label>
                 </div>
-                <div class="mt-2">
+                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
                     <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ApplyOsHostThresholds">
                         Apply OS host thresholds
                     </button>
-                    <span class="form-text ms-2">Uses Settings thresholds for Application-scan OS findings only (not Registry, Network, or apps).</span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
+                        @(_usernameRefreshBusy ? "Refreshing usernames…" : "Refresh usernames")
+                    </button>
+                    <span class="form-text">
+                        OS thresholds: Application-scan OS findings only.
+                        Usernames: ConnectSecure logged-in user per host (fills blanks only).
+                    </span>
                 </div>
+                @if (!TryGetCompanyId(out _))
+                {
+                    <p class="form-text text-warning mb-0">Set company ID below to refresh usernames from ConnectSecure during the client call.</p>
+                }
             }
         </div>
         <div>
             <a class="btn btn-outline-secondary me-2" href="@($"/hostname-review?sessionId={SessionId}")">Host Vuln Counts</a>
             @if (!_readOnly)
             {
+                <button type="button" class="btn btn-outline-secondary me-2" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
+                    @(_usernameRefreshBusy ? "Refreshing…" : "Refresh usernames")
+                </button>
                 <a class="btn btn-outline-secondary me-2" href="@($"/review/{SessionId}?mode=client")" target="_blank">Open Client View</a>
                 <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">Deliverables <HelpTip Text="Copy ticket instructions, email (paste OneDrive links here), time estimate, and Manage PSA notes." /></a>
                 <a class="btn btn-success" href="@($"/export/{SessionId}")">Export</a>
@@ -64,6 +78,10 @@ else
     @if (!string.IsNullOrEmpty(_saveStatus))
     {
         <div class="alert alert-success py-1">@_saveStatus</div>
+    }
+    @if (!string.IsNullOrEmpty(_usernameRefreshError))
+    {
+        <div class="alert alert-danger py-1">@_usernameRefreshError</div>
     }
 
     @if (_orderedFindings.Count == 0)
@@ -568,6 +586,7 @@ else
                                     <div class="btn-group btn-group-sm">
                                         <button type="button" class="btn btn-outline-secondary" @onclick="SelectAllHosts">Select all</button>
                                         <button type="button" class="btn btn-outline-secondary" @onclick="DeselectAllHosts">Deselect all</button>
+                                        <button type="button" class="btn btn-outline-secondary" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">Refresh usernames</button>
                                     </div>
                                 </div>
                                 @if ((_selected.AffectedSystems ?? []).Count == 0)
@@ -583,6 +602,7 @@ else
                                                     <th style="width: 2.5rem;">Include</th>
                                                     <th>Host</th>
                                                     <th>IP</th>
+                                                    <th>User</th>
                                                     <th class="text-end">Vulns</th>
                                                 </tr>
                                             </thead>
@@ -596,6 +616,7 @@ else
                                                         </td>
                                                         <td>@(string.IsNullOrWhiteSpace(s.HostName) ? "—" : s.HostName)</td>
                                                         <td>@s.Ip</td>
+                                                        <td>@(string.IsNullOrWhiteSpace(s.Username) ? "—" : s.Username)</td>
                                                         <td class="text-end">@s.VulnCount</td>
                                                     </tr>
                                                 }
@@ -750,6 +771,8 @@ else
     private readonly CheckboxRangeColumn _afterHoursRange = new();
     private bool _nvdBusy;
     private string? _nvdStatus;
+    private bool _usernameRefreshBusy;
+    private string? _usernameRefreshError;
     private readonly CheckboxRangeColumn _thirdPartyRange = new();
     private readonly CheckboxRangeColumn _ticketGeneratedRange = new();
     private string? _candidateSourceFilter;
@@ -1600,6 +1623,54 @@ else
         await SessionRepo.SaveAsync(_session);
         _saveStatus = $"Applied OS host thresholds {DateTime.Now:HH:mm:ss}";
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshUsernamesAsync()
+    {
+        if (_readOnly || _session is null)
+            return;
+
+        _usernameRefreshError = null;
+        if (!TryGetCompanyId(out var companyId))
+        {
+            _usernameRefreshError = "Set a ConnectSecure company ID on this session to refresh usernames.";
+            return;
+        }
+
+        var hostnames = _session.Findings
+            .SelectMany(f => f.AffectedSystems ?? [])
+            .Select(s => s.HostName)
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (hostnames.Count == 0)
+        {
+            _usernameRefreshError = "No hostnames on findings to look up.";
+            return;
+        }
+
+        _usernameRefreshBusy = true;
+        try
+        {
+            var lookup = await UsernameLookup.GetUsernamesByHostnameAsync(companyId, hostnames);
+            var updated = ReviewUsernameLookup.ApplyEmptyUsernames(_session, lookup);
+            var matched = lookup.Values.Count(v => !string.IsNullOrWhiteSpace(v));
+            await SessionRepo.SaveAsync(_session);
+            RefreshFindingCaches();
+            _saveStatus = updated > 0
+                ? $"Refreshed usernames: filled {updated} host(s) from ConnectSecure ({matched} matched of {hostnames.Count} requested) at {DateTime.Now:HH:mm:ss}"
+                : $"Username refresh complete: no new usernames to fill ({matched} matched of {hostnames.Count} hosts) at {DateTime.Now:HH:mm:ss}";
+        }
+        catch (Exception ex)
+        {
+            _usernameRefreshError = ex.Message;
+        }
+        finally
+        {
+            _usernameRefreshBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private string GetOsThresholdLabel(ReviewFinding finding)

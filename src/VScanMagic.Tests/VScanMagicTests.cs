@@ -304,6 +304,52 @@ public class ExcelReaderTests
     }
 }
 
+public class HostnameUsernameMatcherTests
+{
+    [Theory]
+    [InlineData("AMI-W11-7.corp.local", "AMI-W11-7")]
+    [InlineData("WORKSTATION", "WORKSTATION")]
+    public void TryResolveUser_MatchesFqdnAndShortName(string storedHost, string lookupHost)
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        HostnameUsernameMatcher.RegisterHost(index, storedHost, "jsmith");
+
+        Assert.True(HostnameUsernameMatcher.TryResolveUser(index, lookupHost, out var user));
+        Assert.Equal("jsmith", user);
+    }
+
+    [Fact]
+    public void ApplyEmptyUsernames_OnlyFillsBlankUsernames()
+    {
+        var session = new Review.Models.ReviewSession
+        {
+            Findings =
+            [
+                new Review.Models.ReviewFinding
+                {
+                    AffectedSystems =
+                    [
+                        new Review.Models.ReviewAffectedSystem { HostName = "PC1", Username = "existing" },
+                        new Review.Models.ReviewAffectedSystem { HostName = "PC2" }
+                    ]
+                }
+            ]
+        };
+
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PC1"] = "ignored",
+            ["PC2"] = "newuser"
+        };
+
+        var updated = Review.ReviewUsernameLookup.ApplyEmptyUsernames(session, lookup);
+
+        Assert.Equal(1, updated);
+        Assert.Equal("existing", session.Findings[0].AffectedSystems[0].Username);
+        Assert.Equal("newuser", session.Findings[0].AffectedSystems[1].Username);
+    }
+}
+
 public class ReviewSessionRepositoryTests
 {
     [Fact]
