@@ -15,17 +15,11 @@ public static class FindingRemediationExport
         return revised.Length > 0 && !string.Equals(revised, original, StringComparison.Ordinal);
     }
 
-    public static string GetWordRemediationText(ReviewFinding finding) =>
-        CveEnrichmentPolicy.AppendNvdContext(FindingExportDetails.GetRemediationText(finding), finding);
+    public static string GetWordRemediationText(ReviewFinding finding, RemediationRuleService remediationRules) =>
+        CveExportFormatter.GetRemediationInstructions(finding, remediationRules, forWord: true);
 
-    public static string GetTicketRemediationText(ReviewFinding finding, RemediationRuleService remediationRules)
-    {
-        if (IsRemediationEdited(finding))
-            return CveEnrichmentPolicy.AppendNvdContext(FindingExportDetails.GetRemediationText(finding), finding);
-
-        var guidance = remediationRules.GetGuidance(finding.Product, forWord: false);
-        return CveEnrichmentPolicy.AppendNvdContext(guidance, finding);
-    }
+    public static string GetTicketRemediationText(ReviewFinding finding, RemediationRuleService remediationRules) =>
+        CveExportFormatter.GetRemediationInstructions(finding, remediationRules, forWord: false);
 
     public static string GetTimeEstimateRemediationText(ReviewFinding finding, RemediationRuleService remediationRules)
     {

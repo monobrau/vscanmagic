@@ -88,6 +88,35 @@ public sealed class ReportPathResolverTests : IDisposable
     }
 
     [Fact]
+    public void ResolveQuarterFolderName_AddsTimestampWhenQuarterAndDateExist()
+    {
+        var clientPath = Path.Combine(_root, "Client", "Network Documentation", "Vulnerability Scans");
+        Directory.CreateDirectory(Path.Combine(clientPath, "2026 - Q2"));
+        Directory.CreateDirectory(Path.Combine(clientPath, "2026 - Q2 2026-05-25"));
+
+        var folder = ReportPathResolver.ResolveQuarterFolderName(clientPath, "2026-05-25");
+
+        Assert.StartsWith("2026 - Q2 2026-05-25_", folder);
+        Assert.NotEqual("2026 - Q2 2026-05-25", folder);
+    }
+
+    [Fact]
+    public void Resolve_WithBasePath_UsesTimestampedQuarterWhenQuarterAndDateExist()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
+        Directory.CreateDirectory(Path.Combine(clientFolder, "2026 - Q2"));
+        Directory.CreateDirectory(Path.Combine(clientFolder, "2026 - Q2 2026-05-25"));
+
+        var settings = new UserSettings { ReportsBasePath = basePath };
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-05-25", _root);
+
+        Assert.True(layout.UsesStructuredPaths);
+        Assert.Contains("2026 - Q2 2026-05-25_", layout.OutputDirectory);
+        Assert.True(Directory.Exists(layout.OutputDirectory));
+    }
+
+    [Fact]
     public void GetReportsPathPartial_IncludesCompanyAndNetworkDocumentation()
     {
         var fullPath = Path.Combine(

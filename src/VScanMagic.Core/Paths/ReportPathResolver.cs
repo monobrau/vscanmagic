@@ -139,22 +139,38 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
         return Path.Combine(folderName, VulnerabilityScansSegment);
     }
 
+    /// <summary>
+    /// Picks a quarter folder under the client vulnerability-scans path.
+    /// Uses the bare quarter (e.g. 2026 - Q2) when free; otherwise adds scan date, then a time suffix
+    /// so multiple reviews in the same quarter/day do not overwrite the same folder.
+    /// </summary>
     public static string ResolveQuarterFolderName(string clientPath, string scanDate)
     {
-        var yearQuarter = GetQuarterFromDate(scanDate);
-        var outPath = Path.Combine(clientPath, yearQuarter);
-        if (!Directory.Exists(outPath))
-            return yearQuarter;
+        var baseQuarter = GetQuarterFromDate(scanDate);
+        var dateStr = TryGetScanDateString(scanDate, out var parsed)
+            ? parsed.ToString("yyyy-MM-dd")
+            : DateTime.Now.ToString("yyyy-MM-dd");
 
-        if (DateTime.TryParse(scanDate, out var date))
+        var candidates = new List<string> { baseQuarter, $"{baseQuarter} {dateStr}" };
+        var stamp = DateTime.Now.ToString("HHmmss");
+        candidates.Add($"{baseQuarter} {dateStr}_{stamp}");
+
+        foreach (var name in candidates)
         {
-            var quarter = (int)Math.Ceiling(date.Month / 3.0);
-            return $"{date.Year} - Q{quarter} {date:yyyy-MM-dd}";
+            if (!Directory.Exists(Path.Combine(clientPath, name)))
+                return name;
         }
 
-        var now = DateTime.Now;
-        var nowQuarter = (int)Math.Ceiling(now.Month / 3.0);
-        return $"{now.Year} - Q{nowQuarter} {now:yyyy-MM-dd}";
+        return $"{baseQuarter} {dateStr}_{DateTime.Now:yyyyMMdd_HHmmss}";
+    }
+
+    private static bool TryGetScanDateString(string scanDate, out DateTime parsed)
+    {
+        parsed = default;
+        if (string.IsNullOrWhiteSpace(scanDate))
+            return false;
+
+        return DateTime.TryParse(scanDate, out parsed);
     }
 
     public static string GetQuarterFromDate(string scanDate)

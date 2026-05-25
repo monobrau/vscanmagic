@@ -1,5 +1,4 @@
 using System.Text;
-using VScanMagic.Core.Risk;
 using VScanMagic.Core.Services;
 using VScanMagic.Review;
 using VScanMagic.Review.Models;
@@ -95,6 +94,15 @@ public static class TicketInstructionBuilder
         sb.AppendLine($"{"Average CVSS:".PadRight(25)}{finding.AvgCvss:N2}");
         sb.AppendLine($"{"Total Vulnerabilities:".PadRight(25)}{finding.VulnCount}");
         sb.AppendLine($"{"Affected Systems Count:".PadRight(25)}{systems.Count}");
+
+        var cveReferences = CveExportFormatter.FormatReferencesSection(finding);
+        if (!string.IsNullOrWhiteSpace(cveReferences))
+        {
+            sb.AppendLine();
+            sb.AppendLine("CVE references:");
+            sb.AppendLine(cveReferences);
+        }
+
         sb.AppendLine();
         sb.AppendLine("NOTE: This remediation can go to any available technician.");
         sb.AppendLine();

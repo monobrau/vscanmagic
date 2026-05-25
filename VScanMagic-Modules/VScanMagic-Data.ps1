@@ -1052,6 +1052,7 @@ function Get-ProductTypeSuffix {
         [bool]$IsRMITPlus = $false
     )
     if ([string]::IsNullOrWhiteSpace($ProductName)) { return " - Update Required" }
+    if (Test-IsCveOnlyProduct -ProductName $ProductName) { return " - Investigate and Resolve" }
     if ($ProductName -like "*Windows Server 2012*" -or $ProductName -like "*end-of-life*" -or $ProductName -like "*out of support*") {
         return " - End of Support Migration Required"
     }

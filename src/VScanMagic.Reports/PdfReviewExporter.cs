@@ -2,12 +2,13 @@ using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using VScanMagic.Core.Risk;
+using VScanMagic.Core.Services;
 using VScanMagic.Review;
 using VScanMagic.Review.Models;
 
 namespace VScanMagic.Reports;
 
-public sealed class PdfReviewExporter
+public sealed class PdfReviewExporter(RemediationRuleService remediationRules)
 {
     static PdfReviewExporter()
     {
@@ -58,8 +59,16 @@ public sealed class PdfReviewExporter
                                 col.Item().Text($"• {FindingExportDetails.FormatAffectedSystem(system)}");
                         }
 
+                        var cveReferences = CveExportFormatter.FormatReferencesSection(f);
+                        if (!string.IsNullOrWhiteSpace(cveReferences))
+                        {
+                            col.Item().PaddingTop(4).Text("CVE references:").Bold();
+                            col.Item().Text(cveReferences);
+                        }
+
                         col.Item().PaddingTop(4).Text("Remediation:").Bold();
-                        col.Item().PaddingBottom(4).Text(FindingRemediationExport.GetWordRemediationText(f));
+                        col.Item().PaddingBottom(4).Text(
+                            FindingRemediationExport.GetWordRemediationText(f, remediationRules));
                         var connectSecureSolution = FindingRemediationExport.GetConnectSecureSolution(f);
                         if (connectSecureSolution is not null)
                         {

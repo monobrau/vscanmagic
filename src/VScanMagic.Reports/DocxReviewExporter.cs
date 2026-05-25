@@ -2,12 +2,13 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using VScanMagic.Core.Risk;
+using VScanMagic.Core.Services;
 using VScanMagic.Review;
 using VScanMagic.Review.Models;
 
 namespace VScanMagic.Reports;
 
-public sealed class DocxReviewExporter
+public sealed class DocxReviewExporter(RemediationRuleService remediationRules)
 {
     public void Export(ReviewSession session, string outputPath)
     {
@@ -51,8 +52,15 @@ public sealed class DocxReviewExporter
             AppendParagraph(body, $"Risk Score: {f.RiskScore:N2} | EPSS: {f.Epss:N4} | Avg CVSS: {f.AvgCvss:N2} | Total Vulns: {f.VulnCount}");
             AppendParagraph(body, "Affected Systems:", bold: true);
             AppendAffectedSystems(body, f);
+            var cveReferences = CveExportFormatter.FormatReferencesSection(f);
+            if (!string.IsNullOrWhiteSpace(cveReferences))
+            {
+                AppendParagraph(body, "CVE References:", bold: true);
+                AppendParagraph(body, cveReferences);
+            }
+
             AppendParagraph(body, "Remediation Guidance:", bold: true);
-            AppendParagraph(body, FindingRemediationExport.GetWordRemediationText(f));
+            AppendParagraph(body, FindingRemediationExport.GetWordRemediationText(f, remediationRules));
             var connectSecureSolution = FindingRemediationExport.GetConnectSecureSolution(f);
             if (connectSecureSolution is not null)
             {

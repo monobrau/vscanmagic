@@ -712,18 +712,23 @@ function Resolve-QuarterFolderName {
         [string]$ScanDate
     )
     $yearQuarter = Get-QuarterFromDate -ScanDate $ScanDate
-    $outPath = Join-Path $ClientPath $yearQuarter
-    if (-not (Test-Path $outPath)) { return $yearQuarter }
+    $dateStr = $null
     try {
         $d = [DateTime]::Parse($ScanDate)
-        $q = [Math]::Ceiling($d.Month / 3)
         $dateStr = $d.ToString("yyyy-MM-dd")
-        return "$($d.Year) - Q$q $dateStr"
     } catch {
-        $d = Get-Date
-        $q = [Math]::Ceiling($d.Month / 3)
-        return "$($d.Year) - Q$q $($d.ToString('yyyy-MM-dd'))"
+        $dateStr = (Get-Date).ToString("yyyy-MM-dd")
     }
+    $candidates = @(
+        $yearQuarter,
+        "$yearQuarter $dateStr",
+        "$yearQuarter ${dateStr}_$(Get-Date -Format 'HHmmss')"
+    )
+    foreach ($name in $candidates) {
+        $outPath = Join-Path $ClientPath $name
+        if (-not (Test-Path $outPath)) { return $name }
+    }
+    return "$yearQuarter ${dateStr}_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
 }
 
 function Resolve-ClientOutputPath {

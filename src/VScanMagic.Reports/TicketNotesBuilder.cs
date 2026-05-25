@@ -26,7 +26,7 @@ public static class TicketNotesBuilder
                 if (TimeEstimateModifierHelper.IsTicketGenerated(
                         finding.AfterHours, finding.TicketGenerated, finding.ThirdParty))
                 {
-                    ticketLines.Add($"- Ticket created for {finding.Product}");
+                    ticketLines.Add($"- Ticket created: {FindingTitleFormatter.FormatTicketSubject(finding, isRmitPlus)}");
                 }
             }
         }

@@ -435,7 +435,7 @@ public class DocxExporterTests
         var path = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid():N}.docx");
         try
         {
-            new Reports.DocxReviewExporter().Export(session, path);
+            new Reports.DocxReviewExporter(new RemediationRuleService()).Export(session, path);
             Assert.True(File.Exists(path));
             Assert.True(new FileInfo(path).Length > 1000);
         }
@@ -1050,7 +1050,9 @@ public class TicketNotesBuilderTimeEstimateTests
 
         var notes = TicketNotesBuilder.Build(session, template);
 
-        Assert.Contains("- Ticket created for Adobe Reader", notes);
+        Assert.Contains(
+            "Ticket created: After Hours - Vulnerability Remediation - Adobe Reader - Update Required",
+            notes);
     }
 }
 
@@ -1374,21 +1376,146 @@ public class CveEnrichmentPolicyTests
     }
 
     [Fact]
-    public void GetTicketRemediationText_IncludesNvdContextWhenFixMissing()
+    public void GetTicketRemediationText_CveOnly_UsesMinimalStepsNotGenericCatchAll()
     {
         var finding = new ReviewFinding
         {
             Product = "CVE-2021-33558",
             CveIds = "CVE-2021-33558",
-            OriginalRemediation = "Generic guidance",
-            RevisedRemediation = "Generic guidance",
-            NvdEnrichment = "https://vendor.example/advisory | Example firmware vulnerability."
+            OriginalRemediation = "Catch-all from ingest",
+            RevisedRemediation = "Catch-all from ingest"
         };
 
         var text = FindingRemediationExport.GetTicketRemediationText(finding, new RemediationRuleService());
 
-        Assert.Contains("NVD / advisory context:", text);
-        Assert.Contains("vendor.example/advisory", text);
+        Assert.Contains("NVD link in CVE references", text);
+        Assert.DoesNotContain("Determine device/software identity (Product/OS, affected hosts)", text);
+    }
+
+    [Fact]
+    public void GetTicketRemediationText_CveOnly_RespectsEditedRemediation()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "CVE-2021-33558",
+            CveIds = "CVE-2021-33558",
+            OriginalRemediation = "Original",
+            RevisedRemediation = "Technician agreed: patch firmware on PREVIANT-S6D16."
+        };
+
+        var text = FindingRemediationExport.GetTicketRemediationText(finding, new RemediationRuleService());
+
+        Assert.Contains("Technician agreed", text);
+        Assert.DoesNotContain("Determine device/software identity", text);
+    }
+}
+
+public class CveExportFormatterTests
+{
+    [Fact]
+    public void UsesCveExportTreatment_OnlyForCveOnlyProductWithIds()
+    {
+        Assert.True(CveExportFormatter.UsesCveExportTreatment(new ReviewFinding
+        {
+            Product = "CVE-2015-0240",
+            CveIds = "CVE-2015-0240"
+        }));
+        Assert.False(CveExportFormatter.UsesCveExportTreatment(new ReviewFinding
+        {
+            Product = "Google Chrome",
+            CveIds = "CVE-2024-1234"
+        }));
+    }
+
+    [Fact]
+    public void FormatReferencesSection_IncludesNvdUrls()
+    {
+        var section = CveExportFormatter.FormatReferencesSection(new ReviewFinding
+        {
+            Product = "CVE-2015-0240",
+            CveIds = "CVE-2015-0240"
+        });
+
+        Assert.Contains("CVE-2015-0240", section);
+        Assert.Contains("https://nvd.nist.gov/vuln/detail/CVE-2015-0240", section);
+    }
+
+    [Fact]
+    public void TicketBody_CveOnly_IncludesReferencesAndOmitsUpdateRequiredSuffix()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "CVE-2015-0240",
+            CveIds = "CVE-2015-0240",
+            RiskScore = 20.06,
+            Epss = 0.91,
+            AvgCvss = 7,
+            VulnCount = 1,
+            OriginalRemediation = "x",
+            RevisedRemediation = "x",
+            AffectedSystems =
+            [
+                new ReviewAffectedSystem { HostName = "PREVIANT-S6D16", Ip = "192.168.0.52", VulnCount = 1 }
+            ]
+        };
+
+        var subject = FindingTitleFormatter.FormatTicketSubject(finding, isRmitPlus: false);
+        var body = TicketInstructionBuilder.BuildBodyText(finding, new RemediationRuleService());
+
+        Assert.Equal("Vulnerability Remediation - CVE-2015-0240 - Investigate and Resolve", subject);
+        Assert.Contains("CVE references:", body);
+        Assert.Contains("https://nvd.nist.gov/vuln/detail/CVE-2015-0240", body);
+        Assert.DoesNotContain(" - Update Required", subject);
+        Assert.Contains("Investigate and Resolve", subject);
+        Assert.DoesNotContain("Determine device/software identity (Product/OS, affected hosts)", body);
+        Assert.Contains("NVD link in CVE references", body);
+    }
+
+    [Fact]
+    public void TicketNotes_RmitPlus_ListsFullSubjectWithCveSuffix()
+    {
+        var session = new ReviewSession
+        {
+            IsRmitPlus = true,
+            ExportTopN = 1,
+            Findings =
+            [
+                new ReviewFinding
+                {
+                    Product = "CVE-2015-0240",
+                    CveIds = "CVE-2015-0240",
+                    IncludeInExport = true,
+                    TicketGenerated = true,
+                    OriginalRank = 1,
+                    Rank = 1
+                }
+            ]
+        };
+
+        var notes = TicketNotesBuilder.Build(session, TicketNotesTemplateSettings.CreateDefault(), isRmitPlus: true);
+
+        Assert.Contains("Ticket created: Vulnerability Remediation - CVE-2015-0240 - Investigate and Resolve", notes);
+        Assert.DoesNotContain(" - Update Required", notes);
+    }
+
+    [Fact]
+    public void TicketBody_NamedProductWithCve_DoesNotUseCveReferencesSection()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "Some Third Party App",
+            CveIds = "CVE-2024-1234",
+            RiskScore = 10,
+            Epss = 0.5,
+            VulnCount = 3,
+            OriginalRemediation = "Update",
+            RevisedRemediation = "Update"
+        };
+
+        var body = TicketInstructionBuilder.BuildBodyText(finding, new RemediationRuleService());
+
+        Assert.DoesNotContain("CVE references:", body);
+        Assert.Contains(" - Update Required", FindingTitleFormatter.FormatTicketSubject(finding, false));
     }
 }
 

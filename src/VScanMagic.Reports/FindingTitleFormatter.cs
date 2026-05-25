@@ -1,4 +1,5 @@
 using VScanMagic.Core.Risk;
+using VScanMagic.Review;
 using VScanMagic.Review.Models;
 
 namespace VScanMagic.Reports;
@@ -7,7 +8,10 @@ public static class FindingTitleFormatter
 {
     public static string FormatTicketSubject(ReviewFinding finding, bool isRmitPlus)
     {
-        var subject = $"Vulnerability Remediation - {finding.Product}{ProductTypeSuffixHelper.GetSuffix(finding.Product, isRmitPlus)}";
+        var suffix = CveExportFormatter.UsesCveExportTreatment(finding)
+            ? CveExportFormatter.TicketSubjectSuffix
+            : ProductTypeSuffixHelper.GetSuffix(finding.Product, isRmitPlus);
+        var subject = $"Vulnerability Remediation - {finding.Product}{suffix}";
 
         if (isRmitPlus)
         {
@@ -34,6 +38,10 @@ public static class FindingTitleFormatter
                 title += modifier;
             if (finding.AfterHours)
                 title = $"After Hours - {title}";
+        }
+        else if (CveExportFormatter.UsesCveExportTreatment(finding))
+        {
+            title += CveExportFormatter.TicketSubjectSuffix;
         }
         else
         {
