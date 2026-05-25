@@ -26,6 +26,7 @@ builder.Services.AddVScanMagicReports();
 builder.Services.AddVScanMagicConnectSecure();
 builder.Services.AddSingleton<ExportOrchestrator>();
 builder.Services.AddSingleton<AppRestartService>();
+builder.Services.AddSingleton<NativeFolderPickerService>();
 builder.Services.AddScoped<CompanyListService>();
 builder.Services.AddScoped<LoadTimingDisplay>();
 

@@ -130,6 +130,20 @@
     color: white;
 }
 
+.nav-item-featured ::deep .nav-link-featured {
+    font-weight: 600;
+    border-left-color: rgba(91, 214, 122, 0.55);
+}
+
+.nav-item-featured ::deep a.active.nav-link-featured {
+    border-left-color: #5bd67a;
+    background-color: rgba(91, 214, 122, 0.14);
+}
+
+.nav-item-featured ::deep .nav-link-featured:hover {
+    background-color: rgba(91, 214, 122, 0.1);
+}
+
 .nav-footer {
     flex-shrink: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.15);

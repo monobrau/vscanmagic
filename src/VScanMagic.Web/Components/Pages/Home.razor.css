@@ -1,0 +1,49 @@
+.home-hero-title {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+}
+
+.home-hero-lead {
+    color: #5a6268;
+    max-width: 42rem;
+}
+
+.home-review-card {
+    border: 2px solid #1b6ec2;
+    box-shadow: 0 0.15rem 0.5rem rgba(27, 110, 194, 0.12);
+}
+
+.home-review-card-header {
+    background: linear-gradient(180deg, #f0f6fc 0%, #e8f1fa 100%);
+    border-bottom-color: #c5d9ed;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.home-review-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #fff;
+    background-color: #1b6ec2;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+}
+
+.home-start-btn {
+    min-width: 14rem;
+}
+
+.home-prep-card {
+    border-style: dashed;
+    border-color: #ced4da;
+    background-color: #fafbfc;
+}
+
+.home-prep-card .card-body {
+    color: #495057;
+}

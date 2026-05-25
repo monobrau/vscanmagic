@@ -11,162 +11,109 @@
 @inject IReviewSessionRepository SessionRepo
 @inject SettingsService Settings
 @inject ConnectSecureClient CsClient
-@inject ConnectSecureReportService ReportService
 @inject ReportPathResolver PathResolver
-@inject ReportFolderHistoryService FolderHistory
 @inject RmitPlusSettingsService RmitPlusSettings
 @inject NavigationManager Nav
 
-<PageTitle>VScanMagic - Ingest</PageTitle>
+<PageTitle>Start client review</PageTitle>
 
-<h1>VScanMagic <HelpTip Text="Quarterly vulnerability review for ConnectSecure data. See Help in the sidebar for the full workflow." /></h1>
-
-<div class="alert alert-light border mb-3 py-2 small">
-    New here? Read the <a href="/help">Help &amp; workflow guide</a> — prep, export, email client, then live review on a call.
+<div class="home-hero mb-4">
+    <h1 class="home-hero-title">Start client review <HelpTip Text="The main VScanMagic workflow: ingest All Vulnerabilities, walk findings on a call, then export deliverables." /></h1>
+    <p class="home-hero-lead mb-0">
+        Upload the ConnectSecure <strong>All Vulnerabilities</strong> XLSX, then run the live review session.
+        Downloading reports from ConnectSecure is a separate prep step when you need fresh files.
+    </p>
 </div>
 
-<div class="card mb-3">
-    <div class="card-header">1. Download from ConnectSecure</div>
+<div class="card home-review-card mb-3">
+    <div class="card-header home-review-card-header">
+        <span class="home-review-badge">Main workflow</span>
+        New review session
+    </div>
     <div class="card-body">
-        @if (!CsClient.IsConfigured)
-        {
-            <p class="text-warning">Configure ConnectSecure API credentials on the <a href="settings">Settings</a> page first.</p>
-        }
-        else
-        {
-            <div class="row mb-3">
-                <div class="col-md-6">
-                    <label class="form-label">Company <HelpTip Text="ConnectSecure tenant company. Used for downloads, folder mapping, and session company id." /></label>
-                    <div class="input-group">
-                        <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanyChanged">
-                            <option value="">-- Select company --</option>
-                            @foreach (var c in _companies)
-                            {
-                                <option value="@c.Id">@c.Name</option>
-                            }
-                        </select>
-                        <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
-                    </div>
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label class="form-label">Company <HelpTip Text="ConnectSecure company for this review — session company id and folder mapping." /></label>
+                <div class="input-group">
+                    <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanyChanged">
+                        <option value="">-- Select company --</option>
+                        @foreach (var c in _companies)
+                        {
+                            <option value="@c.Id">@c.Name</option>
+                        }
+                    </select>
+                    <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
                 </div>
-                <div class="col-md-6">
-                    <label class="form-label">Client Name</label>
-                    <input class="form-control" value="@SelectedCompanyName" readonly />
-                    <div class="form-check mt-2">
-                        <input class="form-check-input" type="checkbox" @bind="_isRmitPlus" id="rmitPlusDownload" />
-                        <label class="form-check-label" for="rmitPlusDownload">RMIT+ <HelpTip Text="RMIT+ agreement clients: tickets and email note assume covered remediation. Hourly (RMIT/CMIT) clients require approval before work begins." /></label>
-                    </div>
-                </div>
-            </div>
-            <div class="row mb-3">
-                <div class="col-md-12">
-                    <label class="form-label">Output Directory <HelpTip Text="Local folder for downloaded ConnectSecure reports. Usually the quarterly path under Reports Base Path (Settings). Synced OneDrive folders work here." AlignEnd="true" /></label>
-                    <input class="form-control" @bind="_outputDirectory" @bind:after="OnOutputDirectoryChanged" />
-                    @if (!string.IsNullOrWhiteSpace(_resolvedPathHint))
-                    {
-                        <div class="form-text">@_resolvedPathHint</div>
-                    }
-                </div>
-            </div>
-
-            <p class="fw-semibold mb-2">Standard reports <HelpTip Text="ConnectSecure standard report bundle. Include All Vulnerabilities — required to start a review session." /></p>
-            <div class="row mb-1">
-                @for (var ri = 0; ri < _standardReports.Count; ri++)
+                @if (!CsClient.IsConfigured)
                 {
-                    var report = _standardReports[ri];
-                    var reportIndex = ri;
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" checked="@GetReportSelected(report.Type)"
-                                   @onclick="e => OnReportCheckboxClick(reportIndex, e)" @onclick:preventDefault
-                                   id="@($"rep_{report.Type}")" />
-                            <label class="form-check-label" for="@($"rep_{report.Type}")">@report.Name (@report.Extension.ToUpperInvariant())</label>
-                        </div>
-                    </div>
+                    <div class="form-text text-warning">Configure ConnectSecure on <a href="/settings">Settings</a> to load companies.</div>
                 }
             </div>
-            <p class="form-text mb-3">Shift-click to select or clear a range of reports.</p>
-
-            <button class="btn btn-success me-2" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="DownloadStandardReports">
-                Download Standard Reports
-            </button>
-            @if (_downloadResult is not null)
-            {
-                <div class="alert alert-success mt-3 mb-0">
-                    <strong>Download complete.</strong> Saved to @_downloadResult.OutputDirectory
-                    <ul class="mb-0 mt-2">
-                        @foreach (var s in _downloadResult.Succeeded)
-                        {
-                            <li>@s.Name — <code>@s.Path</code></li>
-                        }
-                    </ul>
-                    @if (_downloadResult.Failed.Count > 0)
-                    {
-                        <p class="text-danger mb-0 mt-2">Failed:</p>
-                        <ul class="mb-0">
-                            @foreach (var f in _downloadResult.Failed)
-                            {
-                                <li>@f.Name: @f.Error</li>
-                            }
-                        </ul>
-                    }
-                    @if (!string.IsNullOrEmpty(_downloadedAllVulnsPath))
-                    {
-                        <button class="btn btn-primary btn-sm mt-2" @onclick="StartReviewFromDownload">Start Review from All Vulnerabilities</button>
-                    }
-                </div>
-            }
-        }
-    </div>
-</div>
-
-<div class="card mb-3">
-    <div class="card-header">2. Start review from XLSX</div>
-    <div class="card-body">
-        <p class="text-muted">Upload or specify a local All Vulnerabilities XLSX to start a client review session. Network and registry findings load as candidates — use the review session <strong>Add to export</strong> tab before the client call.</p>
-        @if (CsClient.IsConfigured)
-        {
-            <div class="mb-3">
-                <label class="form-label">Client</label>
+            <div class="col-md-6">
+                <label class="form-label">Client name</label>
                 <input class="form-control" value="@SelectedCompanyName" readonly />
-                <div class="form-text">Uses the company selected above.</div>
-            </div>
-        }
-        <div class="mb-3">
-            <label class="form-label">Scan Date <HelpTip Text="Quarterly scan date shown on exports and used to resolve the year-quarter output folder." /></label>
-            <input class="form-control" type="date" @bind="_scanDate" @bind:after="RefreshResolvedOutputPath" />
-        </div>
-        <div class="mb-3">
-            <label class="form-label">Presenter <HelpTip Text="Your name — appears as Prepared By in client email templates and exports." /></label>
-            <input class="form-control" @bind="_presenter" />
-        </div>
-        <div class="mb-3">
-            <div class="form-check">
-                <input class="form-check-input" type="checkbox" @bind="_isRmitPlus" id="rmitPlusReview" />
-                <label class="form-check-label" for="rmitPlusReview">RMIT+ client <HelpTip Text="Sets client type for this review session. Affects email wording, ticket suffixes, and time-estimate billing fields." /></label>
-            </div>
-            <div class="form-text">
-                Affects email template wording and ticket subject suffixes in HTML exports.
-                @( _isRmitPlus ? "RMIT+ (agreement coverage)" : "RMIT/CMIT (approval required before remediation)" )
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" @bind="_isRmitPlus" id="rmitPlusReview" />
+                    <label class="form-check-label" for="rmitPlusReview">RMIT+ client <HelpTip Text="Sets client type for this session. Affects email wording, ticket suffixes, and time-estimate billing fields." /></label>
+                </div>
+                <div class="form-text">
+                    @( _isRmitPlus ? "RMIT+ (agreement coverage)" : "RMIT/CMIT (approval required before remediation)" )
+                </div>
             </div>
         </div>
-        <div class="mb-3">
-            <label class="form-label">Upload XLSX <HelpTip Text="Must be ConnectSecure All Vulnerabilities export — not Top Ten Data alone." AlignEnd="true" /></label>
-            <InputFile OnChange="OnFileSelected" accept=".xlsx,.xls" class="form-control" />
+
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label class="form-label">Scan date <HelpTip Text="Shown on exports; used for year-quarter folder paths when exporting deliverables." /></label>
+                <input class="form-control" type="date" @bind="_scanDate" @bind:after="RefreshResolvedOutputPath" />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Presenter <HelpTip Text="Your name — Prepared By on client email and reports." /></label>
+                <input class="form-control" @bind="_presenter" />
+            </div>
         </div>
+
         <div class="mb-3">
-            <label class="form-label">Or local file path</label>
-            <input class="form-control" @bind="_filePath" placeholder="/path/to/All Vulnerabilities.xlsx" />
+            <label class="form-label">All Vulnerabilities XLSX <HelpTip Text="Required source file. Use Report downloader if you do not have this file yet — not Top Ten Data alone." AlignEnd="true" /></label>
+            <InputFile OnChange="OnFileSelected" accept=".xlsx,.xls" class="form-control mb-2" />
+            <input class="form-control" @bind="_filePath" placeholder="Or path to All Vulnerabilities.xlsx" />
         </div>
+
+        <p class="text-muted small mb-3">
+            Network and registry findings appear as candidates in the session — use <strong>Add to export</strong> before the client call.
+            Resume past work from <a href="/sessions">Review sessions</a>.
+        </p>
+
         @if (!string.IsNullOrEmpty(_status))
         {
-            <div class="alert alert-info">@_status</div>
+            <div class="alert alert-info py-2">@_status</div>
         }
         @if (!string.IsNullOrEmpty(_error))
         {
-            <div class="alert alert-danger">@_error</div>
+            <div class="alert alert-danger py-2">@_error</div>
         }
-        <button class="btn btn-primary" disabled="@(_busy || string.IsNullOrWhiteSpace(SelectedCompanyName))" @onclick="StartReview">Start Review Session</button>
+
+        <button class="btn btn-primary btn-lg home-start-btn" disabled="@(_busy || string.IsNullOrWhiteSpace(SelectedCompanyName))" @onclick="StartReview">
+            Start review session
+        </button>
     </div>
+</div>
+
+<div class="card home-prep-card mb-3">
+    <div class="card-body py-3 d-flex flex-wrap align-items-center justify-content-between gap-3">
+        <div>
+            <div class="text-muted text-uppercase small fw-semibold mb-1">Prep step</div>
+            <strong>Download ConnectSecure reports</strong>
+            <span class="text-muted ms-1">— standard bundle, full catalog, or global reports</span>
+        </div>
+        <a class="btn btn-outline-secondary" href="/report-downloader">Open report downloader</a>
+    </div>
+</div>
+
+<div class="text-center small text-muted">
+    <a href="/help">Workflow guide</a>
+    ·
+    <a href="/sessions">Review sessions</a>
 </div>
 
 @code {
@@ -180,14 +127,8 @@
     private bool _busy;
     private string _selectedCompanyId = "";
     private List<CompanyInfo> _companies = [];
-    private List<StandardReportRequest> _standardReports = [];
-    private HashSet<string> _selectedReportTypes = new(StringComparer.OrdinalIgnoreCase);
-    private DownloadUiResult? _downloadResult;
-    private string? _downloadedAllVulnsPath;
-    private string? _resolvedPathHint;
     private UserSettings _userSettings = new();
     private bool _isRmitPlus;
-    private readonly CheckboxRangeColumn _reportSelectRange = new();
 
     private string SelectedCompanyName =>
         _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
@@ -207,17 +148,10 @@
             : RmitPlusSettings.GetOrDefault(name);
     }
 
-    private void OnOutputDirectoryChanged() => _resolvedPathHint = null;
-
     private void RefreshResolvedOutputPath()
     {
         if (string.IsNullOrEmpty(_selectedCompanyId) || !int.TryParse(_selectedCompanyId, out var companyId))
-        {
-            _resolvedPathHint = string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath)
-                ? null
-                : "Reports Base Path is set — select a company to resolve the client/quarter folder.";
             return;
-        }
 
         var layout = PathResolver.Resolve(
             _userSettings,
@@ -227,23 +161,11 @@
             _outputDirectory);
 
         if (layout.UsesStructuredPaths)
-        {
             _outputDirectory = layout.OutputDirectory;
-            _resolvedPathHint = layout.ReportsPathPartial is not null
-                ? $"Resolved under Reports Base Path: ...\\{layout.ReportsPathPartial}. ConnectSecure downloads and client exports land in the quarter folder."
-                : $"Resolved under Reports Base Path: {layout.OutputDirectory}.";
-        }
-        else
-        {
-            _resolvedPathHint = null;
-        }
     }
 
     protected override async Task OnInitializedAsync()
     {
-        _standardReports = StandardReportCatalog.DefaultCompanyReports.ToList();
-        _selectedReportTypes = _standardReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var userSettings = Settings.LoadUserSettings();
         _userSettings = userSettings;
         _presenter = userSettings.PreparedBy;
@@ -261,25 +183,6 @@
         RefreshResolvedOutputPath();
     }
 
-    private bool GetReportSelected(string type) => _selectedReportTypes.Contains(type);
-
-    private void SetReportSelected(string type, bool selected)
-    {
-        if (selected) _selectedReportTypes.Add(type);
-        else _selectedReportTypes.Remove(type);
-    }
-
-    private void OnReportCheckboxClick(int index, MouseEventArgs e)
-    {
-        if (index < 0 || index >= _standardReports.Count)
-            return;
-
-        var type = _standardReports[index].Type;
-        var newValue = !GetReportSelected(type);
-        _reportSelectRange.Click(index, newValue, e, (i, on) =>
-            SetReportSelected(_standardReports[i].Type, on));
-    }
-
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
         _error = null;
@@ -293,100 +196,20 @@
         _status = $"Uploaded {file.Name}";
     }
 
-    private async Task DownloadStandardReports()
-    {
-        _error = null;
-        _status = null;
-        _downloadResult = null;
-        _downloadedAllVulnsPath = null;
-
-        if (string.IsNullOrEmpty(_selectedCompanyId))
-        {
-            _error = "Select a company.";
-            return;
-        }
-
-        if (!int.TryParse(_selectedCompanyId, out var companyId))
-        {
-            _error = "Invalid company ID.";
-            return;
-        }
-
-        var company = _companies.FirstOrDefault(c => c.Id == _selectedCompanyId);
-        var clientName = company?.Name?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(clientName))
-        {
-            _error = "Select a company with a valid name.";
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            var layout = PathResolver.Resolve(
-                _userSettings,
-                companyId,
-                clientName,
-                _scanDate.ToString("yyyy-MM-dd"),
-                _outputDirectory);
-            var outputDir = layout.OutputDirectory;
-            _outputDirectory = outputDir;
-
-            var reports = _standardReports.Where(r => _selectedReportTypes.Contains(r.Type)).ToList();
-            var result = await ReportService.DownloadStandardReportsAsync(
-                companyId,
-                clientName,
-                _scanDate.ToString("yyyy-MM-dd"),
-                outputDir,
-                reports,
-                new Progress<string>(m => { _status = m; InvokeAsync(StateHasChanged); }),
-                CancellationToken.None);
-
-            _downloadResult = new DownloadUiResult(outputDir, result.Succeeded.ToList(), result.Failed.ToList());
-            _downloadedAllVulnsPath = result.Succeeded
-                .FirstOrDefault(s => s.Type == "all-vulnerabilities")?.Path;
-
-            FolderHistory.Add(clientName, outputDir);
-
-            var userSettings = Settings.LoadUserSettings();
-            userSettings.LastOutputDirectory = outputDir;
-            Settings.SaveUserSettings(userSettings);
-            _userSettings = userSettings;
-
-            RefreshResolvedOutputPath();
-            _status = $"Downloaded {result.Succeeded.Count} report(s), {result.Failed.Count} failed.";
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
-    private async Task StartReviewFromDownload()
-    {
-        if (string.IsNullOrEmpty(_downloadedAllVulnsPath)) return;
-        _filePath = _downloadedAllVulnsPath;
-        await StartReview();
-    }
-
     private async Task StartReview()
     {
         _error = null;
         var path = string.IsNullOrWhiteSpace(_filePath) ? _uploadedPath : _filePath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            _error = "Please upload or specify a valid XLSX path.";
+            _error = "Please upload or specify a valid All Vulnerabilities XLSX. Use Report downloader if you need to pull it from ConnectSecure first.";
             return;
         }
 
         var clientName = SelectedCompanyName.Trim();
         if (string.IsNullOrWhiteSpace(clientName))
         {
-            _error = "Select a company above.";
+            _error = "Select a company.";
             return;
         }
 
@@ -454,6 +277,4 @@
             _busy = false;
         }
     }
-
-    private sealed record DownloadUiResult(string OutputDirectory, List<DownloadedReport> Succeeded, List<FailedReport> Failed);
 }

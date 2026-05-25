@@ -1968,6 +1968,42 @@ public class AppRestartSupportTests
     }
 }
 
+public class ReportCatalogBuilderTests
+{
+    [Fact]
+    public void BuildGroups_GroupsByCategoryDisplay()
+    {
+        var groups = ReportCatalogBuilder.BuildGroups(
+        [
+            new StandardReportDescriptor
+            {
+                Id = "aaa",
+                ReportType = "xlsx",
+                CategoryDisplay = "All Vulnerabilities Report",
+                Category = "all vulnerabilities report"
+            },
+            new StandardReportDescriptor
+            {
+                Id = "bbb",
+                ReportType = "docx",
+                CategoryDisplay = "All Vulnerabilities Report",
+                Category = "all vulnerabilities report"
+            },
+            new StandardReportDescriptor
+            {
+                Id = "ccc",
+                ReportType = "pdf",
+                CategoryDisplay = "Executive Summary Report",
+                Category = "executive summary report"
+            }
+        ]);
+
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(2, groups.First(g => g.Name == "All Vulnerabilities Report").Formats.Count);
+        Assert.True(groups.First(g => g.Name == "All Vulnerabilities Report").Formats.ContainsKey("xlsx"));
+    }
+}
+
 public class CheckboxRangeColumnTests
 {
     [Fact]

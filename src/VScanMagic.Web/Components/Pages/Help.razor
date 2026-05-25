@@ -11,7 +11,7 @@
         <h1 class="mb-1">Help &amp; workflow guide</h1>
         <p class="text-muted mb-0">Quarterly vulnerability delivery from ConnectSecure through client email, review meeting, and remediation tickets.</p>
     </div>
-    <a class="btn btn-outline-secondary btn-sm" href="/">Start on Download &amp; ingest</a>
+    <a class="btn btn-primary btn-sm" href="/">Start client review</a>
 </div>
 
 <div class="row g-4">
@@ -57,8 +57,8 @@
                 <p class="text-muted small">Technician steps before and through the client call. Remediation work after delivery is handled by new tickets, not in this flow.</p>
                 <ol class="mb-0">
                     <li class="mb-2"><strong>Pre-call prep</strong> — Run <a href="/company-review">Company review</a> (probes, subnets, external targets, offline agents) if needed.</li>
-                    <li class="mb-2"><strong>Download reports</strong> — On <a href="/">Download &amp; ingest</a>, select the client, download standard ConnectSecure reports into the quarterly folder.</li>
-                    <li class="mb-2"><strong>Start review</strong> — Upload or point at the <strong>All Vulnerabilities</strong> XLSX (not Top Ten Data). Set scan date, presenter, and RMIT+ if applicable. Curate the export set (Top N, promote network/registry items) as needed before export.</li>
+                    <li class="mb-2"><strong>Start client review</strong> — On the home page, upload or point at the <strong>All Vulnerabilities</strong> XLSX (not Top Ten Data). Set scan date, presenter, and RMIT+ if applicable. Curate the export set (Top N, promote network/registry items) as needed before export.</li>
+                    <li class="mb-2"><strong>Download reports</strong> (optional prep) — On <a href="/report-downloader">Report downloader</a>, choose company or global scope, the quarterly bundle, and/or any catalog report (XLSX/DOCX/PDF) when you need fresh files from ConnectSecure.</li>
                     <li class="mb-2"><strong>Export</strong> — Generate DOCX, PDF, and XLSX from the review session into the quarterly folder.</li>
                     <li class="mb-2"><strong>Share links</strong> — In Windows Explorer (or SharePoint online), use <em>Copy link</em> on the Top N doc and quarterly reports folder after sync.</li>
                     <li class="mb-2"><strong>Email client</strong> — Open <em>Deliverables</em> from the review session, paste share links on the Email tab, and send the quarterly follow-up (secure email). Include your TimeZest scheduling link.</li>
@@ -106,8 +106,10 @@
                 <dl class="row mb-0 small">
                     <dt class="col-sm-4">Company review</dt>
                     <dd class="col-sm-8">Tenant checks: probes, internal/external scan targets, patching shortcuts, offline agents.</dd>
-                    <dt class="col-sm-4">Download &amp; ingest</dt>
-                    <dd class="col-sm-8">Download ConnectSecure reports and start review sessions from All Vulnerabilities XLSX.</dd>
+                    <dt class="col-sm-4">Start client review</dt>
+                    <dd class="col-sm-8">Main workflow: ingest All Vulnerabilities XLSX and open a live client review session.</dd>
+                    <dt class="col-sm-4">Report downloader</dt>
+                    <dd class="col-sm-8">Prep: ConnectSecure standard and catalog report downloads (company or global).</dd>
                     <dt class="col-sm-4">Review sessions</dt>
                     <dd class="col-sm-8">Resume, archive, or delete saved quarterly client reviews.</dd>
                     <dt class="col-sm-4">Suppress vulnerabilities</dt>

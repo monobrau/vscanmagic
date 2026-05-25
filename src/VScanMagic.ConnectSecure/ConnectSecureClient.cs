@@ -112,13 +112,25 @@ public sealed class ConnectSecureClient
         return parsed;
     }
 
-    public async Task<IReadOnlyList<StandardReportDescriptor>> GetStandardReportsAsync(int companyId = 0, CancellationToken ct = default)
+    public Task<IReadOnlyList<StandardReportDescriptor>> GetStandardReportsAsync(
+        ReportCatalogScope scope,
+        int companyId = 0,
+        CancellationToken ct = default) =>
+        GetStandardReportsAsync(companyId, scope == ReportCatalogScope.Global, ct);
+
+    public async Task<IReadOnlyList<StandardReportDescriptor>> GetStandardReportsAsync(
+        int companyId = 0,
+        bool globalOnly = false,
+        CancellationToken ct = default)
     {
-        var isGlobal = companyId == 0;
         var collected = new List<StandardReportDescriptor>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var useGlobal in new[] { isGlobal, !isGlobal })
+        IEnumerable<bool> globalFlags = globalOnly || companyId == 0
+            ? [true]
+            : [false, true];
+
+        foreach (var useGlobal in globalFlags)
         {
             foreach (var endpoint in new[] { "/report_builder/standard_reports", "/r/report_builder/standard_reports" })
             {

@@ -10,7 +10,7 @@ public sealed record TicketInstructionSection(int Number, string Subject, string
 public static class TicketInstructionBuilder
 {
     private const string SuppressFooter =
-        "Sometimes it will not be possible to remediate the vulnerability for business or technical reasons. Other times it will be a false positive detection. In the event of either case please reach out to someone on the vulnerability scan team with your findings and we can suppress the vulnerability so it doesn't come up on future scans or remediations.";
+        "Sometimes it will not be possible to remediate the vulnerability for business or technical reasons. Other times it will be a false positive detection. In the event of either case please reach out to someone on the Security team with your findings and we can suppress the vulnerability so it doesn't come up on future scans or remediations.";
 
     private const string UninstallFooter =
         "Uninstalling the software or removing/replacing the device is also a valid form of remediation when updating or patching is not feasible; the vulnerability will show as remediated on the next scan.";
