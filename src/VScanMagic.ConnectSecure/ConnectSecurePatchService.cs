@@ -7,12 +7,14 @@ namespace VScanMagic.ConnectSecure;
 public sealed class ConnectSecurePatchService(
     ConnectSecureClient client,
     PatchActivityHistoryService patchActivityHistory,
-    ConnectSecureCacheService cache)
+    ConnectSecureCacheService cache,
+    ConnectSecureRemediationService remediationService)
 {
     public async Task<IReadOnlyList<PatchableApplicationEntry>> GetPatchableApplicationsAsync(
         int companyId,
         bool patchableOnly = true,
         PatchApplicationLoadOptions? loadOptions = null,
+        bool forceRefresh = false,
         CancellationToken ct = default)
     {
         if (companyId <= 0)
@@ -21,11 +23,19 @@ public sealed class ConnectSecurePatchService(
         loadOptions ??= new PatchApplicationLoadOptions { PatchableOnly = patchableOnly };
         var effectivePatchableOnly = loadOptions.PatchableOnly && patchableOnly;
 
-        var rows = await GetRemediationPlanRowsAsync(companyId, ct);
+        if (forceRefresh)
+        {
+            remediationService.Invalidate(companyId);
+            cache.InvalidatePatchHosts(companyId);
+        }
 
-        return rows
-            .Select(ParsePatchableApplication)
-            .Where(entry => entry.SolutionId > 0 && !string.IsNullOrWhiteSpace(entry.Product))
+        var dataset = await remediationService.GetRemediationDatasetAsync(companyId, forceRefresh: forceRefresh, ct: ct);
+
+        return dataset.Records
+            .Where(r => r.IsSoftwarePatch)
+            .Where(r => r.SolutionId > 0 && !string.IsNullOrWhiteSpace(r.Product))
+            .GroupBy(r => r.SolutionId)
+            .Select(BuildPatchableApplicationEntry)
             .Where(entry => !effectivePatchableOnly || entry.IsPatchable)
             .Where(entry => PatchCatalogHelper.MeetsSeverityFilter(entry.Severity, loadOptions.SeverityFilter))
             .Where(entry => !loadOptions.HideEndOfLife || !PatchCatalogHelper.IsEndOfLifeProductFix(entry.Fix))
@@ -44,26 +54,182 @@ public sealed class ConnectSecurePatchService(
         if (solutionId <= 0)
             throw new ArgumentOutOfRangeException(nameof(solutionId), "Solution id is required.");
 
-        var condition = $"solution_id={solutionId} and company_id={companyId}";
         if (cache.TryGetPatchHosts(companyId, solutionId, out var cached))
             return cached;
 
+        var dataset = await remediationService.GetRemediationDatasetAsync(companyId, ct: ct);
+        var solutionRecords = dataset.Records.Where(r => r.SolutionId == solutionId).ToList();
+        var productName = solutionRecords.FirstOrDefault()?.Product ?? "";
+        var rawHosts = DeduplicateRemediationHosts(solutionRecords);
+
+        var merged = PatchCatalogHelper.MergeAssetDetails(rawHosts).ToList();
+        if (!string.IsNullOrWhiteSpace(productName))
+        {
+            var assetDetails = await GetOrFetchProductRemediationAssetDetailsAsync(companyId, productName, ct);
+            merged = MergeInstalledVersions(merged, assetDetails, productName);
+        }
+
+        var enriched = await EnrichHostsWithAgentRegistryAsync(companyId, merged, ct);
+        cache.SetPatchHosts(companyId, solutionId, enriched);
+        return enriched;
+    }
+
+    private async Task<List<PatchAssetDetail>> GetOrFetchProductRemediationAssetDetailsAsync(
+        int companyId,
+        string productName,
+        CancellationToken ct)
+    {
+        var normalizedProduct = productName.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedProduct))
+            return [];
+
+        if (cache.TryGetProductRemediationAssetDetails(companyId, normalizedProduct, out var cached))
+            return cached;
+
+        var escapedProduct = EscapeConditionValue(normalizedProduct);
+        var condition = $"company_id={companyId} and name='{escapedProduct}'";
         var onlineTask = FetchRemediationPlanAssetDetailsAsync(condition, onlineOnly: true, ct);
         var offlineTask = FetchRemediationPlanAssetDetailsAsync(condition, onlineOnly: false, ct);
         await Task.WhenAll(onlineTask, offlineTask);
 
-        var merged = PatchCatalogHelper.MergeAssetDetails((await onlineTask).Concat(await offlineTask)).ToList();
-        cache.SetPatchHosts(companyId, solutionId, merged);
+        var combined = (await onlineTask).Concat(await offlineTask).ToList();
+        var deduped = DedupeAssetDetailsByHostAndProduct(combined.Where(IsUsableAssetDetailRow));
+
+        if (deduped.Count == 0)
+        {
+            var companyWide = await GetOrFetchCompanyRemediationAssetDetailsAsync(companyId, ct);
+            deduped = companyWide
+                .Where(detail => detail.ApplicationNames.Any(name =>
+                    PatchCatalogHelper.ProductNamesMatch(name, normalizedProduct)))
+                .ToList();
+        }
+
+        cache.SetProductRemediationAssetDetails(companyId, normalizedProduct, deduped);
+        return deduped;
+    }
+
+    private async Task<List<PatchAssetDetail>> GetOrFetchCompanyRemediationAssetDetailsAsync(
+        int companyId,
+        CancellationToken ct)
+    {
+        if (cache.TryGetRemediationAssetDetails(companyId, out var cached))
+            return cached;
+
+        var condition = $"company_id={companyId}";
+        var onlineTask = FetchRemediationPlanAssetDetailsAsync(condition, onlineOnly: true, ct);
+        var offlineTask = FetchRemediationPlanAssetDetailsAsync(condition, onlineOnly: false, ct);
+        await Task.WhenAll(onlineTask, offlineTask);
+
+        var combined = (await onlineTask).Concat(await offlineTask).ToList();
+        var deduped = DedupeAssetDetailsByHostAndProduct(combined.Where(IsUsableAssetDetailRow));
+        cache.SetRemediationAssetDetails(companyId, deduped);
+        return deduped;
+    }
+
+    private static bool IsUsableAssetDetailRow(PatchAssetDetail detail) =>
+        detail.AgentId > 0 &&
+        (!string.IsNullOrWhiteSpace(detail.HostName) || detail.Versions.Count > 0);
+
+    private async Task<IReadOnlyList<PatchAssetDetail>> FetchRemediationPlanAssetDetailsAsync(
+        string condition,
+        bool onlineOnly,
+        CancellationToken ct)
+    {
+        var rows = await FetchAllPagesAsync(
+            "/r/report_queries/remediation_plan_asset_details",
+            new Dictionary<string, string>
+            {
+                ["having"] = onlineOnly ? "true" : "false",
+                ["condition"] = condition
+            },
+            ct);
+
+        return rows
+            .Select(ParseRemediationPlanAssetDetail)
+            .Where(detail => detail.AgentId > 0 || detail.AssetId > 0 || !string.IsNullOrWhiteSpace(detail.HostName))
+            .ToList();
+    }
+
+    private static List<PatchAssetDetail> DedupeAssetDetailsByHostAndProduct(IEnumerable<PatchAssetDetail> details)
+    {
+        var deduped = new Dictionary<string, PatchAssetDetail>(StringComparer.OrdinalIgnoreCase);
+        foreach (var detail in details)
+        {
+            var product = detail.ApplicationNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "";
+            var key = $"{detail.AgentId}:{detail.AssetId}:{product}";
+            if (string.IsNullOrEmpty(key.Trim(':')))
+                continue;
+
+            if (!deduped.TryGetValue(key, out var existing) ||
+                (!existing.OnlineStatus && detail.OnlineStatus))
+            {
+                deduped[key] = detail;
+            }
+        }
+
+        return deduped.Values.ToList();
+    }
+
+    private static List<PatchAssetDetail> MergeInstalledVersions(
+        IReadOnlyList<PatchAssetDetail> hosts,
+        IReadOnlyList<PatchAssetDetail> assetDetails,
+        string productName)
+    {
+        if (hosts.Count == 0 || assetDetails.Count == 0)
+            return hosts.ToList();
+
+        var productDetails = assetDetails
+            .Where(detail => detail.ApplicationNames.Any(name =>
+                PatchCatalogHelper.ProductNamesMatch(name, productName)))
+            .ToList();
+
+        var byAgentId = productDetails
+            .Where(detail => detail.AgentId > 0)
+            .GroupBy(detail => detail.AgentId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var byAssetId = productDetails
+            .Where(detail => detail.AssetId > 0)
+            .GroupBy(detail => detail.AssetId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var byHostName = productDetails
+            .Where(detail => !string.IsNullOrWhiteSpace(detail.HostName))
+            .GroupBy(detail => detail.HostName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var merged = new List<PatchAssetDetail>();
+        foreach (var host in hosts)
+        {
+            PatchAssetDetail? match = null;
+            if (host.AgentId > 0 && byAgentId.TryGetValue(host.AgentId, out match)) { }
+            else if (host.AssetId > 0 && byAssetId.TryGetValue(host.AssetId, out match)) { }
+            else if (!string.IsNullOrWhiteSpace(host.HostName) &&
+                     byHostName.TryGetValue(host.HostName, out match)) { }
+
+            if (match is null)
+            {
+                merged.Add(host);
+                continue;
+            }
+
+            merged.Add(host with
+            {
+                Versions = match.Versions.Count > 0 ? match.Versions : host.Versions,
+                Paths = match.Paths.Count > 0 ? match.Paths : host.Paths
+            });
+        }
+
         return merged;
     }
 
-    public Task<PatchOperationResult> PatchApplicationsNowAsync(
+    public async Task<PatchOperationResult> PatchApplicationsNowAsync(
         ApplicationPatchRequest request,
         CancellationToken ct = default)
     {
         ValidatePatchRequest(request);
+        await EnsureApplicationPatchTargetsAsync(request, ct);
+        ValidateApplicationPatchVersions(request);
         var body = BuildPatchPayload(request, ConnectSecurePatchWhen.Now, scheduledAt: null);
-        return InvokePatchAsync(request, "Application Patch", body, ct);
+        return await InvokePatchAsync(request, "Application Patch", body, ct);
     }
 
     public Task<PatchOperationResult> PatchOsNowAsync(
@@ -77,42 +243,98 @@ public sealed class ConnectSecurePatchService(
         return InvokePatchAsync(osRequest, "OS Patch", body, ct);
     }
 
-    public async Task<IReadOnlyList<PatchJobEntry>> GetCompanyJobsAsync(
+    public async Task<PatchJobListResult> GetCompanyJobsAsync(
         int companyId,
-        bool patchJobsOnly = false,
-        int limit = 50,
+        PatchJobListQuery query,
+        bool fetchRemoteJobs = true,
         CancellationToken ct = default)
     {
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var localJobs = patchActivityHistory
-            .GetEntries(companyId, limit)
-            .Select(ToPatchJobEntry)
-            .ToList();
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 5, 100);
+        var since = query.Since;
 
-        var rows = await FetchArrayAsync(
-            "/r/company/jobs_view",
-            new Dictionary<string, string>
-            {
-                ["condition"] = $"company_id={companyId}",
-                ["limit"] = limit.ToString(),
-                ["skip"] = "0",
-                ["order_by"] = "updated desc"
-            },
-            ct);
+        var localEntries = patchActivityHistory.GetEntries(companyId, limit: 200).ToList();
+        if (since is not null)
+        {
+            localEntries = localEntries
+                .Where(entry => entry.RequestedAt >= since.Value)
+                .ToList();
+        }
 
-        var remoteJobs = rows
-            .Select(ParsePatchJob)
-            .Where(job => !patchJobsOnly || IsPatchJobType(job.Type))
-            .ToList();
+        if (query.LocalOnly)
+        {
+            var localOnly = localEntries
+                .OrderByDescending(entry => entry.RequestedAt)
+                .Select(entry => ToPatchJobEntry(entry, remote: null))
+                .ToList();
 
-        return localJobs
-            .Concat(remoteJobs.Where(remote => localJobs.All(local =>
-                !string.Equals(local.JobId, remote.JobId, StringComparison.OrdinalIgnoreCase))))
+            return PageResults(localOnly, page, pageSize);
+        }
+
+        var remoteJobs = fetchRemoteJobs
+            ? await FetchConnectSecurePatchJobsAsync(companyId, limit: 100, ct)
+            : Array.Empty<PatchJobCorrelationHelper.ParsedConnectSecureJob>();
+
+        if (since is not null)
+        {
+            remoteJobs = remoteJobs
+                .Where(job => job.Updated is null || job.Updated.Value >= since.Value)
+                .ToList();
+        }
+
+        if (fetchRemoteJobs)
+            SyncLocalEntriesWithConnectSecureJobs(companyId, localEntries, remoteJobs);
+
+        localEntries = patchActivityHistory.GetEntries(companyId, limit: 200).ToList();
+        if (since is not null)
+        {
+            localEntries = localEntries
+                .Where(entry => entry.RequestedAt >= since.Value)
+                .ToList();
+        }
+
+        var linkedRemoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<PatchJobEntry>();
+
+        foreach (var entry in localEntries)
+        {
+            var remote = ResolveLinkedRemoteJob(entry, remoteJobs, linkedRemoteIds);
+            if (!string.IsNullOrWhiteSpace(remote?.JobId))
+                linkedRemoteIds.Add(remote.JobId);
+            merged.Add(ToPatchJobEntry(entry, remote));
+        }
+
+        foreach (var remote in remoteJobs)
+        {
+            if (string.IsNullOrWhiteSpace(remote.JobId) || linkedRemoteIds.Contains(remote.JobId))
+                continue;
+            if (query.PatchJobsOnly && !PatchJobCorrelationHelper.IsPatchJobType(remote.Type))
+                continue;
+
+            merged.Add(ToRemotePatchJobEntry(remote));
+        }
+
+        var ordered = merged
             .OrderByDescending(job => job.Updated ?? DateTimeOffset.MinValue)
-            .Take(limit)
             .ToList();
+
+        return PageResults(ordered, page, pageSize);
+    }
+
+    private static PatchJobListResult PageResults(
+        IReadOnlyList<PatchJobEntry> jobs,
+        int page,
+        int pageSize)
+    {
+        var total = jobs.Count;
+        var items = jobs
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+        return new PatchJobListResult(items, total, page, pageSize);
     }
 
     public async Task<PatchVerificationResult> VerifyPatchActivityAsync(
@@ -150,7 +372,7 @@ public sealed class ConnectSecurePatchService(
                 entry.OsAssetIds?.Count ?? agentIds.Count,
                 entry.OsAssetIds?.ToList() ?? []);
             var details = await GetOsPatchHostsAsync(companyId, osPatch, ct);
-            hostViews = PatchCatalogHelper.BuildHostViews(details, targetFix, isEndOfLife);
+            hostViews = await BuildOsPatchHostViewsAsync(companyId, targetFix, details, ct);
         }
         else
         {
@@ -162,7 +384,11 @@ public sealed class ConnectSecurePatchService(
                 return unverifiable;
             }
 
-            var details = await GetPatchingAssetDetailsForProductAsync(companyId, solutionIds, ct);
+            var details = await GetPatchingAssetDetailsForProductAsync(
+                companyId,
+                solutionIds,
+                entry.Product ?? "",
+                ct);
             hostViews = PatchCatalogHelper.BuildHostViews(details, targetFix, isEndOfLife);
         }
 
@@ -174,28 +400,66 @@ public sealed class ConnectSecurePatchService(
     public async Task<IReadOnlyList<OsPendingPatchEntry>> GetOsPendingPatchesAsync(
         int companyId,
         int lookbackDays = 90,
+        bool forceRefresh = false,
         CancellationToken ct = default)
     {
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var rows = await FetchAllPagesAsync(
-            "/r/report_queries/os_pending_patches",
-            new Dictionary<string, string>
-            {
-                ["num_days"] = lookbackDays.ToString(),
-                ["condition"] = $"company_id={companyId}",
-                ["order_by"] = "affected_assets desc"
-            },
-            ct);
+        // lookbackDays preserved for signature compatibility; get_remediation does not
+        // restrict by discovery date — all currently-needed OS updates are returned.
+        _ = lookbackDays;
 
-        return rows
-            .Where(row => MatchesCompany(row, companyId) || MatchesCompanyInIds(row, companyId))
-            .Select(ParseOsPendingPatch)
+        if (forceRefresh)
+        {
+            remediationService.Invalidate(companyId);
+            cache.InvalidatePatchHosts(companyId);
+        }
+
+        var dataset = await remediationService.GetRemediationDatasetAsync(companyId, forceRefresh: forceRefresh, ct: ct);
+
+        return dataset.Records
+            .Where(r => r.IsOsUpdate)
+            .Where(r => !string.IsNullOrWhiteSpace(r.Fix))
+            .GroupBy(r => new { OsName = NormalizeOsName(r.Product), Fix = r.Fix.Trim() })
+            .Select(g => new OsPendingPatchEntry(
+                g.Key.OsName,
+                ResolveOsVersion(g),
+                g.Key.Fix,
+                g.Select(r => r.AssetId).Where(id => id > 0).Distinct().Count(),
+                g.Select(r => r.AssetId).Where(id => id > 0).Distinct().ToList()))
             .Where(entry => entry.AffectedAssets > 0)
             .OrderByDescending(entry => entry.AffectedAssets)
             .ThenBy(entry => entry.OsName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static string NormalizeOsName(string product) =>
+        string.IsNullOrWhiteSpace(product) ? "" : product.Trim();
+
+    private static string ResolveOsVersion(IEnumerable<RemediationRecord> records)
+    {
+        // get_remediation does not return os_version directly; product name carries
+        // it (e.g. "Windows 1125H2"). Caller renders OsName which already contains it.
+        return "";
+    }
+
+    public async Task<IReadOnlyList<PatchHostView>> BuildOsPatchHostViewsAsync(
+        int companyId,
+        string targetFix,
+        IEnumerable<PatchAssetDetail> details,
+        CancellationToken ct = default)
+    {
+        if (companyId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
+
+        var detailList = details.ToList();
+        if (!PatchCatalogHelper.IsOsUpdateTarget(targetFix))
+            return PatchCatalogHelper.BuildHostViews(detailList, targetFix, isEndOfLife: false);
+
+        var pendingPatches = await GetOsPendingPatchesAsync(companyId, ct: ct);
+        var pendingAssetIds = PatchCatalogHelper.BuildOsPendingAssetIndex(pendingPatches, targetFix);
+        return PatchCatalogHelper.BuildOsHostViews(detailList, targetFix, pendingAssetIds);
     }
 
     public async Task<IReadOnlyList<PatchAssetDetail>> GetOsPatchHostsAsync(
@@ -239,18 +503,23 @@ public sealed class ConnectSecurePatchService(
         if (companyId <= 0)
             throw new ArgumentOutOfRangeException(nameof(companyId), "Company id is required.");
 
-        var rows = await GetRemediationPlanRowsAsync(companyId, ct);
+        var dataset = await remediationService.GetRemediationDatasetAsync(companyId, ct: ct);
 
-        return rows
-            .Select(row => new SuppressibleRemediationEntry(
-                ConnectSecureJsonReader.GetInt(row, "solution_id", "solutionId") ?? 0,
-                ConnectSecureJsonReader.GetString(row, "product"),
-                ConnectSecureJsonReader.GetString(row, "fix"),
-                ConnectSecureJsonReader.GetString(row, "severity"),
-                ConnectSecureJsonReader.GetString(row, "remediation_action", "remediationAction"),
-                ConnectSecureJsonReader.GetBool(row, "is_patchable", "isPatchable"),
-                ConnectSecureJsonReader.GetInt(row, "affected_assets", "affectedAssets") ?? 0))
-            .Where(entry => entry.SolutionId > 0 && !string.IsNullOrWhiteSpace(entry.Product))
+        return dataset.Records
+            .Where(r => r.SolutionId > 0 && !string.IsNullOrWhiteSpace(r.Product))
+            .GroupBy(r => r.SolutionId)
+            .Select(g =>
+            {
+                var primary = g.OrderByDescending(r => PatchCatalogHelper.SeverityRank(r.Severity)).First();
+                return new SuppressibleRemediationEntry(
+                    primary.SolutionId,
+                    primary.Product,
+                    primary.Fix,
+                    primary.Severity,
+                    primary.RemediationAction,
+                    primary.IsSoftwarePatch,
+                    g.Select(r => r.AssetId).Where(id => id > 0).Distinct().Count());
+            })
             .OrderByDescending(entry => PatchCatalogHelper.SeverityRank(entry.Severity))
             .ThenByDescending(entry => entry.AffectedAssets)
             .ThenBy(entry => entry.Product, StringComparer.OrdinalIgnoreCase)
@@ -452,29 +721,10 @@ public sealed class ConnectSecurePatchService(
         return body;
     }
 
-    private async Task<IReadOnlyList<PatchAssetDetail>> FetchRemediationPlanAssetDetailsAsync(
-        string condition,
-        bool onlineOnly,
-        CancellationToken ct)
-    {
-        var rows = await FetchAllPagesAsync(
-            "/r/report_queries/remediation_plan_asset_details",
-            new Dictionary<string, string>
-            {
-                ["having"] = onlineOnly ? "true" : "false",
-                ["condition"] = condition
-            },
-            ct);
-
-        return rows
-            .Select(ParseRemediationPlanAssetDetail)
-            .Where(detail => detail.AgentId > 0 || detail.AssetId > 0 || !string.IsNullOrWhiteSpace(detail.HostName))
-            .ToList();
-    }
-
     public async Task<IReadOnlyList<PatchAssetDetail>> GetPatchingAssetDetailsForProductAsync(
         int companyId,
         IReadOnlyList<int> solutionIds,
+        string productName,
         CancellationToken ct = default)
     {
         if (companyId <= 0)
@@ -482,25 +732,50 @@ public sealed class ConnectSecurePatchService(
         if (solutionIds.Count == 0)
             return [];
 
-        var distinctSolutionIds = solutionIds.Distinct().ToList();
-        using var gate = new SemaphoreSlim(3);
-        var detailTasks = distinctSolutionIds.Select(async solutionId =>
+        var normalizedProduct = productName.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedProduct) &&
+            cache.TryGetPatchProductHosts(companyId, normalizedProduct, out var cachedProductHosts))
         {
-            await gate.WaitAsync(ct);
-            try
-            {
-                return await GetPatchingAssetDetailsAsync(companyId, solutionId, ct);
-            }
-            finally
-            {
-                gate.Release();
-            }
-        }).ToList();
+            return cachedProductHosts;
+        }
 
-        var merged = (await Task.WhenAll(detailTasks)).SelectMany(details => details).ToList();
+        var solutionSet = solutionIds.Where(id => id > 0).ToHashSet();
+        var dataset = await remediationService.GetRemediationDatasetAsync(companyId, ct: ct);
+        var records = dataset.Records
+            .Where(r => r.IsSoftwarePatch && solutionSet.Contains(r.SolutionId))
+            .ToList();
 
-        var combined = PatchCatalogHelper.MergeAssetDetails(merged);
-        return await EnrichHostsWithAgentRegistryAsync(companyId, combined.ToList(), ct);
+        var merged = PatchCatalogHelper.MergeAssetDetails(DeduplicateRemediationHosts(records)).ToList();
+        if (!string.IsNullOrWhiteSpace(normalizedProduct))
+        {
+            var assetDetails = await GetOrFetchProductRemediationAssetDetailsAsync(companyId, normalizedProduct, ct);
+            merged = MergeInstalledVersions(merged, assetDetails, normalizedProduct);
+        }
+
+        var enriched = await EnrichHostsWithAgentRegistryAsync(companyId, merged, ct);
+        if (!string.IsNullOrWhiteSpace(normalizedProduct))
+            cache.SetPatchProductHosts(companyId, normalizedProduct, enriched);
+
+        return enriched;
+    }
+
+    private static List<PatchAssetDetail> DeduplicateRemediationHosts(IEnumerable<RemediationRecord> records)
+    {
+        var deduped = new Dictionary<string, PatchAssetDetail>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in records)
+        {
+            var key = $"{record.AgentId}:{record.AssetId}:{record.HostName}";
+            if (string.IsNullOrEmpty(key.Trim(':')))
+                continue;
+
+            if (!deduped.TryGetValue(key, out var existing) ||
+                (!existing.OnlineStatus && record.OnlineStatus))
+            {
+                deduped[key] = BuildPatchAssetDetailFromRecord(record);
+            }
+        }
+
+        return deduped.Values.ToList();
     }
 
     private async Task<PatchOperationResult> InvokePatchAsync(
@@ -526,6 +801,7 @@ public sealed class ConnectSecurePatchService(
         cache.InvalidateCompany(request.CompanyId);
 
         var jobId = RecordPatchActivity(request, jobType, message);
+        await TryLinkConnectSecureJobAsync(request.CompanyId, jobId, ct);
         return new PatchOperationResult(true, message, jobId);
     }
 
@@ -577,7 +853,8 @@ public sealed class ConnectSecurePatchService(
             request.TargetFix,
             request.PatchType == ConnectSecurePatchType.Os,
             request.IsEndOfLife,
-            request.OsAssetIds.Where(id => id > 0).Distinct().ToList()));
+            request.OsAssetIds.Where(id => id > 0).Distinct().ToList(),
+            AssetIds: request.AssetIds.Where(id => id > 0).Distinct().ToList()));
 
         return jobId;
     }
@@ -586,34 +863,154 @@ public sealed class ConnectSecurePatchService(
     {
         patchActivityHistory.UpdateEntry(entry with
         {
+            VersionCheckStatus = result.Status,
             Status = result.Status,
             VerificationSummary = result.Summary,
             VerifiedAt = result.VerifiedAt
         });
     }
 
-    private static PatchJobEntry ToPatchJobEntry(PatchActivityEntry entry)
+    private async Task TryLinkConnectSecureJobAsync(int companyId, string localJobId, CancellationToken ct)
+    {
+        var entry = patchActivityHistory.GetByJobId(companyId, localJobId);
+        if (entry is null)
+            return;
+
+        await Task.Delay(1500, ct);
+
+        var remoteJobs = await FetchConnectSecurePatchJobsAsync(companyId, limit: 25, ct);
+        var linkedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var match = PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, linkedIds);
+        if (match is null || string.IsNullOrWhiteSpace(match.JobId))
+            return;
+
+        patchActivityHistory.UpdateEntry(entry with
+        {
+            ConnectSecureJobId = match.JobId,
+            ConnectSecureJobStatus = match.Status
+        });
+    }
+
+    private void SyncLocalEntriesWithConnectSecureJobs(
+        int companyId,
+        IReadOnlyList<PatchActivityEntry> localEntries,
+        IReadOnlyList<PatchJobCorrelationHelper.ParsedConnectSecureJob> remoteJobs)
+    {
+        var linkedRemoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in localEntries)
+        {
+            var remote = PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, linkedRemoteIds);
+            if (remote is null || string.IsNullOrWhiteSpace(remote.JobId))
+                continue;
+
+            linkedRemoteIds.Add(remote.JobId);
+            var needsUpdate = !string.Equals(entry.ConnectSecureJobId, remote.JobId, StringComparison.OrdinalIgnoreCase) ||
+                              !string.Equals(entry.ConnectSecureJobStatus, remote.Status, StringComparison.OrdinalIgnoreCase);
+            if (!needsUpdate)
+                continue;
+
+            patchActivityHistory.UpdateEntry(entry with
+            {
+                ConnectSecureJobId = remote.JobId,
+                ConnectSecureJobStatus = remote.Status
+            });
+        }
+    }
+
+    private static PatchJobCorrelationHelper.ParsedConnectSecureJob? ResolveLinkedRemoteJob(
+        PatchActivityEntry entry,
+        IReadOnlyList<PatchJobCorrelationHelper.ParsedConnectSecureJob> remoteJobs,
+        IReadOnlySet<string> alreadyLinkedRemoteIds)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.ConnectSecureJobId))
+        {
+            var byId = remoteJobs.FirstOrDefault(job =>
+                string.Equals(job.JobId, entry.ConnectSecureJobId, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+                return byId;
+        }
+
+        return PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, alreadyLinkedRemoteIds);
+    }
+
+    private async Task<IReadOnlyList<PatchJobCorrelationHelper.ParsedConnectSecureJob>> FetchConnectSecurePatchJobsAsync(
+        int companyId,
+        int limit,
+        CancellationToken ct)
+    {
+        var rows = await ConnectSecurePagedQuery.FetchCompanyScopedPagesByIndexAsync(
+            (query, token) => FetchArrayAsync("/r/report_queries/patch_jobview", query, token),
+            new Dictionary<string, string>
+            {
+                ["condition"] = $"company_id={companyId}",
+                ["order_by"] = "created desc"
+            },
+            companyId,
+            ct,
+            pageSize: 100,
+            maxPages: 3);
+
+        return rows
+            .Select(PatchJobCorrelationHelper.ParsePatchJobViewRow)
+            .Where(job => !string.IsNullOrWhiteSpace(job.JobId))
+            .OrderByDescending(job => job.Updated ?? DateTimeOffset.MinValue)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static PatchJobEntry ToPatchJobEntry(PatchActivityEntry entry, PatchJobCorrelationHelper.ParsedConnectSecureJob? remote)
     {
         var canVerify = entry.AgentIds is { Count: > 0 } &&
                         (entry.SolutionIds is { Count: > 0 } || entry.IsOsPatch);
         var description = string.IsNullOrWhiteSpace(entry.ConnectSecureMessage)
             ? entry.Description
             : $"{entry.Description} — {entry.ConnectSecureMessage}";
+
+        var csJobId = entry.ConnectSecureJobId ?? remote?.JobId;
+        if (!string.IsNullOrWhiteSpace(csJobId))
+            description = $"{description} (CS job {csJobId})";
+
+        var versionCheck = PatchJobCorrelationHelper.ResolveVersionCheckStatus(entry);
         if (!string.IsNullOrWhiteSpace(entry.VerificationSummary))
-            description = $"{description} — {entry.VerificationSummary}";
+            description = $"{description} — Version check: {entry.VerificationSummary}";
+
+        var jobStatus = entry.ConnectSecureJobStatus ?? remote?.Status;
+        if (string.IsNullOrWhiteSpace(jobStatus))
+            jobStatus = string.IsNullOrWhiteSpace(csJobId) ? "Accepted" : "Submitted";
 
         return new PatchJobEntry(
             entry.JobId,
             entry.Type,
-            entry.Status,
+            PatchJobCorrelationHelper.FormatJobStatusLabel(jobStatus),
             description,
             entry.HostName,
             entry.AgentIp,
-            entry.VerifiedAt ?? entry.RequestedAt,
+            remote?.Updated ?? entry.VerifiedAt ?? entry.RequestedAt,
             IsLocal: true,
             CanVerify: canVerify,
-            VerificationSummary: entry.VerificationSummary);
+            VerificationSummary: entry.VerificationSummary,
+            ConnectSecureJobId: csJobId,
+            VersionCheckStatus: string.IsNullOrWhiteSpace(versionCheck) ? null : versionCheck,
+            AgentId: remote?.AgentId ?? entry.AgentIds?.FirstOrDefault(),
+            TargetFix: entry.TargetFix,
+            Product: entry.Product);
     }
+
+    private static PatchJobEntry ToRemotePatchJobEntry(PatchJobCorrelationHelper.ParsedConnectSecureJob remote) =>
+        new(
+            remote.JobId,
+            remote.Type,
+            PatchJobCorrelationHelper.FormatJobStatusLabel(remote.Status),
+            remote.Description,
+            remote.HostName,
+            remote.AgentIp,
+            remote.Updated,
+            IsLocal: false,
+            CanVerify: false,
+            ConnectSecureJobId: remote.JobId,
+            AgentId: remote.AgentId,
+            Product: remote.ProductName);
 
     private static void ValidatePatchRequest(ApplicationPatchRequest request)
     {
@@ -625,45 +1022,94 @@ public sealed class ConnectSecurePatchService(
             throw new InvalidOperationException("Select at least one asset or agent to patch.");
     }
 
-    private static bool IsPatchJobType(string? type)
+    public static void ValidateApplicationPatchVersions(ApplicationPatchRequest request)
     {
-        if (string.IsNullOrWhiteSpace(type))
-            return false;
+        if (request.PatchType != ConnectSecurePatchType.App)
+            return;
 
-        return type.Contains("patch", StringComparison.OrdinalIgnoreCase) ||
-               type.Contains("remediation", StringComparison.OrdinalIgnoreCase);
+        if (!PatchCatalogHelper.IsVersionComparableTarget(request.TargetFix))
+            return;
+
+        if (request.FromVersions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "ConnectSecure requires the current installed version (from_versions) to queue this patch. " +
+                "Expand the product, click Refresh hosts, confirm Installed shows a version, then try again.");
+        }
+
+        var assetIds = request.AssetIds.Where(id => id > 0).ToHashSet();
+        var coveredAssets = request.FromVersions.Keys
+            .Select(key => int.TryParse(key, out var id) ? id : 0)
+            .Where(id => id > 0)
+            .ToHashSet();
+
+        if (assetIds.Count > 0 && coveredAssets.Count < assetIds.Count)
+        {
+            throw new InvalidOperationException(
+                "Installed version is missing for one or more selected hosts. Refresh hosts before patching.");
+        }
     }
 
-    private static PatchJobEntry ParsePatchJob(JsonElement row)
+    private async Task EnsureApplicationPatchTargetsAsync(
+        ApplicationPatchRequest request,
+        CancellationToken ct)
     {
-        var updatedText = ConnectSecureJsonReader.GetString(row, "updated", "created");
-        DateTimeOffset? updated = null;
-        if (!string.IsNullOrWhiteSpace(updatedText) && DateTimeOffset.TryParse(updatedText, out var parsed))
-            updated = parsed.ToLocalTime();
+        if (request.PatchType != ConnectSecurePatchType.App)
+            return;
 
-        return new PatchJobEntry(
-            ConnectSecureJsonReader.GetString(row, "job_id", "jobId", "id"),
-            ConnectSecureJsonReader.GetString(row, "type"),
-            ConnectSecureJsonReader.GetString(row, "status"),
-            ConnectSecureJsonReader.GetString(row, "description", "name"),
-            ConnectSecureJsonReader.GetString(row, "agent_host_name", "agentHostName", "host_name", "hostName"),
-            ConnectSecureJsonReader.GetString(row, "agent_ip", "agentIp", "ip"),
-            updated);
-    }
+        var agentSet = request.AgentIds.Where(id => id > 0).ToHashSet();
+        if (agentSet.Count == 0)
+            return;
 
-    private static OsPendingPatchEntry ParseOsPendingPatch(JsonElement row)
-    {
-        var assetIds = ExtractIntArray(row, "asset_ids", "assetIds");
-        var affected = ConnectSecureJsonReader.GetInt(row, "affected_assets", "affectedAssets") ?? assetIds.Count;
-        if (assetIds.Count > 0)
-            affected = Math.Min(affected, assetIds.Count);
+        var dataset = await remediationService.GetRemediationDatasetAsync(request.CompanyId, ct: ct);
+        var records = dataset.Records
+            .Where(r => r.IsSoftwarePatch && agentSet.Contains(r.AgentId))
+            .Where(r => request.IncludedApplications.Any(product =>
+                PatchCatalogHelper.ProductNamesMatch(r.Product, product)))
+            .ToList();
 
-        return new OsPendingPatchEntry(
-            ConnectSecureJsonReader.GetString(row, "os_name", "osName"),
-            ConnectSecureJsonReader.GetString(row, "os_version", "osVersion"),
-            ConnectSecureJsonReader.GetString(row, "fix"),
-            affected,
-            assetIds);
+        if (records.Count == 0)
+            return;
+
+        var assetIds = request.AssetIds.Where(id => id > 0).Distinct().ToList();
+        foreach (var record in records)
+        {
+            if (record.AssetId > 0 && !assetIds.Contains(record.AssetId))
+                assetIds.Add(record.AssetId);
+        }
+
+        if (assetIds.Count == 0)
+            assetIds.AddRange(agentSet);
+
+        request.AssetIds = assetIds;
+
+        if (request.FromVersions.Count == 0)
+            return;
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var record in records)
+        {
+            if (record.AssetId <= 0)
+                continue;
+
+            var agentKey = record.AgentId.ToString();
+            if (request.FromVersions.TryGetValue(agentKey, out var byAgent))
+            {
+                normalized[record.AssetId.ToString()] = byAgent;
+                continue;
+            }
+
+            var assetKey = record.AssetId.ToString();
+            if (request.FromVersions.TryGetValue(assetKey, out var byAsset))
+                normalized[assetKey] = byAsset;
+        }
+
+        foreach (var pair in request.FromVersions)
+        {
+            normalized.TryAdd(pair.Key, pair.Value);
+        }
+
+        request.FromVersions = normalized;
     }
 
     private static bool LightweightRowMatchesAssetIds(JsonElement row, HashSet<int> assetSet)
@@ -685,20 +1131,9 @@ public sealed class ConnectSecurePatchService(
         return false;
     }
 
-    private async Task<List<JsonElement>> GetRemediationPlanRowsAsync(int companyId, CancellationToken ct)
-    {
-        if (cache.TryGetRemediationPlan(companyId, out var cached))
-            return cached;
-
-        var rows = await FetchRemediationPlanForCompanyAsync(
-            companyId,
-            ReportQuery($"company_id={companyId}"),
-            ct);
-        cache.SetRemediationPlan(companyId, rows);
-        return rows;
-    }
-
     public void InvalidateCompanyCache(int companyId) => cache.InvalidateCompany(companyId);
+
+    public void InvalidatePatchHostsCache(int companyId) => cache.InvalidatePatchHosts(companyId);
 
     private async Task<List<PatchAssetDetail>> EnrichHostsWithAgentRegistryAsync(
         int companyId,
@@ -724,6 +1159,16 @@ public sealed class ConnectSecurePatchService(
         var byAgentId = new Dictionary<int, PatchAssetDetail>();
         var byAssetId = new Dictionary<int, PatchAssetDetail>();
         var byHostName = new Dictionary<string, PatchAssetDetail>(StringComparer.OrdinalIgnoreCase);
+
+        await PopulateAgentLookupsFromCompanyPagesAsync(
+            companyId,
+            neededAgentIds,
+            neededAssetIds,
+            neededHostNames,
+            byAgentId,
+            byAssetId,
+            byHostName,
+            ct);
 
         if (neededAgentIds.Count > 0)
         {
@@ -760,6 +1205,44 @@ public sealed class ConnectSecurePatchService(
             }
         }
 
+        var enriched = new List<PatchAssetDetail>();
+        foreach (var host in hosts)
+        {
+            if (host.AgentId > 0 && byAgentId.TryGetValue(host.AgentId, out var byAgent))
+            {
+                enriched.Add(MergeHostWithAgent(host, byAgent));
+                continue;
+            }
+
+            if (host.AssetId > 0 && byAssetId.TryGetValue(host.AssetId, out var byAsset))
+            {
+                enriched.Add(MergeHostWithAgent(host, byAsset));
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(host.HostName) &&
+                byHostName.TryGetValue(host.HostName, out var byName))
+            {
+                enriched.Add(MergeHostWithAgent(host, byName));
+                continue;
+            }
+
+            enriched.Add(host);
+        }
+
+        return enriched;
+    }
+
+    private async Task PopulateAgentLookupsFromCompanyPagesAsync(
+        int companyId,
+        HashSet<int> neededAgentIds,
+        HashSet<int> neededAssetIds,
+        HashSet<string> neededHostNames,
+        Dictionary<int, PatchAssetDetail> byAgentId,
+        Dictionary<int, PatchAssetDetail> byAssetId,
+        Dictionary<string, PatchAssetDetail> byHostName,
+        CancellationToken ct)
+    {
         for (var page = 0;
              page < ConnectSecurePagedQuery.MaxPages &&
              (neededAgentIds.Count > 0 || neededAssetIds.Count > 0 || neededHostNames.Count > 0);
@@ -809,33 +1292,6 @@ public sealed class ConnectSecurePatchService(
                 neededHostNames.Count == 0)
                 break;
         }
-
-        var enriched = new List<PatchAssetDetail>();
-        foreach (var host in hosts)
-        {
-            if (host.AgentId > 0 && byAgentId.TryGetValue(host.AgentId, out var byAgent))
-            {
-                enriched.Add(MergeHostWithAgent(host, byAgent));
-                continue;
-            }
-
-            if (host.AssetId > 0 && byAssetId.TryGetValue(host.AssetId, out var byAsset))
-            {
-                enriched.Add(MergeHostWithAgent(host, byAsset));
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(host.HostName) &&
-                byHostName.TryGetValue(host.HostName, out var byName))
-            {
-                enriched.Add(MergeHostWithAgent(host, byName));
-                continue;
-            }
-
-            enriched.Add(host);
-        }
-
-        return enriched;
     }
 
     private async Task<PatchAssetDetail?> FetchAgentRegistryDetailAsync(int agentId, CancellationToken ct)
@@ -1018,30 +1474,41 @@ public sealed class ConnectSecurePatchService(
     private static bool MatchesCompany(JsonElement row, int companyId) =>
         (ConnectSecureJsonReader.GetInt(row, "company_id", "companyId") ?? 0) == companyId;
 
-    private static PatchableApplicationEntry ParsePatchableApplication(JsonElement row) =>
-        new(
-            ConnectSecureJsonReader.GetInt(row, "solution_id", "solutionId") ?? 0,
-            ConnectSecureJsonReader.GetString(row, "product"),
-            ConnectSecureJsonReader.GetString(row, "fix"),
-            ConnectSecureJsonReader.GetBool(row, "is_patchable", "isPatchable"),
-            ConnectSecureJsonReader.GetInt(row, "affected_assets", "affectedAssets") ?? 0,
-            ExtractIntArray(row, "asset_ids", "assetIds"),
-            ConnectSecureJsonReader.GetString(row, "severity"),
-            ConnectSecureJsonReader.GetString(row, "remediation_action", "remediationAction"));
-
-    private static SuppressibleProblemEntry ParseSuppressibleProblem(JsonElement row)
+    private static PatchableApplicationEntry BuildPatchableApplicationEntry(IGrouping<int, RemediationRecord> group)
     {
-        var problemName = ConnectSecureJsonReader.GetString(row, "problem_name", "problemName", "name");
-        if (string.IsNullOrWhiteSpace(problemName))
-            problemName = ConnectSecureJsonReader.GetString(row, "software_name", "softwareName");
+        var rows = group.ToList();
+        var primary = rows
+            .OrderByDescending(r => PatchCatalogHelper.SeverityRank(r.Severity))
+            .ThenByDescending(r => r.TotalVulsCount)
+            .First();
 
-        return new SuppressibleProblemEntry(
-            ConnectSecureJsonReader.GetInt(row, "problem_id", "problemId")
-                ?? ConnectSecureJsonReader.GetInt(row, "id")
-                ?? 0,
-            problemName,
-            ConnectSecureJsonReader.GetInt(row, "affected_assets", "affectedAssets") ?? 0);
+        var assetIds = rows
+            .Select(r => r.AssetId)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList();
+
+        return new PatchableApplicationEntry(
+            primary.SolutionId,
+            primary.Product,
+            primary.Fix,
+            primary.IsSoftwarePatch,
+            assetIds.Count,
+            assetIds,
+            primary.Severity,
+            primary.RemediationAction);
     }
+
+    private static PatchAssetDetail BuildPatchAssetDetailFromRecord(RemediationRecord record) =>
+        new(
+            AssetId: record.AssetId,
+            Ip: record.Ip,
+            HostName: record.HostName,
+            AgentId: record.AgentId,
+            OnlineStatus: record.OnlineStatus,
+            ApplicationNames: string.IsNullOrWhiteSpace(record.Product) ? [] : new[] { record.Product },
+            Versions: [],
+            Paths: []);
 
     private static PatchAssetDetail ParseRemediationPlanAssetDetail(JsonElement row)
     {
@@ -1065,6 +1532,15 @@ public sealed class ConnectSecurePatchService(
             !row.TryGetProperty("versionInstallDate", out value))
             return ExtractStringArray(row, "version");
 
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var version = ConnectSecureJsonReader.GetString(value, "version");
+            return PatchCatalogHelper.SplitVersionTokens(version);
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+            return PatchCatalogHelper.SplitVersionTokens(value.GetString());
+
         if (value.ValueKind != JsonValueKind.Array)
             return [];
 
@@ -1073,41 +1549,16 @@ public sealed class ConnectSecurePatchService(
         {
             if (item.ValueKind == JsonValueKind.Object)
             {
-                var version = ConnectSecureJsonReader.GetString(item, "version");
-                if (!string.IsNullOrWhiteSpace(version))
-                    versions.Add(version);
+                versions.AddRange(PatchCatalogHelper.SplitVersionTokens(
+                    ConnectSecureJsonReader.GetString(item, "version")));
             }
             else if (item.ValueKind == JsonValueKind.String)
             {
-                var text = item.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                    versions.Add(text);
+                versions.AddRange(PatchCatalogHelper.SplitVersionTokens(item.GetString()));
             }
         }
 
-        return versions;
-    }
-
-    private static IReadOnlyList<int> ExtractIntArray(JsonElement row, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (!row.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Array)
-                continue;
-
-            var ids = new List<int>();
-            foreach (var item in value.EnumerateArray())
-            {
-                if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var n))
-                    ids.Add(n);
-                else if (item.ValueKind == JsonValueKind.String && int.TryParse(item.GetString(), out n))
-                    ids.Add(n);
-            }
-
-            return ids;
-        }
-
-        return [];
+        return PatchCatalogHelper.NormalizeVersions(versions);
     }
 
     private static IReadOnlyList<string> ExtractStringArray(JsonElement row, params string[] names)
@@ -1135,6 +1586,20 @@ public sealed class ConnectSecurePatchService(
         return [];
     }
 
+    private static SuppressibleProblemEntry ParseSuppressibleProblem(JsonElement row)
+    {
+        var problemName = ConnectSecureJsonReader.GetString(row, "problem_name", "problemName", "name");
+        if (string.IsNullOrWhiteSpace(problemName))
+            problemName = ConnectSecureJsonReader.GetString(row, "software_name", "softwareName");
+
+        return new SuppressibleProblemEntry(
+            ConnectSecureJsonReader.GetInt(row, "problem_id", "problemId")
+                ?? ConnectSecureJsonReader.GetInt(row, "id")
+                ?? 0,
+            problemName,
+            ConnectSecureJsonReader.GetInt(row, "affected_assets", "affectedAssets") ?? 0);
+    }
+
     private async Task<List<JsonElement>> FetchArrayAsync(
         string endpoint,
         IReadOnlyDictionary<string, string> query,
@@ -1143,16 +1608,6 @@ public sealed class ConnectSecurePatchService(
         var response = await client.InvokeAuthenticatedAsync(HttpMethod.Get, endpoint, query, ct: ct);
         return ConnectSecureJsonReader.ExtractDataArray(response);
     }
-
-    private Task<List<JsonElement>> FetchRemediationPlanForCompanyAsync(
-        int companyId,
-        Dictionary<string, string> baseQuery,
-        CancellationToken ct) =>
-        ConnectSecurePagedQuery.FetchCompanyScopedPagesAsync(
-            (query, token) => FetchArrayAsync("/r/report_queries/remediation_plan_by_company", query, token),
-            baseQuery,
-            companyId,
-            ct);
 
     private Task<List<JsonElement>> FetchAllPagesAsync(
         string endpoint,

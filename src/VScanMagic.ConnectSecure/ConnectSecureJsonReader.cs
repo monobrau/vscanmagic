@@ -57,8 +57,13 @@ internal static class ConnectSecureJsonReader
         if (response.ValueKind == JsonValueKind.Array)
             return response.EnumerateArray().ToList();
 
-        if (response.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
-            return data.EnumerateArray().ToList();
+        if (response.TryGetProperty("data", out var data))
+        {
+            if (data.ValueKind == JsonValueKind.Array)
+                return data.EnumerateArray().ToList();
+            if (data.ValueKind == JsonValueKind.Object)
+                return [data];
+        }
 
         if (response.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Array)
             return message.EnumerateArray().ToList();

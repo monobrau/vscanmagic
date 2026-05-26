@@ -119,14 +119,36 @@ public sealed record PatchHostView(
 public sealed record PatchJobEntry(
     string JobId,
     string Type,
-    string Status,
+    string JobStatus,
     string Description,
     string? HostName,
     string? AgentIp,
     DateTimeOffset? Updated,
     bool IsLocal = false,
     bool CanVerify = false,
-    string? VerificationSummary = null);
+    string? VerificationSummary = null,
+    string? ConnectSecureJobId = null,
+    string? VersionCheckStatus = null,
+    int? AgentId = null,
+    string? TargetFix = null,
+    string? Product = null);
+
+public sealed record PatchJobListQuery(
+    int Page = 1,
+    int PageSize = 15,
+    int DaysBack = 7,
+    bool PatchJobsOnly = true,
+    bool LocalOnly = false)
+{
+    public DateTimeOffset? Since =>
+        DaysBack <= 0 ? null : DateTimeOffset.Now.AddDays(-DaysBack);
+}
+
+public sealed record PatchJobListResult(
+    IReadOnlyList<PatchJobEntry> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);
 
 public sealed record OsPendingPatchEntry(
     string OsName,

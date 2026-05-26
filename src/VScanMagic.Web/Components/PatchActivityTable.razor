@@ -4,46 +4,90 @@
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span>Recent patch activity</span>
-        <button type="button" class="btn btn-sm btn-outline-secondary"
-                disabled="@(Busy || LoadingJobs || CompanyId <= 0)"
-                @onclick="OnRefreshJobs">
-            @(LoadingJobs ? "Refreshing…" : "Refresh jobs")
-        </button>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <select class="form-select form-select-sm" style="width:auto"
+                    @bind="_daysBack" @bind:after="OnQueryChangedAsync">
+                <option value="1">Last 24 hours</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="0">All time</option>
+            </select>
+            <select class="form-select form-select-sm" style="width:auto"
+                    @bind="_pageSize" @bind:after="OnQueryChangedAsync">
+                <option value="10">10 per page</option>
+                <option value="15">15 per page</option>
+                <option value="25">25 per page</option>
+                <option value="50">50 per page</option>
+            </select>
+            <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="@_localOnlyCheckboxId"
+                       @bind="_localOnly" @bind:after="OnQueryChangedAsync" />
+                <label class="form-check-label small" for="@_localOnlyCheckboxId">VScanMagic only</label>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    disabled="@(Busy || _loadingJobs || CompanyId <= 0)"
+                    @onclick="() => RefreshAsync()">
+                @(_loadingJobs ? "Refreshing…" : "Refresh jobs")
+            </button>
+        </div>
     </div>
     <div class="card-body">
-        @if (LoadingJobs)
+        @if (_loadingJobs)
         {
             <p class="text-muted mb-0">Loading patch jobs…</p>
         }
-        else if (Jobs.Count == 0)
+        else if (_result.TotalCount == 0)
         {
             <p class="text-muted mb-0">
-                No patch requests recorded for this company yet. Entries appear here after you send patches from VScanMagic.
-                Use <strong>Verify</strong> to re-check installed versions against the remediation target.
+                No patch activity in the selected time range.
+                @if (_localOnly)
+                {
+                    <span>Try clearing <strong>VScanMagic only</strong> or widening the time range.</span>
+                }
+                else
+                {
+                    <span>Entries appear after you send patches from VScanMagic or the ConnectSecure portal.</span>
+                }
             </p>
         }
         else
         {
+            <p class="text-muted small mb-2">
+                Showing @ResultRangeStart–@ResultRangeEnd of @_result.TotalCount
+                @TimeRangeLabel
+            </p>
             <div class="table-responsive">
                 <table class="table table-sm mb-0">
                     <thead class="table-light">
                         <tr>
                             <th>Updated</th>
                             <th>Type</th>
-                            <th>Status</th>
+                            <th>CS status</th>
+                            <th>Version check</th>
                             <th>Host</th>
                             <th>Description</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var job in Jobs)
+                        @foreach (var job in _result.Items)
                         {
                             <tr class="@(string.Equals(_expandedJobId, job.JobId, StringComparison.OrdinalIgnoreCase) ? "table-active" : null)">
                                 <td class="text-nowrap small">@(job.Updated?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
                                 <td>@job.Type</td>
                                 <td>
-                                    <span class="@VerificationStatusClass(job.Status)">@job.Status</span>
+                                    <span class="@JobStatusClass(job.JobStatus)">@job.JobStatus</span>
+                                </td>
+                                <td>
+                                    @if (string.IsNullOrWhiteSpace(job.VersionCheckStatus))
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="@VersionCheckStatusClass(job.VersionCheckStatus)">@job.VersionCheckStatus</span>
+                                    }
                                 </td>
                                 <td class="small">@(string.IsNullOrWhiteSpace(job.HostName) ? "—" : job.HostName)</td>
                                 <td class="small text-muted">@job.Description</td>
@@ -53,7 +97,7 @@
                                         <button type="button" class="btn btn-sm btn-outline-primary"
                                                 disabled="@(_verifyingJobId is not null)"
                                                 @onclick="() => VerifyJobAsync(job.JobId)">
-                                            @(_verifyingJobId == job.JobId ? "Verifying…" : "Verify")
+                                            @(_verifyingJobId == job.JobId ? "Checking…" : "Check version")
                                         </button>
                                     }
                                 </td>
@@ -62,8 +106,18 @@
                                  _verificationResult is not null)
                             {
                                 <tr>
-                                    <td colspan="6" class="bg-light">
-                                        <p class="small mb-2"><strong>@_verificationResult.Summary</strong></p>
+                                    <td colspan="7" class="bg-light">
+                                        @{
+                                            var expandedJob = _result.Items.FirstOrDefault(j =>
+                                                string.Equals(j.JobId, _expandedJobId, StringComparison.OrdinalIgnoreCase));
+                                        }
+                                        <p class="small mb-2">
+                                            <strong>Version check: @_verificationResult.Summary</strong>
+                                            @if (!string.IsNullOrWhiteSpace(expandedJob?.TargetFix))
+                                            {
+                                                <span class="text-muted"> — Target: @PatchCatalogHelper.FormatFixSummary(expandedJob.TargetFix)</span>
+                                            }
+                                        </p>
                                         @if (_verificationResult.Hosts.Count > 0)
                                         {
                                             <div class="table-responsive">
@@ -72,6 +126,7 @@
                                                         <tr>
                                                             <th>Host</th>
                                                             <th>Installed</th>
+                                                            <th>Target</th>
                                                             <th>Result</th>
                                                         </tr>
                                                     </thead>
@@ -81,6 +136,7 @@
                                                             <tr>
                                                                 <td>@host.HostName</td>
                                                                 <td class="small">@(host.InstalledVersion ?? "—")</td>
+                                                                <td class="small text-muted">@(expandedJob?.TargetFix is { Length: > 0 } target ? PatchCatalogHelper.FormatFixSummary(target) : "—")</td>
                                                                 <td>
                                                                     <span class="@HostStatusClass(host.Status)">@host.StatusLabel</span>
                                                                 </td>
@@ -97,22 +153,143 @@
                     </tbody>
                 </table>
             </div>
+            @if (TotalPages > 1)
+            {
+                <div class="d-flex justify-content-between align-items-center mt-2 flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            disabled="@(_page <= 1 || _loadingJobs)"
+                            @onclick="PreviousPageAsync">
+                        Previous
+                    </button>
+                    <span class="text-muted small">Page @_page of @TotalPages</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            disabled="@(_page >= TotalPages || _loadingJobs)"
+                            @onclick="NextPageAsync">
+                        Next
+                    </button>
+                </div>
+            }
         }
     </div>
 </div>
 
 @code {
     [Parameter] public int CompanyId { get; set; }
-    [Parameter] public IReadOnlyList<PatchJobEntry> Jobs { get; set; } = [];
-    [Parameter] public bool LoadingJobs { get; set; }
     [Parameter] public bool Busy { get; set; }
-    [Parameter] public EventCallback OnRefreshJobs { get; set; }
     [Parameter] public EventCallback<string?> VerificationMessageChanged { get; set; }
     [Parameter] public EventCallback<string?> VerificationErrorChanged { get; set; }
 
+    private readonly string _localOnlyCheckboxId = $"local-only-{Guid.NewGuid():N}";
+    private int _loadedCompanyId;
+    private int _loadGeneration;
+    private int _daysBack = 7;
+    private int _pageSize = 15;
+    private int _page = 1;
+    private bool _localOnly;
+    private bool _loadingJobs;
+    private PatchJobListResult _result = new([], 0, 1, 15);
     private string? _verifyingJobId;
     private string? _expandedJobId;
     private PatchVerificationResult? _verificationResult;
+
+    private int TotalPages => _result.PageSize <= 0
+        ? 1
+        : Math.Max(1, (int)Math.Ceiling(_result.TotalCount / (double)_result.PageSize));
+
+    private int ResultRangeStart => _result.TotalCount == 0
+        ? 0
+        : ((_page - 1) * _result.PageSize) + 1;
+
+    private int ResultRangeEnd => _result.TotalCount == 0
+        ? 0
+        : Math.Min(_result.TotalCount, _page * _result.PageSize);
+
+    private string TimeRangeLabel => _daysBack switch
+    {
+        <= 0 => "(all time)",
+        1 => "(last 24 hours)",
+        _ => $"(last {_daysBack} days)"
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (CompanyId > 0 && CompanyId != _loadedCompanyId)
+        {
+            _loadedCompanyId = CompanyId;
+            _page = 1;
+            _loadGeneration++;
+            await LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
+        }
+    }
+
+    public Task RefreshAsync(bool fetchRemoteJobs = true)
+    {
+        _loadGeneration++;
+        return LoadJobsAsync(_loadGeneration, fetchRemoteJobs);
+    }
+
+    private Task OnQueryChangedAsync()
+    {
+        _page = 1;
+        _loadGeneration++;
+        return LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
+    }
+
+    private Task PreviousPageAsync()
+    {
+        if (_page <= 1)
+            return Task.CompletedTask;
+
+        _page--;
+        _loadGeneration++;
+        return LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
+    }
+
+    private Task NextPageAsync()
+    {
+        if (_page >= TotalPages)
+            return Task.CompletedTask;
+
+        _page++;
+        _loadGeneration++;
+        return LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
+    }
+
+    private async Task LoadJobsAsync(int generation, bool fetchRemoteJobs)
+    {
+        if (CompanyId <= 0)
+        {
+            _result = new PatchJobListResult([], 0, 1, _pageSize);
+            return;
+        }
+
+        _loadingJobs = true;
+        try
+        {
+            var query = new PatchJobListQuery(
+                Page: _page,
+                PageSize: _pageSize,
+                DaysBack: _daysBack,
+                PatchJobsOnly: true,
+                LocalOnly: _localOnly);
+
+            var result = await PatchService.GetCompanyJobsAsync(
+                CompanyId,
+                query,
+                fetchRemoteJobs: fetchRemoteJobs);
+
+            if (generation != _loadGeneration)
+                return;
+
+            _result = result;
+            _page = result.Page;
+        }
+        finally
+        {
+            if (generation == _loadGeneration)
+                _loadingJobs = false;
+        }
+    }
 
     public async Task VerifyJobAsync(string jobId)
     {
@@ -129,7 +306,7 @@
         {
             _verificationResult = await PatchService.VerifyPatchActivityAsync(CompanyId, jobId);
             await VerificationMessageChanged.InvokeAsync(_verificationResult.Summary);
-            await OnRefreshJobs.InvokeAsync();
+            await RefreshAsync();
         }
         catch (Exception ex)
         {
@@ -141,7 +318,23 @@
         }
     }
 
-    private static string VerificationStatusClass(string status) =>
+    private static string JobStatusClass(string status)
+    {
+        if (PatchJobCorrelationHelper.IsInProgressJobStatus(status))
+            return "text-primary fw-semibold";
+        if (status.Contains("success", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("complete", StringComparison.OrdinalIgnoreCase))
+            return "text-success fw-semibold";
+        if (status.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("error", StringComparison.OrdinalIgnoreCase))
+            return "text-danger fw-semibold";
+        if (string.Equals(status, "Submitted", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase))
+            return "text-muted";
+        return "";
+    }
+
+    private static string VersionCheckStatusClass(string status) =>
         status switch
         {
             "Verified" => "text-success fw-semibold",

@@ -5,6 +5,7 @@
 @using VScanMagic.Web.Services
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
+@inject ConnectSecureScanService ScanService
 @inject SettingsService Settings
 @inject CompanyListService CompanyList
 
@@ -13,6 +14,7 @@
 <h1>OS Patching</h1>
 <p class="text-muted">
     Pending Windows OS updates from ConnectSecure. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code>. Only online agents can be patched.
+    After patching, use <strong>Refresh inventory</strong> on selected hosts to queue an agent scan (does not install patches). Then use <strong>Check version</strong>.
     Third-party app patching is on <a href="application-patching">Application Patching</a>.
 </p>
 
@@ -61,10 +63,7 @@ else
 {
     <PatchActivityTable @ref="_patchActivityTable"
                         CompanyId="_companyId"
-                        Jobs="_patchJobs"
-                        LoadingJobs="_loadingJobs"
                         Busy="_busy"
-                        OnRefreshJobs="RefreshPatchJobsAsync"
                         VerificationMessageChanged="SetVerificationMessage"
                         VerificationErrorChanged="SetVerificationError" />
 
@@ -137,6 +136,11 @@ else
                                                     <div class="btn-group btn-group-sm">
                                                         <button type="button" class="btn btn-outline-secondary" @onclick="RefreshHostsAsync">Refresh</button>
                                                         <button type="button" class="btn btn-outline-secondary" @onclick="SelectOnline">Select online</button>
+                                                        <button type="button" class="btn btn-outline-secondary"
+                                                                disabled="@(_loadingHosts || _agentUpdateBusy || _selectedAgentIds.Count == 0)"
+                                                                @onclick="RequestAgentUpdateForSelectedAsync">
+                                                            @(_agentUpdateBusy ? "Requesting…" : "Refresh inventory")
+                                                        </button>
                                                         <button type="button" class="btn btn-outline-secondary" @onclick="ClearSelection">Clear</button>
                                                     </div>
                                                 </div>
@@ -231,14 +235,13 @@ else
     private bool _busy;
     private bool _loadingPatches;
     private bool _loadingHosts;
-    private bool _loadingJobs;
     private bool _patching;
+    private bool _agentUpdateBusy;
     private bool _triggerReboot;
     private string? _error;
     private string? _message;
     private List<OsPendingPatchEntry> _osPatches = [];
     private List<PatchHostView> _patchHostViews = [];
-    private List<PatchJobEntry> _patchJobs = [];
     private OsPendingPatchEntry? _expandedPatch;
     private string? _expandedKey;
     private string? _confirmKey;
@@ -311,7 +314,6 @@ else
         _error = null;
         _message = null;
         _osPatches = [];
-        _patchJobs = [];
         _expandedKey = null;
         _expandedPatch = null;
         _confirmKey = null;
@@ -323,10 +325,18 @@ else
     private static string OsExpandCacheKey(int companyId, OsPendingPatchEntry patch) =>
         $"{companyId}:{patch.Fix}:{string.Join(',', patch.AssetIds.OrderBy(id => id))}";
 
-    private async Task LoadOsPatchesAsync()
+    private Task LoadOsPatchesAsync() => LoadOsPatchesAsync(forceRefresh: false);
+
+    private Task RefreshOsPatchesAsync() => LoadOsPatchesAsync(forceRefresh: true);
+
+    private async Task LoadOsPatchesAsync(bool forceRefresh)
     {
         if (!int.TryParse(_selectedCompanyId, out var companyId) || companyId <= 0)
             return;
+
+        var sameCompany = _loaded && _companyId == companyId;
+        if (sameCompany && !forceRefresh)
+            forceRefresh = true;
 
         _companyId = companyId;
         _loaded = true;
@@ -343,11 +353,9 @@ else
 
         try
         {
-            _osPatches = (await PatchService.GetOsPendingPatchesAsync(_companyId, ct: LoadCancellationToken)).ToList();
+            _osPatches = (await PatchService.GetOsPendingPatchesAsync(_companyId, forceRefresh: forceRefresh, ct: LoadCancellationToken)).ToList();
             if (generation != _loadGeneration)
                 return;
-
-            await LoadPatchJobsAsync(generation);
         }
         catch (OperationCanceledException)
         {
@@ -361,31 +369,6 @@ else
         {
             _loadingPatches = false;
             _busy = false;
-        }
-    }
-
-    private Task RefreshPatchJobsAsync() => LoadPatchJobsAsync();
-
-    private async Task LoadPatchJobsAsync(int? generation = null)
-    {
-        if (_companyId <= 0)
-            return;
-
-        _loadingJobs = true;
-        try
-        {
-            var jobs = (await PatchService.GetCompanyJobsAsync(_companyId, patchJobsOnly: true, ct: LoadCancellationToken)).ToList();
-            if (generation is null || generation == _loadGeneration)
-                _patchJobs = jobs;
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _patchJobs = [];
-        }
-        finally
-        {
-            _loadingJobs = false;
         }
     }
 
@@ -447,7 +430,7 @@ else
             if (generation != _expandGeneration)
                 return;
 
-            _patchHostViews = PatchCatalogHelper.BuildHostViews(details, patch.Fix, isEndOfLife: false).ToList();
+            _patchHostViews = (await PatchService.BuildOsPatchHostViewsAsync(_companyId, patch.Fix, details, LoadCancellationToken)).ToList();
             _expandedOsHostCache[cacheKey] = _patchHostViews;
             foreach (var host in _patchHostViews.Where(h => h.Detail.OnlineStatus && h.Detail.AgentId > 0))
                 _selectedAgentIds.Add(host.Detail.AgentId);
@@ -476,10 +459,11 @@ else
         try
         {
             var selected = _patchHostViews.Where(h => _selectedAgentIds.Contains(h.Detail.AgentId)).ToList();
+            var agentIds = selected.Select(h => h.Detail.AgentId).Distinct().ToList();
             var result = await PatchService.PatchOsNowAsync(new ApplicationPatchRequest
             {
                 CompanyId = _companyId,
-                AgentIds = selected.Select(h => h.Detail.AgentId).Distinct().ToList(),
+                AgentIds = agentIds,
                 AssetIds = selected.Select(h => h.Detail.AssetId > 0 ? h.Detail.AssetId : h.Detail.AgentId).Distinct().ToList(),
                 IncludedApplications = [BuildOsProductName(patch)],
                 TriggerReboot = _triggerReboot,
@@ -492,9 +476,10 @@ else
                 OsAssetIds = patch.AssetIds
             });
 
-            _message = $"{result.Message} Use Verify in patch activity after agents finish installing.";
+            _message = await BuildPatchSuccessMessageAsync(result.Message, agentIds);
             _confirmKey = null;
-            await LoadPatchJobsAsync();
+            if (_patchActivityTable is not null)
+                await _patchActivityTable.RefreshAsync();
             await RefreshHostsAsync();
             if (!string.IsNullOrWhiteSpace(result.JobId) && _patchActivityTable is not null)
                 await _patchActivityTable.VerifyJobAsync(result.JobId);
@@ -506,6 +491,43 @@ else
         finally
         {
             _patching = false;
+        }
+    }
+
+    private async Task RequestAgentUpdateForSelectedAsync()
+    {
+        if (_companyId <= 0 || _selectedAgentIds.Count == 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _agentUpdateBusy = true;
+        try
+        {
+            var agentIds = _selectedAgentIds.Where(id => id > 0).Distinct().ToList();
+            var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            _message = $"{result.Message} Use Check version after agents report updated inventory.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _agentUpdateBusy = false;
+        }
+    }
+
+    private async Task<string> BuildPatchSuccessMessageAsync(string patchMessage, IReadOnlyList<int> agentIds)
+    {
+        try
+        {
+            var update = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            return $"{patchMessage} {update.Message} Use Check version after agents finish installing and reporting back.";
+        }
+        catch
+        {
+            return $"{patchMessage} Request agent update on selected hosts, then use Check version after agents report back.";
         }
     }
 

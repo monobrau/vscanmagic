@@ -5,6 +5,7 @@
 @using VScanMagic.Web.Services
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
+@inject ConnectSecureScanService ScanService
 @inject SettingsService Settings
 @inject CompanyListService CompanyList
 @inject LoadTimingDisplay LoadTiming
@@ -15,7 +16,7 @@
 <p class="text-muted">
     Patchable third-party apps from ConnectSecure remediation plan data. ConnectSecure may return multiple rows per product;
     this page groups them by product and deduplicates hosts. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code> — not remediation <code>online_status</code>.
-    Only online agents can be patched.
+    Only online agents can be patched. After patching, use <strong>Refresh inventory</strong> on selected hosts to queue an agent scan (does not install patches). Then use <strong>Check version</strong>.
     See also <a href="os-patching">OS Patching</a> and <a href="vulnerability-suppress">Suppress vulnerabilities</a>.
     <a href="company-review">Company Review</a> covers tenant configuration checks, scan targets, and scan triggers.
 </p>
@@ -69,10 +70,7 @@ else
 {
     <PatchActivityTable @ref="_patchActivityTable"
                         CompanyId="_companyId"
-                        Jobs="_patchJobs"
-                        LoadingJobs="_loadingJobs"
                         Busy="_busy"
-                        OnRefreshJobs="RefreshPatchJobsAsync"
                         VerificationMessageChanged="SetVerificationMessage"
                         VerificationErrorChanged="SetVerificationError" />
 
@@ -94,7 +92,7 @@ else
                 }
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                         disabled="@(_busy || _loadingPatchApps || _companyId <= 0)"
-                        @onclick="LoadPatchableApplicationsAsync">
+                        @onclick="RefreshPatchableApplicationsAsync">
                     Refresh
                 </button>
             </div>
@@ -104,7 +102,7 @@ else
             {
                 <p class="text-muted mb-0">Loading patchable applications…</p>
             }
-            else if (_productGroups.Count == 0)
+            else if (_rawEntryCount == 0)
             {
                 <p class="text-muted mb-0">No patchable applications reported for this company.</p>
             }
@@ -129,7 +127,7 @@ else
 
                 @if (VisibleProductGroups.Count == 0)
                 {
-                    <p class="text-muted mb-0">No products match the current filters.</p>
+                    <p class="text-muted mb-0">No products match the current filters (@_rawEntryCount CS entries loaded).</p>
                 }
                 else
                 {
@@ -201,6 +199,11 @@ else
                                                             <button type="button" class="btn btn-outline-secondary"
                                                                     @onclick="SelectAllOnlinePatchAgents">
                                                                 Select online
+                                                            </button>
+                                                            <button type="button" class="btn btn-outline-secondary"
+                                                                    disabled="@(_loadingPatchAssets || _agentUpdateBusy || _selectedPatchAgentIds.Count == 0)"
+                                                                    @onclick="RequestAgentUpdateForSelectedAsync">
+                                                                @(_agentUpdateBusy ? "Requesting…" : "Refresh inventory")
                                                             </button>
                                                             <button type="button" class="btn btn-outline-secondary"
                                                                     @onclick="ClearPatchAgentSelection">
@@ -321,14 +324,13 @@ else
     private bool _hideEndOfLife;
     private bool _loadingPatchApps;
     private bool _loadingPatchAssets;
-    private bool _loadingJobs;
     private bool _patching;
+    private bool _agentUpdateBusy;
     private string? _expandedProduct;
     private PatchableProductGroup? _expandedProductGroup;
     private string? _confirmProduct;
     private List<PatchAssetDetail> _patchAssetDetails = [];
     private List<PatchHostView> _patchHostViews = [];
-    private List<PatchJobEntry> _patchJobs = [];
     private readonly HashSet<int> _selectedPatchAgentIds = [];
     private readonly Dictionary<string, List<PatchHostView>> _expandedHostCache = new(StringComparer.OrdinalIgnoreCase);
     private int _loadGeneration;
@@ -405,7 +407,6 @@ else
         _allPatchableApps = [];
         _productGroups = [];
         _rawEntryCount = 0;
-        _patchJobs = [];
         _expandedProduct = null;
         _expandedProductGroup = null;
         _confirmProduct = null;
@@ -418,10 +419,18 @@ else
     private static string ExpandCacheKey(int companyId, PatchableProductGroup product) =>
         $"{companyId}:{string.Join(',', product.SolutionIds.OrderBy(id => id))}";
 
-    private async Task LoadPatchableApplicationsAsync()
+    private Task LoadPatchableApplicationsAsync() => LoadPatchableApplicationsAsync(forceRefresh: false);
+
+    private Task RefreshPatchableApplicationsAsync() => LoadPatchableApplicationsAsync(forceRefresh: true);
+
+    private async Task LoadPatchableApplicationsAsync(bool forceRefresh)
     {
         if (!int.TryParse(_selectedCompanyId, out var companyId) || companyId <= 0)
             return;
+
+        var sameCompany = _loaded && _companyId == companyId;
+        if (sameCompany && !forceRefresh)
+            forceRefresh = true; // re-click of Load on the same company should refresh.
 
         _companyId = companyId;
         _loaded = true;
@@ -434,7 +443,7 @@ else
         _selectedPatchAgentIds.Clear();
         _busy = true;
         var generation = ++_loadGeneration;
-        LoadTiming.Start("Load patchable apps");
+        LoadTiming.Start(forceRefresh ? "Refresh patchable apps" : "Load patchable apps");
 
         try
         {
@@ -445,13 +454,13 @@ else
                     SeverityFilter = "all",
                     HideEndOfLife = false
                 },
+                forceRefresh: forceRefresh,
                 ct: LoadCancellationToken)).ToList();
             if (generation != _loadGeneration)
                 return;
 
             ApplyPatchableAppFilters();
             _expandedHostCache.Clear();
-            await LoadPatchJobsAsync(generation);
             LoadTiming.Complete($"{_allPatchableApps.Count} apps");
         }
         catch (OperationCanceledException)
@@ -471,31 +480,6 @@ else
         {
             _loadingPatchApps = false;
             _busy = false;
-        }
-    }
-
-    private Task RefreshPatchJobsAsync() => LoadPatchJobsAsync();
-
-    private async Task LoadPatchJobsAsync(int? generation = null)
-    {
-        if (_companyId <= 0)
-            return;
-
-        _loadingJobs = true;
-        try
-        {
-            var jobs = (await PatchService.GetCompanyJobsAsync(_companyId, patchJobsOnly: true, ct: LoadCancellationToken)).ToList();
-            if (generation is null || generation == _loadGeneration)
-                _patchJobs = jobs;
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _patchJobs = [];
-        }
-        finally
-        {
-            _loadingJobs = false;
         }
     }
 
@@ -530,7 +514,9 @@ else
         _loadingPatchAssets = true;
         try
         {
-            await LoadExpandedHostsAsync(_expandedProductGroup, _expandGeneration);
+            _expandedHostCache.Remove(ExpandCacheKey(_companyId, _expandedProductGroup));
+            PatchService.InvalidatePatchHostsCache(_companyId);
+            await LoadExpandedHostsAsync(_expandedProductGroup, _expandGeneration, useUiCache: false);
         }
         finally
         {
@@ -538,13 +524,13 @@ else
         }
     }
 
-    private async Task LoadExpandedHostsAsync(PatchableProductGroup product, int generation)
+    private async Task LoadExpandedHostsAsync(PatchableProductGroup product, int generation, bool useUiCache = true)
     {
         _loadingPatchAssets = true;
         try
         {
             var cacheKey = ExpandCacheKey(_companyId, product);
-            if (_expandedHostCache.TryGetValue(cacheKey, out var cachedViews))
+            if (useUiCache && _expandedHostCache.TryGetValue(cacheKey, out var cachedViews))
             {
                 if (generation != _expandGeneration)
                     return;
@@ -558,6 +544,7 @@ else
             var details = (await PatchService.GetPatchingAssetDetailsForProductAsync(
                 _companyId,
                 product.SolutionIds,
+                product.Product,
                 LoadCancellationToken)).ToList();
             if (generation != _expandGeneration)
                 return;
@@ -689,9 +676,10 @@ else
                 IsEndOfLife = product.IsEndOfLife
             });
 
-            _message = $"{result.Message} Use Verify in patch activity after agents finish installing.";
+            _message = await BuildPatchSuccessMessageAsync(result.Message, agentIds);
             _confirmProduct = null;
-            await LoadPatchJobsAsync();
+            if (_patchActivityTable is not null)
+                await _patchActivityTable.RefreshAsync();
             if (_expandedProductGroup is not null)
                 await RefreshExpandedHostsAsync();
             if (!string.IsNullOrWhiteSpace(result.JobId) && _patchActivityTable is not null)
@@ -704,6 +692,43 @@ else
         finally
         {
             _patching = false;
+        }
+    }
+
+    private async Task RequestAgentUpdateForSelectedAsync()
+    {
+        if (_companyId <= 0 || _selectedPatchAgentIds.Count == 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _agentUpdateBusy = true;
+        try
+        {
+            var agentIds = _selectedPatchAgentIds.Where(id => id > 0).Distinct().ToList();
+            var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            _message = $"{result.Message} Use Check version after agents report updated inventory (inventory scan only; does not install patches).";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _agentUpdateBusy = false;
+        }
+    }
+
+    private async Task<string> BuildPatchSuccessMessageAsync(string patchMessage, IReadOnlyList<int> agentIds)
+    {
+        try
+        {
+            var update = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            return $"{patchMessage} {update.Message} Use Check version after agents finish installing and reporting back.";
+        }
+        catch
+        {
+            return $"{patchMessage} Request agent update on selected hosts, then use Check version after agents report back.";
         }
     }
 

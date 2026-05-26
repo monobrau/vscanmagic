@@ -1,10 +1,45 @@
 using System.Text.Json;
+using VScanMagic.Core.Services;
 using VScanMagic.ConnectSecure;
 
 namespace VScanMagic.Tests;
 
 public sealed class ConnectSecurePatchServiceTests
 {
+    [Fact]
+    public void ValidateApplicationPatchVersions_RequiresFromVersionsForSemverTargets()
+    {
+        var request = new ApplicationPatchRequest
+        {
+            CompanyId = 1,
+            AssetIds = [24079295],
+            AgentIds = [402780],
+            IncludedApplications = ["Mozilla Firefox"],
+            TargetFix = "151.0.0",
+            FromVersions = []
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ConnectSecurePatchService.ValidateApplicationPatchVersions(request));
+        Assert.Contains("from_versions", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateApplicationPatchVersions_AllowsQualitativeTargetsWithoutVersions()
+    {
+        var request = new ApplicationPatchRequest
+        {
+            CompanyId = 1,
+            AssetIds = [1],
+            AgentIds = [2],
+            IncludedApplications = ["Microsoft 365"],
+            TargetFix = "Latest Patch",
+            FromVersions = []
+        };
+
+        ConnectSecurePatchService.ValidateApplicationPatchVersions(request);
+    }
+
     [Fact]
     public void BuildPatchPayload_PatchNow_IncludesRequiredFields()
     {
@@ -151,6 +186,39 @@ public sealed class PatchCatalogHelperTests
     }
 
     [Fact]
+    public void DetermineHostStatus_MarksQualitativeTargetAsPendingWithoutInstalledVersion()
+    {
+        var status = PatchCatalogHelper.DetermineHostStatus(
+            online: true,
+            isEndOfLife: false,
+            installedVersions: [],
+            targetFix: "Latest Patch");
+
+        Assert.Equal(HostPatchStatus.Pending, status);
+    }
+
+    [Fact]
+    public void DetermineHostStatus_MarksUnknownWhenVersionTargetHasNoInstalledData()
+    {
+        var status = PatchCatalogHelper.DetermineHostStatus(
+            online: true,
+            isEndOfLife: false,
+            installedVersions: [],
+            targetFix: "148.0.7778.179");
+
+        Assert.Equal(HostPatchStatus.Unknown, status);
+    }
+
+    [Fact]
+    public void IsVersionComparableTarget_DetectsSemverAndKbFixes()
+    {
+        Assert.True(PatchCatalogHelper.IsVersionComparableTarget("148.0.7778.179"));
+        Assert.True(PatchCatalogHelper.IsVersionComparableTarget("KB5034765"));
+        Assert.False(PatchCatalogHelper.IsVersionComparableTarget("Latest Patch"));
+        Assert.False(PatchCatalogHelper.IsVersionComparableTarget("Upgrade to supported Operating System is recommended"));
+    }
+
+    [Fact]
     public void DetermineHostStatus_MarksOfflineBeforePending()
     {
         var status = PatchCatalogHelper.DetermineHostStatus(
@@ -172,6 +240,62 @@ public sealed class PatchCatalogHelperTests
             targetFix: "148.0.7778.179");
 
         Assert.Equal(HostPatchStatus.AtTarget, status);
+    }
+
+    [Fact]
+    public void DetermineHostStatus_MarksAtTargetWhenInstalledMatchesFixPrefix()
+    {
+        var status = PatchCatalogHelper.DetermineHostStatus(
+            online: true,
+            isEndOfLife: false,
+            installedVersions: ["3.2.4.0"],
+            targetFix: "3.2.4");
+
+        Assert.Equal(HostPatchStatus.AtTarget, status);
+    }
+
+    [Fact]
+    public void DetermineOsHostStatus_MarksAtTargetWhenKbNoLongerPending()
+    {
+        var detail = new PatchAssetDetail(24076444, "10.0.0.1", "Zillah3", 402714, true, ["Windows 11"], ["10.0.26200"], []);
+        var pendingAssets = new HashSet<int> { 99999 };
+
+        var status = PatchCatalogHelper.DetermineOsHostStatus(
+            online: true,
+            detail,
+            targetFix: "5089549",
+            pendingAssets);
+
+        Assert.Equal(HostPatchStatus.AtTarget, status);
+    }
+
+    [Fact]
+    public void DetermineOsHostStatus_MarksPendingWhenKbStillPending()
+    {
+        var detail = new PatchAssetDetail(24076444, "10.0.0.1", "Zillah3", 402714, true, ["Windows 11"], ["10.0.26200"], []);
+        var pendingAssets = new HashSet<int> { 24076444 };
+
+        var status = PatchCatalogHelper.DetermineOsHostStatus(
+            online: true,
+            detail,
+            targetFix: "KB5089549",
+            pendingAssets);
+
+        Assert.Equal(HostPatchStatus.Pending, status);
+    }
+
+    [Fact]
+    public void BuildOsPendingAssetIndex_MatchesKbWithOrWithoutPrefix()
+    {
+        var pending = new[]
+        {
+            new OsPendingPatchEntry("Windows 11", "10.0.26200", "5089549", 1, [24076444, 99999])
+        };
+
+        var index = PatchCatalogHelper.BuildOsPendingAssetIndex(pending, "KB5089549");
+
+        Assert.Contains(24076444, index);
+        Assert.Contains(99999, index);
     }
 
     [Fact]
@@ -255,6 +379,172 @@ public sealed class PatchCatalogHelperTests
     }
 }
 
+public sealed class PatchJobCorrelationHelperTests
+{
+    [Fact]
+    public void FindBestMatch_LinksByAgentTimeAndProduct()
+    {
+        var local = new PatchActivityEntry(
+            17624,
+            "local-1",
+            "Application Patch",
+            "Submitted",
+            "GIMP on Zillah3.dorks.lan",
+            "Zillah3.dorks.lan",
+            null,
+            new DateTimeOffset(2026, 5, 25, 17, 59, 50, TimeSpan.FromHours(-5)),
+            "Message sent for patch update",
+            [402714],
+            [47],
+            "GIMP",
+            "3.2.4");
+
+        var remote = new PatchJobCorrelationHelper.ParsedConnectSecureJob(
+            "cs-job-123",
+            "Application",
+            "Success",
+            "GIMP — Success: 1, Failed: 0, Pending: 0",
+            "Zillah3.dorks.lan",
+            "10.0.0.1",
+            402714,
+            new DateTimeOffset(2026, 5, 25, 18, 0, 0, TimeSpan.FromHours(-5)),
+            ProductName: "GIMP");
+
+        var match = PatchJobCorrelationHelper.FindBestMatch(local, [remote], new HashSet<string>());
+        Assert.NotNull(match);
+        Assert.Equal("cs-job-123", match!.JobId);
+    }
+
+    [Fact]
+    public void ParsePatchJobViewRow_ParsesPortalFirefoxJob()
+    {
+        const string json = """
+            {
+              "job_id": "ac71ebf5-fcbe-4b57-9995-ff02ae21435a",
+              "job_status": "Initiated",
+              "product_name": "Mozilla Firefox",
+              "type": "Application",
+              "created": "2026-05-26T02:23:16.827459",
+              "msg": [0, 0, 2],
+              "patch_job_details": {
+                "24079295": {
+                  "from_version": "150.0.1",
+                  "host_name": "Roswell.dorks.lan",
+                  "status": "Pending",
+                  "to_version": "151.0.1"
+                }
+              }
+            }
+            """;
+
+        using var doc = JsonDocument.Parse(json);
+        var parsed = PatchJobCorrelationHelper.ParsePatchJobViewRow(doc.RootElement);
+
+        Assert.Equal("ac71ebf5-fcbe-4b57-9995-ff02ae21435a", parsed.JobId);
+        Assert.Equal("Initiated", parsed.Status);
+        Assert.Equal("Mozilla Firefox", parsed.ProductName);
+        Assert.Equal(0, parsed.SuccessCount);
+        Assert.Equal(2, parsed.PendingCount);
+        Assert.Contains(24079295, parsed.AssetIds!);
+        Assert.Contains("Mozilla Firefox", parsed.Description);
+    }
+
+    [Fact]
+    public void FindBestMatch_LinksByAssetProductAndTime()
+    {
+        var local = new PatchActivityEntry(
+            17624,
+            "local-1",
+            "Application Patch",
+            "Submitted",
+            "Mozilla Firefox on Roswell.dorks.lan",
+            "Roswell.dorks.lan",
+            null,
+            new DateTimeOffset(2026, 5, 25, 21, 23, 16, TimeSpan.FromHours(-5)),
+            "Message sent for patch update",
+            [402780],
+            [47],
+            "Mozilla Firefox",
+            "151.0.0",
+            AssetIds: [24079295]);
+
+        var remote = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "ac71ebf5-fcbe-4b57-9995-ff02ae21435a",
+                  "job_status": "Initiated",
+                  "product_name": "Mozilla Firefox",
+                  "type": "Application",
+                  "created": "2026-05-26T02:23:16.827459",
+                  "msg": [0, 0, 1],
+                  "patch_job_details": {
+                    "24079295": { "host_name": "Roswell.dorks.lan", "status": "Pending" }
+                  }
+                }
+                """).RootElement);
+
+        var match = PatchJobCorrelationHelper.FindBestMatch(local, [remote], new HashSet<string>());
+        Assert.NotNull(match);
+        Assert.Equal("ac71ebf5-fcbe-4b57-9995-ff02ae21435a", match!.JobId);
+    }
+
+    [Fact]
+    public void ResolveVersionCheckStatus_PrefersExplicitField()
+    {
+        var entry = new PatchActivityEntry(
+            1,
+            "job",
+            "Application Patch",
+            "Submitted",
+            "desc",
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            null,
+            VersionCheckStatus: "Verified");
+
+        Assert.Equal("Verified", PatchJobCorrelationHelper.ResolveVersionCheckStatus(entry));
+    }
+
+    [Fact]
+    public void PatchJobListQuery_Since_ReturnsNullForAllTime()
+    {
+        var query = new PatchJobListQuery(DaysBack: 0);
+        Assert.Null(query.Since);
+    }
+
+    [Fact]
+    public void PatchJobListQuery_Since_ReturnsCutoffForRecentWindow()
+    {
+        var query = new PatchJobListQuery(DaysBack: 7);
+        Assert.NotNull(query.Since);
+        Assert.True(query.Since!.Value <= DateTimeOffset.Now.AddDays(-6.9));
+    }
+
+    [Fact]
+    public void IsInProgressJobStatus_DetectsPortalStatuses()
+    {
+        Assert.True(PatchJobCorrelationHelper.IsInProgressJobStatus("In Progress"));
+        Assert.True(PatchJobCorrelationHelper.IsInProgressJobStatus("Pending"));
+        Assert.True(PatchJobCorrelationHelper.IsInProgressJobStatus("Initiated"));
+        Assert.False(PatchJobCorrelationHelper.IsTerminalJobStatus("In Progress"));
+        Assert.True(PatchJobCorrelationHelper.IsTerminalJobStatus("Success"));
+    }
+}
+
+public sealed class ConnectSecureJsonReaderTests
+{
+    [Fact]
+    public void ExtractDataArray_WrapsSingleObjectInData()
+    {
+        using var doc = JsonDocument.Parse("""{"status":true,"data":{"solution_id":47,"product":"GIMP"}}""");
+        var rows = ConnectSecureJsonReader.ExtractDataArray(doc.RootElement);
+        Assert.Single(rows);
+        Assert.Equal(47, ConnectSecureJsonReader.GetInt(rows[0], "solution_id"));
+        Assert.Equal("GIMP", ConnectSecureJsonReader.GetString(rows[0], "product"));
+    }
+}
+
 public sealed class AgentConnectivityHelperTests
 {
     [Fact]
@@ -328,6 +618,44 @@ public sealed class ConnectSecurePagedQueryTests
     }
 
     [Fact]
+    public async Task FetchAllPagesByIndexAsync_StopsWhenSkipIgnoredAndPageRepeats()
+    {
+        var batch = Enumerable.Range(1, 5)
+            .Select(i =>
+            {
+                using var doc = JsonDocument.Parse($"{{\"solution_id\":{i}}}");
+                return doc.RootElement.Clone();
+            })
+            .ToList();
+
+        var call = 0;
+        Task<List<JsonElement>> Fetch(Dictionary<string, string> _, CancellationToken __)
+        {
+            call++;
+            return Task.FromResult(batch);
+        }
+
+        var rows = await ConnectSecurePagedQuery.FetchAllPagesByIndexAsync(
+            Fetch,
+            new Dictionary<string, string>(),
+            CancellationToken.None,
+            pageSize: 100,
+            maxPages: 10);
+
+        Assert.Equal(5, rows.Count);
+        Assert.Equal(1, call);
+    }
+
+    [Fact]
+    public void SplitVersionTokens_DedupesSpaceSeparatedDuplicates()
+    {
+        var versions = PatchCatalogHelper.SplitVersionTokens("8.0.5 8.0.5 8.0.5 8.0.26.26169");
+        Assert.Equal(2, versions.Count);
+        Assert.Contains("8.0.5", versions);
+        Assert.Contains("8.0.26.26169", versions);
+    }
+
+    [Fact]
     public void MeetsSeverityFilter_UsesMinimumRank()
     {
         Assert.True(PatchCatalogHelper.MeetsSeverityFilter("Critical", "high+"));
@@ -340,17 +668,17 @@ public sealed class ConnectSecurePagedQueryTests
 public sealed class ConnectSecureCacheServiceTests
 {
     [Fact]
-    public void RemediationPlanCache_ExpiresAfterInvalidate()
+    public void RemediationDatasetCache_ExpiresAfterInvalidate()
     {
         var cache = new ConnectSecureCacheService();
-        var rows = new List<JsonElement>();
-        cache.SetRemediationPlan(42, rows);
+        var dataset = new RemediationDataset(42, DateTimeOffset.UtcNow, []);
+        cache.SetRemediationDataset(42, dataset);
 
-        Assert.True(cache.TryGetRemediationPlan(42, out var cached));
-        Assert.Same(rows, cached);
+        Assert.True(cache.TryGetRemediationDataset(42, out var cached));
+        Assert.Same(dataset, cached);
 
-        cache.InvalidateRemediationPlan(42);
-        Assert.False(cache.TryGetRemediationPlan(42, out _));
+        cache.InvalidateRemediationDataset(42);
+        Assert.False(cache.TryGetRemediationDataset(42, out _));
     }
 
     [Fact]
@@ -369,6 +697,34 @@ public sealed class ConnectSecureCacheServiceTests
     }
 
     [Fact]
+    public void PatchProductHostsCache_IsScopedByProduct()
+    {
+        var cache = new ConnectSecureCacheService();
+        var hosts = new List<PatchAssetDetail>
+        {
+            new(1, "10.0.0.1", "host-a", 10, true, [], [], [])
+        };
+
+        cache.SetPatchProductHosts(7, "MongoDB", hosts);
+        Assert.True(cache.TryGetPatchProductHosts(7, "MongoDB", out var cached));
+        Assert.Single(cached);
+        Assert.False(cache.TryGetPatchProductHosts(7, "Firefox", out _));
+    }
+
+    [Fact]
+    public void InvalidatePatchHosts_ClearsProductScopedCaches()
+    {
+        var cache = new ConnectSecureCacheService();
+        cache.SetPatchProductHosts(42, "MongoDB", [new(1, "10.0.0.1", "host-a", 10, true, [], [], [])]);
+        cache.SetProductRemediationAssetDetails(42, "MongoDB", [new(1, "10.0.0.1", "host-a", 10, true, ["MongoDB"], ["8.0.5"], [])]);
+
+        cache.InvalidatePatchHosts(42);
+
+        Assert.False(cache.TryGetPatchProductHosts(42, "MongoDB", out _));
+        Assert.False(cache.TryGetProductRemediationAssetDetails(42, "MongoDB", out _));
+    }
+
+    [Fact]
     public void InvalidateCompany_ClearsPatchHosts()
     {
         var cache = new ConnectSecureCacheService();
@@ -378,12 +734,12 @@ public sealed class ConnectSecureCacheServiceTests
         };
 
         cache.SetPatchHosts(42, 99, hosts);
-        cache.SetRemediationPlan(42, []);
+        cache.SetRemediationDataset(42, new RemediationDataset(42, DateTimeOffset.UtcNow, []));
         Assert.True(cache.TryGetPatchHosts(42, 99, out _));
 
         cache.InvalidateCompany(42);
 
         Assert.False(cache.TryGetPatchHosts(42, 99, out _));
-        Assert.False(cache.TryGetRemediationPlan(42, out _));
+        Assert.False(cache.TryGetRemediationDataset(42, out _));
     }
 }

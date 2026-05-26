@@ -21,7 +21,11 @@ public sealed record PatchActivityEntry(
     bool IsEndOfLife = false,
     IReadOnlyList<int>? OsAssetIds = null,
     string? VerificationSummary = null,
-    DateTimeOffset? VerifiedAt = null);
+    DateTimeOffset? VerifiedAt = null,
+    string? ConnectSecureJobId = null,
+    string? ConnectSecureJobStatus = null,
+    string? VersionCheckStatus = null,
+    IReadOnlyList<int>? AssetIds = null);
 
 public sealed class PatchActivityHistoryService(string? configDirectory = null)
 {

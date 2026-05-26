@@ -95,11 +95,26 @@ public static class PatchCatalogHelper
     }
 
     public static IReadOnlyList<string> NormalizeVersions(IEnumerable<string> versions) =>
-        versions
-            .Where(version => !string.IsNullOrWhiteSpace(version))
-            .Select(version => version.Trim())
+        SplitVersionTokens(string.Join(' ', versions.Where(v => !string.IsNullOrWhiteSpace(v))));
+
+    public static IReadOnlyList<string> SplitVersionTokens(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+
+        return text
+            .Split([' ', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public static bool ProductNamesMatch(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        return string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
 
     public static string FormatFixSummary(string fix)
     {
@@ -162,10 +177,100 @@ public static class PatchCatalogHelper
             return HostPatchStatus.EndOfLife;
         if (IsAtTargetVersion(installedVersions, targetFix))
             return HostPatchStatus.AtTarget;
-        if (installedVersions.Count > 0 && !string.IsNullOrWhiteSpace(targetFix))
+        if (installedVersions.Count > 0)
+            return HostPatchStatus.Pending;
+        if (!IsVersionComparableTarget(targetFix))
             return HostPatchStatus.Pending;
         return HostPatchStatus.Unknown;
     }
+
+    /// <summary>
+    /// CS sometimes returns qualitative fix text (e.g. "Latest Patch") instead of a semver.
+    /// Those targets cannot be version-checked but online remediation hosts are still patchable.
+    /// </summary>
+    public static bool IsVersionComparableTarget(string? targetFix)
+    {
+        if (string.IsNullOrWhiteSpace(targetFix) || IsEndOfLifeFix(targetFix))
+            return false;
+
+        var trimmed = targetFix.Trim();
+        if (trimmed.Equals("Latest Patch", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            trimmed,
+            @"(\d+(?:\.\d+)+|KB?\d{4,})",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    public static bool IsOsUpdateTarget(string? targetFix) =>
+        !string.IsNullOrWhiteSpace(targetFix) &&
+        System.Text.RegularExpressions.Regex.IsMatch(
+            targetFix.Trim(),
+            @"^(KB)?\d+$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    public static string NormalizeOsUpdateFix(string? fix)
+    {
+        if (string.IsNullOrWhiteSpace(fix))
+            return "";
+
+        var trimmed = fix.Trim();
+        if (trimmed.StartsWith("KB", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..].Trim();
+
+        return trimmed;
+    }
+
+    public static IReadOnlySet<int> BuildOsPendingAssetIndex(
+        IEnumerable<OsPendingPatchEntry> pendingPatches,
+        string targetFix)
+    {
+        var normalizedFix = NormalizeOsUpdateFix(targetFix);
+        if (string.IsNullOrWhiteSpace(normalizedFix))
+            return new HashSet<int>();
+
+        var assetIds = new HashSet<int>();
+        foreach (var entry in pendingPatches)
+        {
+            if (!string.Equals(NormalizeOsUpdateFix(entry.Fix), normalizedFix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            foreach (var assetId in entry.AssetIds.Where(id => id > 0))
+                assetIds.Add(assetId);
+        }
+
+        return assetIds;
+    }
+
+    public static HostPatchStatus DetermineOsHostStatus(
+        bool online,
+        PatchAssetDetail detail,
+        string targetFix,
+        IReadOnlySet<int> pendingAssetIds)
+    {
+        if (!online)
+            return HostPatchStatus.Offline;
+
+        if (!IsOsUpdateTarget(targetFix))
+            return DetermineHostStatus(online, isEndOfLife: false, detail.Versions, targetFix);
+
+        var assetIds = new[] { detail.AssetId, detail.AgentId }.Where(id => id > 0);
+        var stillPending = assetIds.Any(pendingAssetIds.Contains);
+        return stillPending ? HostPatchStatus.Pending : HostPatchStatus.AtTarget;
+    }
+
+    public static IReadOnlyList<PatchHostView> BuildOsHostViews(
+        IEnumerable<PatchAssetDetail> details,
+        string targetFix,
+        IReadOnlySet<int> pendingAssetIds) =>
+        details
+            .Select(detail =>
+            {
+                var status = DetermineOsHostStatus(detail.OnlineStatus, detail, targetFix, pendingAssetIds);
+                return new PatchHostView(detail, status, StatusLabel(status));
+            })
+            .ToList();
 
     public static string StatusLabel(HostPatchStatus status) =>
         status switch
@@ -174,6 +279,7 @@ public static class PatchCatalogHelper
             HostPatchStatus.EndOfLife => "EOL",
             HostPatchStatus.AtTarget => "At target",
             HostPatchStatus.Pending => "Pending patch",
+            HostPatchStatus.Unknown => "Version unknown",
             _ => "Unknown"
         };
 
@@ -309,12 +415,24 @@ public static class PatchCatalogHelper
             if (string.IsNullOrWhiteSpace(normalized))
                 continue;
 
-            if (normalized.Equals(target, StringComparison.OrdinalIgnoreCase))
+            if (VersionTokensMatch(normalized, target))
                 return true;
 
             if (targetFix.Contains(normalized, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
+
+        return false;
+    }
+
+    private static bool VersionTokensMatch(string installed, string target)
+    {
+        if (installed.Equals(target, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (installed.StartsWith(target + ".", StringComparison.OrdinalIgnoreCase) ||
+            target.StartsWith(installed + ".", StringComparison.OrdinalIgnoreCase))
+            return true;
 
         return false;
     }

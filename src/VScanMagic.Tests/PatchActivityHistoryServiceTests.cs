@@ -114,6 +114,7 @@ public sealed class PatchActivityHistoryServiceTests : IDisposable
 
         var updated = found with
         {
+            VersionCheckStatus = "Verified",
             Status = "Verified",
             VerificationSummary = "Verified: 1/1 at target.",
             VerifiedAt = DateTimeOffset.UtcNow
@@ -122,7 +123,7 @@ public sealed class PatchActivityHistoryServiceTests : IDisposable
 
         var reloaded = _service.GetByJobId(100, "job-verify");
         Assert.NotNull(reloaded);
-        Assert.Equal("Verified", reloaded!.Status);
+        Assert.Equal("Verified", reloaded!.VersionCheckStatus);
         Assert.Equal("Verified: 1/1 at target.", reloaded.VerificationSummary);
     }
 }
