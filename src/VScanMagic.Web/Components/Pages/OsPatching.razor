@@ -14,7 +14,7 @@
 <h1>OS Patching</h1>
 <p class="text-muted">
     Pending Windows OS updates from ConnectSecure. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code>. Only online agents can be patched.
-    After patching, use <strong>Refresh inventory</strong> on selected hosts to queue an agent scan (does not install patches). Then use <strong>Check version</strong>.
+    After patching, use <strong>Verify</strong> on the activity row (queues inventory refresh, syncs CS job status, and checks installed versions).
     Third-party app patching is on <a href="application-patching">Application Patching</a>.
 </p>
 
@@ -506,7 +506,7 @@ else
         {
             var agentIds = _selectedAgentIds.Where(id => id > 0).Distinct().ToList();
             var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
-            _message = $"{result.Message} Use Check version after agents report updated inventory.";
+            _message = $"{result.Message} Use Verify on the activity row after agents report updated inventory.";
         }
         catch (Exception ex)
         {
@@ -523,11 +523,11 @@ else
         try
         {
             var update = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
-            return $"{patchMessage} {update.Message} Use Check version after agents finish installing and reporting back.";
+            return $"{patchMessage} {update.Message} Use Verify on the activity row after agents finish installing and reporting back.";
         }
         catch
         {
-            return $"{patchMessage} Request agent update on selected hosts, then use Check version after agents report back.";
+            return $"{patchMessage} Use Verify on the activity row after agents report back.";
         }
     }
 

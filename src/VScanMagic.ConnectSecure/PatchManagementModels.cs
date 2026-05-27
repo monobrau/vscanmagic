@@ -100,7 +100,9 @@ public sealed record PatchVerificationResult(
     int TotalHosts,
     string Summary,
     IReadOnlyList<PatchVerificationHostResult> Hosts,
-    DateTimeOffset VerifiedAt);
+    DateTimeOffset VerifiedAt,
+    string? ConnectSecureInsight = null,
+    string? InventoryRefreshMessage = null);
 
 public enum HostPatchStatus
 {

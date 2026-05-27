@@ -8,7 +8,8 @@ public sealed class ConnectSecurePatchService(
     ConnectSecureClient client,
     PatchActivityHistoryService patchActivityHistory,
     ConnectSecureCacheService cache,
-    ConnectSecureRemediationService remediationService)
+    ConnectSecureRemediationService remediationService,
+    ConnectSecureScanService scanService)
 {
     public async Task<IReadOnlyList<PatchableApplicationEntry>> GetPatchableApplicationsAsync(
         int companyId,
@@ -264,16 +265,6 @@ public sealed class ConnectSecurePatchService(
                 .ToList();
         }
 
-        if (query.LocalOnly)
-        {
-            var localOnly = localEntries
-                .OrderByDescending(entry => entry.RequestedAt)
-                .Select(entry => ToPatchJobEntry(entry, remote: null))
-                .ToList();
-
-            return PageResults(localOnly, page, pageSize);
-        }
-
         var remoteJobs = fetchRemoteJobs
             ? await FetchConnectSecurePatchJobsAsync(companyId, limit: 100, ct)
             : Array.Empty<PatchJobCorrelationHelper.ParsedConnectSecureJob>();
@@ -307,14 +298,17 @@ public sealed class ConnectSecurePatchService(
             merged.Add(ToPatchJobEntry(entry, remote));
         }
 
-        foreach (var remote in remoteJobs)
+        if (!query.LocalOnly)
         {
-            if (string.IsNullOrWhiteSpace(remote.JobId) || linkedRemoteIds.Contains(remote.JobId))
-                continue;
-            if (query.PatchJobsOnly && !PatchJobCorrelationHelper.IsPatchJobType(remote.Type))
-                continue;
+            foreach (var remote in remoteJobs)
+            {
+                if (string.IsNullOrWhiteSpace(remote.JobId) || linkedRemoteIds.Contains(remote.JobId))
+                    continue;
+                if (query.PatchJobsOnly && !PatchJobCorrelationHelper.IsPatchJobType(remote.Type))
+                    continue;
 
-            merged.Add(ToRemotePatchJobEntry(remote));
+                merged.Add(ToRemotePatchJobEntry(remote));
+            }
         }
 
         var ordered = merged
@@ -337,9 +331,16 @@ public sealed class ConnectSecurePatchService(
         return new PatchJobListResult(items, total, page, pageSize);
     }
 
+    public Task<PatchVerificationResult> VerifyPatchActivityAsync(
+        int companyId,
+        string jobId,
+        CancellationToken ct = default) =>
+        VerifyPatchActivityAsync(companyId, jobId, queueInventoryRefresh: false, ct);
+
     public async Task<PatchVerificationResult> VerifyPatchActivityAsync(
         int companyId,
         string jobId,
+        bool queueInventoryRefresh,
         CancellationToken ct = default)
     {
         if (companyId <= 0)
@@ -351,7 +352,19 @@ public sealed class ConnectSecurePatchService(
         if (entry is null)
             throw new InvalidOperationException("Patch activity entry not found.");
 
+        remediationService.Invalidate(companyId);
+        cache.InvalidatePatchHosts(companyId);
+
+        var remoteJob = await RefreshConnectSecureJobForEntryAsync(entry, ct);
+        entry = patchActivityHistory.GetByJobId(companyId, jobId) ?? entry;
+
         var agentIds = entry.AgentIds?.Where(id => id > 0).Distinct().ToList() ?? [];
+        string? inventoryMessage = null;
+        if (queueInventoryRefresh && agentIds.Count > 0)
+        {
+            var scan = await scanService.TriggerAgentUpdatesAsync(companyId, agentIds, ct);
+            inventoryMessage = scan.Message;
+        }
         if (agentIds.Count == 0)
         {
             var unverifiable = PatchCatalogHelper.BuildVerificationResult(jobId, [], []);
@@ -392,9 +405,57 @@ public sealed class ConnectSecurePatchService(
             hostViews = PatchCatalogHelper.BuildHostViews(details, targetFix, isEndOfLife);
         }
 
+        var insight = PatchCatalogHelper.BuildConnectSecureJobInsight(entry, remoteJob);
         var result = PatchCatalogHelper.BuildVerificationResult(jobId, agentIds, hostViews);
+        if (PatchCatalogHelper.ShouldInferRemediationCleared(remoteJob, agentIds.Count, result.TotalHosts))
+        {
+            result = PatchCatalogHelper.BuildRemediationClearedVerificationResult(jobId, agentIds, result.VerifiedAt) with
+            {
+                ConnectSecureInsight = insight,
+                InventoryRefreshMessage = inventoryMessage
+            };
+        }
+        else
+        {
+            result = result with
+            {
+                ConnectSecureInsight = insight,
+                InventoryRefreshMessage = inventoryMessage
+            };
+        }
+
         UpdateVerificationEntry(entry, result);
         return result;
+    }
+
+    private async Task<PatchJobCorrelationHelper.ParsedConnectSecureJob?> RefreshConnectSecureJobForEntryAsync(
+        PatchActivityEntry entry,
+        CancellationToken ct)
+    {
+        var remoteJobs = await FetchConnectSecurePatchJobsAsync(entry.CompanyId, limit: 100, ct);
+        PatchJobCorrelationHelper.ParsedConnectSecureJob? remote = null;
+
+        if (!string.IsNullOrWhiteSpace(entry.ConnectSecureJobId))
+        {
+            remote = remoteJobs.FirstOrDefault(job =>
+                string.Equals(job.JobId, entry.ConnectSecureJobId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        remote ??= PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        if (remote is null || string.IsNullOrWhiteSpace(remote.JobId))
+            return null;
+
+        if (!string.Equals(entry.ConnectSecureJobId, remote.JobId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(entry.ConnectSecureJobStatus, remote.Status, StringComparison.OrdinalIgnoreCase))
+        {
+            patchActivityHistory.UpdateEntry(entry with
+            {
+                ConnectSecureJobId = remote.JobId,
+                ConnectSecureJobStatus = remote.Status
+            });
+        }
+
+        return remote;
     }
 
     public async Task<IReadOnlyList<OsPendingPatchEntry>> GetOsPendingPatchesAsync(
@@ -864,7 +925,6 @@ public sealed class ConnectSecurePatchService(
         patchActivityHistory.UpdateEntry(entry with
         {
             VersionCheckStatus = result.Status,
-            Status = result.Status,
             VerificationSummary = result.Summary,
             VerifiedAt = result.VerifiedAt
         });
@@ -876,19 +936,24 @@ public sealed class ConnectSecurePatchService(
         if (entry is null)
             return;
 
-        await Task.Delay(1500, ct);
-
-        var remoteJobs = await FetchConnectSecurePatchJobsAsync(companyId, limit: 25, ct);
-        var linkedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var match = PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, linkedIds);
-        if (match is null || string.IsNullOrWhiteSpace(match.JobId))
-            return;
-
-        patchActivityHistory.UpdateEntry(entry with
+        for (var attempt = 0; attempt < 4; attempt++)
         {
-            ConnectSecureJobId = match.JobId,
-            ConnectSecureJobStatus = match.Status
-        });
+            if (attempt > 0)
+                await Task.Delay(TimeSpan.FromSeconds(10), ct);
+
+            var remoteJobs = await FetchConnectSecurePatchJobsAsync(companyId, limit: 50, ct);
+            var linkedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var match = PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, linkedIds);
+            if (match is null || string.IsNullOrWhiteSpace(match.JobId))
+                continue;
+
+            patchActivityHistory.UpdateEntry(entry with
+            {
+                ConnectSecureJobId = match.JobId,
+                ConnectSecureJobStatus = match.Status
+            });
+            return;
+        }
     }
 
     private void SyncLocalEntriesWithConnectSecureJobs(
@@ -900,22 +965,44 @@ public sealed class ConnectSecurePatchService(
 
         foreach (var entry in localEntries)
         {
-            var remote = PatchJobCorrelationHelper.FindBestMatch(entry, remoteJobs, linkedRemoteIds);
+            var working = ClearStaleConnectSecureJobLink(entry, remoteJobs);
+            var remote = PatchJobCorrelationHelper.FindBestMatch(working, remoteJobs, linkedRemoteIds);
             if (remote is null || string.IsNullOrWhiteSpace(remote.JobId))
                 continue;
 
             linkedRemoteIds.Add(remote.JobId);
-            var needsUpdate = !string.Equals(entry.ConnectSecureJobId, remote.JobId, StringComparison.OrdinalIgnoreCase) ||
-                              !string.Equals(entry.ConnectSecureJobStatus, remote.Status, StringComparison.OrdinalIgnoreCase);
+            var needsUpdate = !string.Equals(working.ConnectSecureJobId, remote.JobId, StringComparison.OrdinalIgnoreCase) ||
+                              !string.Equals(working.ConnectSecureJobStatus, remote.Status, StringComparison.OrdinalIgnoreCase);
             if (!needsUpdate)
                 continue;
 
-            patchActivityHistory.UpdateEntry(entry with
+            patchActivityHistory.UpdateEntry(working with
             {
                 ConnectSecureJobId = remote.JobId,
                 ConnectSecureJobStatus = remote.Status
             });
         }
+    }
+
+    private PatchActivityEntry ClearStaleConnectSecureJobLink(
+        PatchActivityEntry entry,
+        IReadOnlyList<PatchJobCorrelationHelper.ParsedConnectSecureJob> remoteJobs)
+    {
+        if (string.IsNullOrWhiteSpace(entry.ConnectSecureJobId))
+            return entry;
+
+        var linked = remoteJobs.FirstOrDefault(job =>
+            string.Equals(job.JobId, entry.ConnectSecureJobId, StringComparison.OrdinalIgnoreCase));
+        if (linked is null || PatchJobCorrelationHelper.ProductNameMatches(entry, linked))
+            return entry;
+
+        var cleared = entry with
+        {
+            ConnectSecureJobId = null,
+            ConnectSecureJobStatus = null
+        };
+        patchActivityHistory.UpdateEntry(cleared);
+        return cleared;
     }
 
     private static PatchJobCorrelationHelper.ParsedConnectSecureJob? ResolveLinkedRemoteJob(
@@ -927,7 +1014,7 @@ public sealed class ConnectSecurePatchService(
         {
             var byId = remoteJobs.FirstOrDefault(job =>
                 string.Equals(job.JobId, entry.ConnectSecureJobId, StringComparison.OrdinalIgnoreCase));
-            if (byId is not null)
+            if (byId is not null && PatchJobCorrelationHelper.ProductNameMatches(entry, byId))
                 return byId;
         }
 
@@ -963,17 +1050,14 @@ public sealed class ConnectSecurePatchService(
     {
         var canVerify = entry.AgentIds is { Count: > 0 } &&
                         (entry.SolutionIds is { Count: > 0 } || entry.IsOsPatch);
-        var description = string.IsNullOrWhiteSpace(entry.ConnectSecureMessage)
-            ? entry.Description
-            : $"{entry.Description} — {entry.ConnectSecureMessage}";
+
+        var description = !string.IsNullOrWhiteSpace(remote?.Description)
+            ? remote.Description
+            : entry.Description;
 
         var csJobId = entry.ConnectSecureJobId ?? remote?.JobId;
-        if (!string.IsNullOrWhiteSpace(csJobId))
-            description = $"{description} (CS job {csJobId})";
 
         var versionCheck = PatchJobCorrelationHelper.ResolveVersionCheckStatus(entry);
-        if (!string.IsNullOrWhiteSpace(entry.VerificationSummary))
-            description = $"{description} — Version check: {entry.VerificationSummary}";
 
         var jobStatus = entry.ConnectSecureJobStatus ?? remote?.Status;
         if (string.IsNullOrWhiteSpace(jobStatus))

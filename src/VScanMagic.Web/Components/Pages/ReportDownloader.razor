@@ -102,7 +102,7 @@ else
                 </div>
             </div>
             <div class="card-body">
-                <p class="form-text">Typical quarterly set. Include <strong>All Vulnerabilities</strong> before starting a review on <a href="/">Download &amp; ingest</a>.</p>
+                <p class="form-text">Typical quarterly set. Include <strong>All Vulnerabilities</strong> before starting a review on <a href="/">Start client review</a>.</p>
                 <div class="row">
                     @for (var ri = 0; ri < _bundleReports.Count; ri++)
                     {
@@ -273,8 +273,11 @@ else
         _selectedBundleTypes = _bundleReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         _userSettings = Settings.LoadUserSettings();
-        _outputDirectory = _userSettings.LastOutputDirectory;
-        if (string.IsNullOrWhiteSpace(_outputDirectory))
+        if (!string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath))
+            _outputDirectory = _userSettings.ReportsBasePath.Trim();
+        else if (!string.IsNullOrWhiteSpace(_userSettings.LastOutputDirectory))
+            _outputDirectory = _userSettings.LastOutputDirectory;
+        else
             _outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Downloads");
 
         var creds = Settings.LoadConnectSecureCredentials();
@@ -352,7 +355,7 @@ else
             companyId,
             clientName,
             _scanDate.ToString("yyyy-MM-dd"),
-            _outputDirectory);
+            fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
         return layout.OutputDirectory;
     }
 
@@ -360,7 +363,12 @@ else
     {
         if (_scope == ReportCatalogScope.Global)
         {
-            var layout = PathResolver.Resolve(_userSettings, 0, "Global", _scanDate.ToString("yyyy-MM-dd"), _outputDirectory);
+            var layout = PathResolver.Resolve(
+                _userSettings,
+                0,
+                "Global",
+                _scanDate.ToString("yyyy-MM-dd"),
+                fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
             if (!_outputDirectoryOverridden && layout.UsesStructuredPaths)
                 _outputDirectory = layout.OutputDirectory;
 
@@ -385,7 +393,7 @@ else
             companyId,
             SelectedClientName,
             _scanDate.ToString("yyyy-MM-dd"),
-            _outputDirectory);
+            fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
 
         if (!_outputDirectoryOverridden && companyLayout.UsesStructuredPaths)
             _outputDirectory = companyLayout.OutputDirectory;
@@ -562,7 +570,11 @@ else
                     clientName,
                     outputDir,
                     bundle,
-                    new Progress<string>(m => { _status = m; _ = InvokeAsync(StateHasChanged); }));
+                    new Progress<string>(m =>
+                    {
+                        _status = m;
+                        _ = InvokeAsync(() => { StateHasChanged(); return Task.CompletedTask; });
+                    }));
             }
 
             StandardReportDownloadResult? catalogResult = null;
@@ -574,7 +586,11 @@ else
                     clientName,
                     outputDir,
                     catalogItems,
-                    new Progress<string>(m => { _status = m; _ = InvokeAsync(StateHasChanged); }));
+                    new Progress<string>(m =>
+                    {
+                        _status = m;
+                        _ = InvokeAsync(() => { StateHasChanged(); return Task.CompletedTask; });
+                    }));
             }
 
             var succeeded = new List<DownloadedReport>();
@@ -597,7 +613,7 @@ else
 
             FolderHistory.Add(clientName, outputDir);
             var userSettings = Settings.LoadUserSettings();
-            userSettings.LastOutputDirectory = outputDir;
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(userSettings, outputDir);
             Settings.SaveUserSettings(userSettings);
             _userSettings = userSettings;
             RefreshResolvedOutputPath();
@@ -642,7 +658,8 @@ else
         if (string.IsNullOrEmpty(_downloadedAllVulnsPath))
             return;
 
-        Nav.NavigateTo("/");
+        var path = Uri.EscapeDataString(_downloadedAllVulnsPath);
+        Nav.NavigateTo($"/?allVulns={path}");
     }
 
     private sealed record DownloadUiResult(

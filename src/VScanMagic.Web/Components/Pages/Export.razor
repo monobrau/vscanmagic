@@ -165,7 +165,7 @@ else
             _result = Exporter.ExportAll(_session, layout, options);
             FolderHistory.Add(_session.ClientName, layout.OutputDirectory);
 
-            _userSettings.LastOutputDirectory = layout.OutputDirectory;
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(_userSettings, layout.OutputDirectory);
             Settings.SaveUserSettings(_userSettings);
 
             RefreshResolvedPath();

@@ -35,7 +35,7 @@ public sealed class CompanyFolderMapService
     public void SetFolder(int companyId, string folderName)
     {
         EnsureLoaded();
-        _map[companyId.ToString()] = NormalizeStoredPath(folderName);
+        _map[companyId.ToString()] = ReportPathResolver.SanitizeMappedFolderPath(NormalizeStoredPath(folderName));
         Save();
     }
 
@@ -85,7 +85,7 @@ public sealed class CompanyFolderMapService
             {
                 _map = map.ToDictionary(
                     pair => pair.Key,
-                    pair => NormalizeStoredPath(pair.Value),
+                    pair => ReportPathResolver.SanitizeMappedFolderPath(NormalizeStoredPath(pair.Value)),
                     StringComparer.Ordinal);
             }
         }

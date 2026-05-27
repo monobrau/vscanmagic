@@ -45,6 +45,8 @@ public static class PatchJobCorrelationHelper
             _ => $"{hostNames[0]} +{hostNames.Count - 1} more"
         };
 
+        var hostDetails = ParsePatchJobHostDetails(row);
+
         return new ParsedConnectSecureJob(
             jobId,
             type,
@@ -58,7 +60,8 @@ public static class PatchJobCorrelationHelper
             AssetIds: assetIds,
             SuccessCount: successCount,
             FailedCount: failedCount,
-            PendingCount: pendingCount);
+            PendingCount: pendingCount,
+            HostDetails: hostDetails);
     }
 
     public static ParsedConnectSecureJob? FindBestMatch(
@@ -70,7 +73,7 @@ public static class PatchJobCorrelationHelper
         {
             var linked = remoteJobs.FirstOrDefault(job =>
                 string.Equals(job.JobId, local.ConnectSecureJobId, StringComparison.OrdinalIgnoreCase));
-            if (linked is not null)
+            if (linked is not null && ProductNameMatches(local, linked))
                 return linked;
         }
 
@@ -92,7 +95,25 @@ public static class PatchJobCorrelationHelper
             }
         }
 
-        return bestScore >= 3 ? best : null;
+        if (best is null || bestScore < 3)
+            return null;
+
+        if (!ProductNameMatches(local, best))
+            return null;
+
+        return best;
+    }
+
+    internal static bool ProductNameMatches(PatchActivityEntry local, ParsedConnectSecureJob remote)
+    {
+        if (string.IsNullOrWhiteSpace(local.Product))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(remote.ProductName) &&
+            string.Equals(local.Product, remote.ProductName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return remote.Description.Contains(local.Product, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static int ScoreMatch(PatchActivityEntry local, ParsedConnectSecureJob remote)
@@ -226,24 +247,38 @@ public static class PatchJobCorrelationHelper
 
     private static IReadOnlyList<int> ParsePatchJobAssetIds(JsonElement row, out List<string> hostNames)
     {
-        hostNames = [];
-        var assetIds = new List<int>();
+        var details = ParsePatchJobHostDetails(row);
+        hostNames = details
+            .Select(d => d.HostName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Cast<string>()
+            .ToList();
+        return details.Select(d => d.AssetId).Where(id => id > 0).ToList();
+    }
 
+    private static IReadOnlyList<PatchJobHostDetail> ParsePatchJobHostDetails(JsonElement row)
+    {
+        var results = new List<PatchJobHostDetail>();
         if (!row.TryGetProperty("patch_job_details", out var details) ||
             details.ValueKind != JsonValueKind.Object)
-            return assetIds;
+            return results;
 
         foreach (var property in details.EnumerateObject())
         {
-            if (int.TryParse(property.Name, out var assetId) && assetId > 0)
-                assetIds.Add(assetId);
+            if (!int.TryParse(property.Name, out var assetId) || assetId <= 0)
+                continue;
 
-            var hostName = ConnectSecureJsonReader.GetString(property.Value, "host_name", "hostName");
-            if (!string.IsNullOrWhiteSpace(hostName))
-                hostNames.Add(hostName);
+            var value = property.Value;
+            results.Add(new PatchJobHostDetail(
+                assetId,
+                ConnectSecureJsonReader.GetString(value, "host_name", "hostName"),
+                ConnectSecureJsonReader.GetString(value, "status"),
+                ConnectSecureJsonReader.GetString(value, "status_msg", "statusMsg"),
+                ConnectSecureJsonReader.GetString(value, "from_version", "fromVersion"),
+                ConnectSecureJsonReader.GetString(value, "to_version", "toVersion")));
         }
 
-        return assetIds;
+        return results;
     }
 
     private static bool HostNamesMatch(string left, string right)
@@ -264,6 +299,14 @@ public static class PatchJobCorrelationHelper
         return dot > 0 ? trimmed[..dot] : trimmed;
     }
 
+    public sealed record PatchJobHostDetail(
+        int AssetId,
+        string? HostName,
+        string? Status,
+        string? StatusMessage,
+        string? FromVersion,
+        string? ToVersion);
+
     public sealed record ParsedConnectSecureJob(
         string JobId,
         string Type,
@@ -277,5 +320,6 @@ public static class PatchJobCorrelationHelper
         IReadOnlyList<int>? AssetIds = null,
         int? SuccessCount = null,
         int? FailedCount = null,
-        int? PendingCount = null);
+        int? PendingCount = null,
+        IReadOnlyList<PatchJobHostDetail>? HostDetails = null);
 }

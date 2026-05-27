@@ -17,7 +17,9 @@ public sealed class SettingsService
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<UserSettings>(json, JsonOptions) ?? new UserSettings();
+            var settings = JsonSerializer.Deserialize<UserSettings>(json, JsonOptions) ?? new UserSettings();
+            NormalizeUserSettings(settings);
+            return settings;
         }
         catch
         {
@@ -27,10 +29,20 @@ public sealed class SettingsService
 
     public void SaveUserSettings(UserSettings settings)
     {
+        NormalizeUserSettings(settings);
         var dir = VScanMagicPaths.GetConfigDirectory(settings.SettingsDirectory);
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "VScanMagic_Settings.json");
         File.WriteAllText(path, JsonSerializer.Serialize(settings, JsonOptions));
+    }
+
+    private static void NormalizeUserSettings(UserSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.ReportsBasePath))
+            return;
+
+        settings.ReportsBasePath = ReportPathResolver.NormalizeConfiguredBasePath(settings.ReportsBasePath);
+        settings.LastOutputDirectory = "";
     }
 
     public ConnectSecureCredentials LoadConnectSecureCredentials()

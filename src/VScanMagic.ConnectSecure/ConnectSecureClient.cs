@@ -13,6 +13,8 @@ public sealed class ConnectSecureClient
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly Regex GuidJobIdPattern = new(@"^[a-fA-F0-9-]{36}$", RegexOptions.Compiled);
     private static readonly Regex NumericJobIdPattern = new(@"^\d+$", RegexOptions.Compiled);
+    private static readonly HttpClient DownloadHttp = new() { Timeout = TimeSpan.FromMinutes(30) };
+    private static readonly SemaphoreSlim DownloadFileLock = new(1, 1);
 
     private readonly HttpClient _http;
     private readonly RateLimiter _rateLimiter;
@@ -318,7 +320,14 @@ public sealed class ConnectSecureClient
         return null;
     }
 
-    public async Task DownloadFileFromUrlAsync(string downloadUrl, string outputPath, CancellationToken ct = default)
+    public Task DownloadFileFromUrlAsync(string downloadUrl, string outputPath, CancellationToken ct = default) =>
+        DownloadFileFromUrlAsync(downloadUrl, outputPath, maxAttempts: 5, ct);
+
+    public async Task DownloadFileFromUrlAsync(
+        string downloadUrl,
+        string outputPath,
+        int maxAttempts,
+        CancellationToken ct = default)
     {
         var dir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(dir))
@@ -327,20 +336,62 @@ public sealed class ConnectSecureClient
         var isPresigned = downloadUrl.Contains("r2.cloudflarestorage", StringComparison.OrdinalIgnoreCase) ||
                           downloadUrl.Contains("X-Amz-Signature", StringComparison.OrdinalIgnoreCase);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
-        if (!isPresigned)
+        await DownloadFileLock.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            var (accessToken, userId) = await GetAuthHeadersAsync(ct);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            if (!string.IsNullOrWhiteSpace(userId))
-                request.Headers.TryAddWithoutValidation("X-USER-ID", userId);
-        }
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
+                    if (!isPresigned)
+                    {
+                        var (accessToken, userId) = await GetAuthHeadersAsync(ct).ConfigureAwait(false);
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                        if (!string.IsNullOrWhiteSpace(userId))
+                            request.Headers.TryAddWithoutValidation("X-USER-ID", userId);
+                    }
 
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-        await using var fs = File.Create(outputPath);
-        await response.Content.CopyToAsync(fs, ct);
+                    using var response = await DownloadHttp
+                        .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                        .ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+
+                    var tempPath = outputPath + ".part";
+                    if (File.Exists(tempPath))
+                    {
+                        try { File.Delete(tempPath); } catch { /* best effort */ }
+                    }
+
+                    await using (var fs = File.Create(tempPath))
+                    {
+                        await response.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
+                    }
+
+                    if (File.Exists(outputPath))
+                    {
+                        try { File.Delete(outputPath); } catch { /* replaced below */ }
+                    }
+
+                    File.Move(tempPath, outputPath);
+                    return;
+                }
+                catch (IOException ex) when (attempt < maxAttempts && IsTransientFileLock(ex))
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Min(attempt * 2, 8)), ct).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            DownloadFileLock.Release();
+        }
     }
+
+    private static bool IsTransientFileLock(IOException ex) =>
+        ex.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("used by another process", StringComparison.OrdinalIgnoreCase);
 
     public Task<JsonElement> InvokeAuthenticatedAsync(
         HttpMethod method,
@@ -815,19 +866,48 @@ public sealed class ConnectSecureClient
     {
         if (response.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.String)
         {
-            var s = msg.GetString();
-            if (!string.IsNullOrWhiteSpace(s) && s.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-                return s;
+            var fromMessage = TryParseDownloadUrlString(msg.GetString());
+            if (fromMessage is not null)
+                return fromMessage;
         }
 
         if (response.TryGetProperty("data", out var data))
         {
-            foreach (var prop in new[] { "download_url", "url", "link" })
+            if (data.ValueKind == JsonValueKind.String)
             {
-                if (data.TryGetProperty(prop, out var v))
-                    return v.GetString();
+                var fromDataString = TryParseDownloadUrlString(data.GetString());
+                if (fromDataString is not null)
+                    return fromDataString;
+            }
+            else if (data.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in new[] { "download_url", "url", "link", "file_url", "fileUrl" })
+                {
+                    if (data.TryGetProperty(prop, out var v))
+                    {
+                        var fromProp = TryParseDownloadUrlString(
+                            v.ValueKind == JsonValueKind.String ? v.GetString() : v.ToString());
+                        if (fromProp is not null)
+                            return fromProp;
+                    }
+                }
             }
         }
+
+        return null;
+    }
+
+    private static string? TryParseDownloadUrlString(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("/", StringComparison.Ordinal) ||
+            trimmed.Contains("r2.cloudflarestorage", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("X-Amz-Signature", StringComparison.OrdinalIgnoreCase))
+            return trimmed;
 
         return null;
     }

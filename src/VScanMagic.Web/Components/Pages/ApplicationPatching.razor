@@ -16,7 +16,8 @@
 <p class="text-muted">
     Patchable third-party apps from ConnectSecure remediation plan data. ConnectSecure may return multiple rows per product;
     this page groups them by product and deduplicates hosts. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code> — not remediation <code>online_status</code>.
-    Only online agents can be patched. After patching, use <strong>Refresh inventory</strong> on selected hosts to queue an agent scan (does not install patches). Then use <strong>Check version</strong>.
+    Only online agents can be patched. After patching, use <strong>Verify</strong> on the activity row (queues inventory refresh, syncs CS job status, and checks installed versions).
+    Select products in the table for <strong>Patch all online</strong> (one CS job per product) or bulk <strong>Refresh inventory</strong>. Expand a product to patch specific hosts manually.
     See also <a href="os-patching">OS Patching</a> and <a href="vulnerability-suppress">Suppress vulnerabilities</a>.
     <a href="company-review">Company Review</a> covers tenant configuration checks, scan targets, and scan triggers.
 </p>
@@ -131,10 +132,77 @@ else
                 }
                 else
                 {
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                        <div class="small text-muted">
+                            @_selectedProductNames.Count of @VisibleProductGroups.Count product(s) selected
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button type="button" class="btn btn-outline-secondary"
+                                    disabled="@(_busy || _bulkPatching)"
+                                    @onclick="SelectAllVisibleProducts">
+                                Select all
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary"
+                                    disabled="@(_busy || _bulkPatching || _selectedProductNames.Count == 0)"
+                                    @onclick="ClearProductSelection">
+                                Select none
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary"
+                                    disabled="@(_busy || _bulkPatching || _selectedProductNames.Count == 0 || _agentUpdateBusy)"
+                                    @onclick="BulkRefreshInventoryAsync">
+                                @(_agentUpdateBusy ? "Requesting…" : "Refresh inventory")
+                            </button>
+                            <button type="button" class="btn btn-warning"
+                                    disabled="@(_busy || _bulkPatching || _patching || _selectedProductNames.Count == 0)"
+                                    @onclick="BeginBulkPatchConfirm">
+                                Patch all online
+                            </button>
+                        </div>
+                    </div>
+                    @if (_bulkPatchConfirm)
+                    {
+                        <div class="alert alert-warning py-2 mb-2">
+                            <strong>Patch @_selectedProductNames.Count product(s) now?</strong>
+                            Sends one ConnectSecure patch job per product, using <strong>online</strong> hosts only
+                            (same rules as expanding each product and choosing Patch selected now).
+                            @if (SelectedProductsIncludeEndOfLife())
+                            {
+                                <span> Some selected products are end-of-life; patching may not succeed.</span>
+                            }
+                            <ul class="small mb-2 mt-2">
+                                @foreach (var name in SelectedProductNamesOrdered.Take(8))
+                                {
+                                    <li>@name</li>
+                                }
+                                @if (_selectedProductNames.Count > 8)
+                                {
+                                    <li class="text-muted">…and @(_selectedProductNames.Count - 8) more</li>
+                                }
+                            </ul>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-danger"
+                                        disabled="@_bulkPatching"
+                                        @onclick="ConfirmBulkPatchAllOnlineAsync">
+                                    @(_bulkPatching ? _bulkPatchStatus : "Confirm patch all online")
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        disabled="@_bulkPatching"
+                                        @onclick="CancelBulkPatchConfirm">
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    }
                     <div class="table-responsive">
                         <table class="table table-sm align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
+                                    <th style="width: 2rem;">
+                                        <input class="form-check-input" type="checkbox"
+                                               title="Select all visible products"
+                                               checked="@AllVisibleProductsSelected"
+                                               @onchange="ToggleSelectAllVisibleProducts" />
+                                    </th>
                                     <th>Product</th>
                                     <th>Severity</th>
                                     <th class="text-end">Hosts</th>
@@ -146,7 +214,14 @@ else
                                 @foreach (var product in VisibleProductGroups)
                                 {
                                     var expanded = string.Equals(_expandedProduct, product.Product, StringComparison.OrdinalIgnoreCase);
+                                    var productSelected = _selectedProductNames.Contains(product.Product);
                                     <tr class="@(expanded ? "table-active" : null)">
+                                        <td>
+                                            <input class="form-check-input" type="checkbox"
+                                                   checked="@productSelected"
+                                                   disabled="@(_bulkPatching)"
+                                                   @onchange="e => ToggleProductSelection(product.Product, e.Value is true)" />
+                                        </td>
                                         <td class="fw-semibold">
                                             @product.Product
                                             @if (product.RemediationEntryCount > 1)
@@ -172,7 +247,7 @@ else
                                     @if (expanded)
                                     {
                                         <tr>
-                                            <td colspan="5" class="bg-light">
+                                            <td colspan="6" class="bg-light">
                                                 @if (_loadingPatchAssets)
                                                 {
                                                     <p class="text-muted mb-0 py-2">Loading hosts…</p>
@@ -332,7 +407,11 @@ else
     private List<PatchAssetDetail> _patchAssetDetails = [];
     private List<PatchHostView> _patchHostViews = [];
     private readonly HashSet<int> _selectedPatchAgentIds = [];
+    private readonly HashSet<string> _selectedProductNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<PatchHostView>> _expandedHostCache = new(StringComparer.OrdinalIgnoreCase);
+    private bool _bulkPatchConfirm;
+    private bool _bulkPatching;
+    private string? _bulkPatchStatus;
     private int _loadGeneration;
     private int _expandGeneration;
     private CancellationTokenSource? _loadCts;
@@ -341,6 +420,15 @@ else
     private CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
     private IReadOnlyList<PatchableProductGroup> VisibleProductGroups => _productGroups;
+
+    private IEnumerable<string> SelectedProductNamesOrdered =>
+        VisibleProductGroups
+            .Where(product => _selectedProductNames.Contains(product.Product))
+            .Select(product => product.Product);
+
+    private bool AllVisibleProductsSelected =>
+        VisibleProductGroups.Count > 0 &&
+        VisibleProductGroups.All(product => _selectedProductNames.Contains(product.Product));
 
     protected override async Task OnInitializedAsync()
     {
@@ -413,7 +501,212 @@ else
         _patchAssetDetails = [];
         _patchHostViews = [];
         _selectedPatchAgentIds.Clear();
+        _selectedProductNames.Clear();
         _expandedHostCache.Clear();
+        _bulkPatchConfirm = false;
+        _bulkPatching = false;
+        _bulkPatchStatus = null;
+    }
+
+    private void ToggleProductSelection(string product, bool selected)
+    {
+        if (string.IsNullOrWhiteSpace(product))
+            return;
+
+        if (selected)
+            _selectedProductNames.Add(product);
+        else
+            _selectedProductNames.Remove(product);
+
+        _bulkPatchConfirm = false;
+    }
+
+    private void ToggleSelectAllVisibleProducts(ChangeEventArgs e)
+    {
+        if (e.Value is true)
+            SelectAllVisibleProducts();
+        else
+            ClearProductSelection();
+    }
+
+    private void SelectAllVisibleProducts()
+    {
+        foreach (var product in VisibleProductGroups)
+            _selectedProductNames.Add(product.Product);
+        _bulkPatchConfirm = false;
+    }
+
+    private void ClearProductSelection()
+    {
+        _selectedProductNames.Clear();
+        _bulkPatchConfirm = false;
+    }
+
+    private bool SelectedProductsIncludeEndOfLife() =>
+        VisibleProductGroups.Any(product =>
+            _selectedProductNames.Contains(product.Product) && product.IsEndOfLife);
+
+    private void BeginBulkPatchConfirm()
+    {
+        _confirmProduct = null;
+        _bulkPatchConfirm = true;
+    }
+
+    private void CancelBulkPatchConfirm()
+    {
+        _bulkPatchConfirm = false;
+        _bulkPatchStatus = null;
+    }
+
+    private async Task ConfirmBulkPatchAllOnlineAsync()
+    {
+        if (_companyId <= 0 || _selectedProductNames.Count == 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _bulkPatching = true;
+        _busy = true;
+        _bulkPatchStatus = "Starting…";
+
+        var products = VisibleProductGroups
+            .Where(product => _selectedProductNames.Contains(product.Product))
+            .ToList();
+        var patched = 0;
+        var skipped = 0;
+        var failed = new List<string>();
+
+        try
+        {
+            for (var index = 0; index < products.Count; index++)
+            {
+                var product = products[index];
+                _bulkPatchStatus = $"Patching {product.Product} ({index + 1}/{products.Count})…";
+                await InvokeAsync(StateHasChanged);
+
+                try
+                {
+                    var outcome = await PatchProductOnlineHostsAsync(product);
+                    if (outcome.Patched)
+                        patched++;
+                    else
+                        skipped++;
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"{product.Product}: {ex.Message}");
+                }
+            }
+
+            _bulkPatchConfirm = false;
+            if (_patchActivityTable is not null)
+                await _patchActivityTable.RefreshAsync();
+
+            var parts = new List<string> { $"Bulk patch finished: {patched} product(s) queued." };
+            if (skipped > 0)
+                parts.Add($"{skipped} skipped (no online patchable hosts or missing installed version).");
+            if (failed.Count > 0)
+                parts.Add($"Failed: {string.Join("; ", failed.Take(3))}" + (failed.Count > 3 ? $" (+{failed.Count - 3} more)" : ""));
+            _message = string.Join(" ", parts);
+        }
+        finally
+        {
+            _bulkPatching = false;
+            _bulkPatchStatus = null;
+            _busy = false;
+        }
+    }
+
+    private async Task<(bool Patched, string? Reason)> PatchProductOnlineHostsAsync(PatchableProductGroup product)
+    {
+        var cacheKey = ExpandCacheKey(_companyId, product);
+        List<PatchHostView> hostViews;
+        if (_expandedHostCache.TryGetValue(cacheKey, out var cachedViews))
+        {
+            hostViews = cachedViews;
+        }
+        else
+        {
+            var details = (await PatchService.GetPatchingAssetDetailsForProductAsync(
+                _companyId,
+                product.SolutionIds,
+                product.Product,
+                LoadCancellationToken)).ToList();
+            hostViews = PatchCatalogHelper.BuildHostViews(details, product.TargetFix, product.IsEndOfLife).ToList();
+            _expandedHostCache[cacheKey] = hostViews;
+        }
+
+        var selectedTargets = hostViews
+            .Where(CanSelectHost)
+            .Select(view => view.Detail)
+            .ToList();
+        if (selectedTargets.Count == 0)
+            return (false, "no online hosts");
+
+        var request = BuildPatchRequest(_companyId, product, selectedTargets);
+        ConnectSecurePatchService.ValidateApplicationPatchVersions(request);
+        var result = await PatchService.PatchApplicationsNowAsync(request, LoadCancellationToken);
+        try
+        {
+            await ScanService.TriggerAgentUpdatesAsync(_companyId, request.AgentIds, LoadCancellationToken);
+        }
+        catch
+        {
+            // Patch already queued; inventory refresh is best-effort per product.
+        }
+
+        return (true, result.Message);
+    }
+
+    private async Task BulkRefreshInventoryAsync()
+    {
+        if (_companyId <= 0 || _selectedProductNames.Count == 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _agentUpdateBusy = true;
+        _busy = true;
+
+        try
+        {
+            var agentIds = new HashSet<int>();
+            foreach (var product in VisibleProductGroups.Where(p => _selectedProductNames.Contains(p.Product)))
+            {
+                var cacheKey = ExpandCacheKey(_companyId, product);
+                if (!_expandedHostCache.TryGetValue(cacheKey, out var hostViews))
+                {
+                    var details = await PatchService.GetPatchingAssetDetailsForProductAsync(
+                        _companyId,
+                        product.SolutionIds,
+                        product.Product,
+                        LoadCancellationToken);
+                    hostViews = PatchCatalogHelper.BuildHostViews(details, product.TargetFix, product.IsEndOfLife).ToList();
+                    _expandedHostCache[cacheKey] = hostViews;
+                }
+
+                foreach (var host in hostViews.Where(CanSelectHost))
+                    agentIds.Add(host.Detail.AgentId);
+            }
+
+            if (agentIds.Count == 0)
+            {
+                _message = "No online agents found on selected products.";
+                return;
+            }
+
+            var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds.ToList(), LoadCancellationToken);
+            _message = $"{result.Message} Use Verify on activity rows after agents finish scanning.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _agentUpdateBusy = false;
+            _busy = false;
+        }
     }
 
     private static string ExpandCacheKey(int companyId, PatchableProductGroup product) =>
@@ -441,6 +734,8 @@ else
         _confirmProduct = null;
         _patchAssetDetails = [];
         _selectedPatchAgentIds.Clear();
+        _selectedProductNames.Clear();
+        _bulkPatchConfirm = false;
         _busy = true;
         var generation = ++_loadGeneration;
         LoadTiming.Start(forceRefresh ? "Refresh patchable apps" : "Load patchable apps");
@@ -643,40 +938,10 @@ else
                 .Where(h => _selectedPatchAgentIds.Contains(h.Detail.AgentId))
                 .Select(h => h.Detail)
                 .ToList();
-            var agentIds = selectedTargets.Select(t => t.AgentId).Distinct().ToList();
-            var assetIds = selectedTargets
-                .Select(t => t.AssetId > 0 ? t.AssetId : t.AgentId)
-                .Distinct()
-                .ToList();
-            var fromVersions = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var target in selectedTargets)
-            {
-                var version = target.Versions.FirstOrDefault();
-                if (string.IsNullOrWhiteSpace(version))
-                    continue;
-
-                var versionKey = (target.AssetId > 0 ? target.AssetId : target.AgentId).ToString();
-                fromVersions[versionKey] = version;
-            }
-
-            var result = await PatchService.PatchApplicationsNowAsync(new ApplicationPatchRequest
-            {
-                CompanyId = _companyId,
-                AgentIds = agentIds,
-                AssetIds = assetIds,
-                IncludedApplications = [product.Product],
-                FromVersions = fromVersions,
-                TargetHostNames = selectedTargets
-                    .Select(t => t.HostName)
-                    .Where(name => !string.IsNullOrWhiteSpace(name))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList(),
-                SolutionIds = product.SolutionIds,
-                TargetFix = product.TargetFix,
-                IsEndOfLife = product.IsEndOfLife
-            });
-
-            _message = await BuildPatchSuccessMessageAsync(result.Message, agentIds);
+            var request = BuildPatchRequest(_companyId, product, selectedTargets);
+            ConnectSecurePatchService.ValidateApplicationPatchVersions(request);
+            var result = await PatchService.PatchApplicationsNowAsync(request, LoadCancellationToken);
+            _message = await BuildPatchSuccessMessageAsync(result.Message, request.AgentIds);
             _confirmProduct = null;
             if (_patchActivityTable is not null)
                 await _patchActivityTable.RefreshAsync();
@@ -707,7 +972,7 @@ else
         {
             var agentIds = _selectedPatchAgentIds.Where(id => id > 0).Distinct().ToList();
             var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
-            _message = $"{result.Message} Use Check version after agents report updated inventory (inventory scan only; does not install patches).";
+            _message = $"{result.Message} Use Verify on the activity row after agents report updated inventory.";
         }
         catch (Exception ex)
         {
@@ -719,16 +984,55 @@ else
         }
     }
 
+    private static ApplicationPatchRequest BuildPatchRequest(
+        int companyId,
+        PatchableProductGroup product,
+        IReadOnlyList<PatchAssetDetail> selectedTargets)
+    {
+        var agentIds = selectedTargets.Select(t => t.AgentId).Distinct().ToList();
+        var assetIds = selectedTargets
+            .Select(t => t.AssetId > 0 ? t.AssetId : t.AgentId)
+            .Distinct()
+            .ToList();
+        var fromVersions = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var target in selectedTargets)
+        {
+            var version = target.Versions.FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(version))
+                continue;
+
+            var versionKey = (target.AssetId > 0 ? target.AssetId : target.AgentId).ToString();
+            fromVersions[versionKey] = version;
+        }
+
+        return new ApplicationPatchRequest
+        {
+            CompanyId = companyId,
+            AgentIds = agentIds,
+            AssetIds = assetIds,
+            IncludedApplications = [product.Product],
+            FromVersions = fromVersions,
+            TargetHostNames = selectedTargets
+                .Select(t => t.HostName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            SolutionIds = product.SolutionIds,
+            TargetFix = product.TargetFix,
+            IsEndOfLife = product.IsEndOfLife
+        };
+    }
+
     private async Task<string> BuildPatchSuccessMessageAsync(string patchMessage, IReadOnlyList<int> agentIds)
     {
         try
         {
             var update = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
-            return $"{patchMessage} {update.Message} Use Check version after agents finish installing and reporting back.";
+            return $"{patchMessage} {update.Message} Use Verify on the activity row after agents finish installing and reporting back.";
         }
         catch
         {
-            return $"{patchMessage} Request agent update on selected hosts, then use Check version after agents report back.";
+            return $"{patchMessage} Use Verify on the activity row after agents report back.";
         }
     }
 

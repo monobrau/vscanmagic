@@ -6,22 +6,25 @@
 @using VScanMagic.Core.Services
 @using VScanMagic.Review
 @using VScanMagic.Review.Services
+@using VScanMagic.Web.Helpers
+@using VScanMagic.Web.Services
 @inject VulnerabilityPipeline Pipeline
 @inject ReviewSessionFactory SessionFactory
 @inject IReviewSessionRepository SessionRepo
 @inject SettingsService Settings
 @inject ConnectSecureClient CsClient
+@inject ConnectSecureReportService ReportService
 @inject ReportPathResolver PathResolver
+@inject ReportFolderHistoryService FolderHistory
 @inject RmitPlusSettingsService RmitPlusSettings
 @inject NavigationManager Nav
 
 <PageTitle>Start client review</PageTitle>
 
 <div class="home-hero mb-4">
-    <h1 class="home-hero-title">Start client review <HelpTip Text="The main VScanMagic workflow: ingest All Vulnerabilities, walk findings on a call, then export deliverables." /></h1>
+    <h1 class="home-hero-title">Start client review <HelpTip Text="Download All Vulnerabilities from ConnectSecure (or use a local file), then run the live review session." /></h1>
     <p class="home-hero-lead mb-0">
-        Upload the ConnectSecure <strong>All Vulnerabilities</strong> XLSX, then run the live review session.
-        Downloading reports from ConnectSecure is a separate prep step when you need fresh files.
+        Download or upload the ConnectSecure <strong>All Vulnerabilities</strong> XLSX, then run the live review session.
     </p>
 </div>
 
@@ -46,7 +49,7 @@
                 </div>
                 @if (!CsClient.IsConfigured)
                 {
-                    <div class="form-text text-warning">Configure ConnectSecure on <a href="/settings">Settings</a> to load companies.</div>
+                    <div class="form-text text-warning">Configure ConnectSecure on <a href="/settings">Settings</a> to load companies and download reports.</div>
                 }
             </div>
             <div class="col-md-6">
@@ -64,7 +67,7 @@
 
         <div class="row mb-3">
             <div class="col-md-6">
-                <label class="form-label">Scan date <HelpTip Text="Shown on exports; used for year-quarter folder paths when exporting deliverables." /></label>
+                <label class="form-label">Scan date <HelpTip Text="Shown on exports; used for year-quarter folder paths when downloading and exporting deliverables." /></label>
                 <input class="form-control" type="date" @bind="_scanDate" @bind:after="RefreshResolvedOutputPath" />
             </div>
             <div class="col-md-6">
@@ -73,10 +76,78 @@
             </div>
         </div>
 
+        @if (CsClient.IsConfigured)
+        {
+            <div class="home-download-section mb-4 pb-3 border-bottom">
+                <h2 class="h6 mb-3">1. Download from ConnectSecure <HelpTip Text="Standard quarterly bundle. All Vulnerabilities is selected below for the review session." /></h2>
+                <div class="mb-3">
+                    <label class="form-label">Output directory <HelpTip Text="Quarterly folder under Reports Base Path when configured. Downloads and exports land here." AlignEnd="true" /></label>
+                    <input class="form-control" @bind="_outputDirectory" @bind:after="OnOutputDirectoryChanged" />
+                    @if (!string.IsNullOrWhiteSpace(_resolvedPathHint))
+                    {
+                        <div class="form-text">@_resolvedPathHint</div>
+                    }
+                </div>
+
+                <p class="fw-semibold mb-2 small">Standard reports</p>
+                <div class="row mb-1">
+                    @for (var ri = 0; ri < _standardReports.Count; ri++)
+                    {
+                        var report = _standardReports[ri];
+                        var reportIndex = ri;
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" checked="@GetReportSelected(report.Type)"
+                                       @onclick="e => OnReportCheckboxClick(reportIndex, e)" @onclick:preventDefault
+                                       id="@($"rep_{report.Type}")" />
+                                <label class="form-check-label" for="@($"rep_{report.Type}")">@report.Name (@report.Extension.ToUpperInvariant())</label>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <p class="form-text mb-3">Shift-click to select a range. Include <strong>All Vulnerabilities</strong> to start the review below.</p>
+
+                <button class="btn btn-success" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="DownloadStandardReports">
+                    Download selected reports
+                </button>
+
+                @if (_downloadResult is not null)
+                {
+                    <div class="alert alert-success mt-3 mb-0 py-2">
+                        <strong>Download complete.</strong> Saved to <code class="small">@_downloadResult.OutputDirectory</code>
+                        @if (_downloadResult.Succeeded.Count > 0)
+                        {
+                            <ul class="mb-0 mt-2 small">
+                                @foreach (var s in _downloadResult.Succeeded)
+                                {
+                                    <li>@s.Name</li>
+                                }
+                            </ul>
+                        }
+                        @if (_downloadResult.Failed.Count > 0)
+                        {
+                            <p class="text-danger mb-0 mt-2 small">Failed:</p>
+                            <ul class="mb-0 small">
+                                @foreach (var f in _downloadResult.Failed)
+                                {
+                                    <li>@f.Name: @f.Error</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <h2 class="h6 mb-3">@(CsClient.IsConfigured ? "2. " : "")Start review from All Vulnerabilities</h2>
         <div class="mb-3">
-            <label class="form-label">All Vulnerabilities XLSX <HelpTip Text="Required source file. Use Report downloader if you do not have this file yet — not Top Ten Data alone." AlignEnd="true" /></label>
+            <label class="form-label">All Vulnerabilities XLSX <HelpTip Text="Required source file — filled automatically after download, or upload/paste a path. Not Top Ten Data alone." AlignEnd="true" /></label>
             <InputFile OnChange="OnFileSelected" accept=".xlsx,.xls" class="form-control mb-2" />
             <input class="form-control" @bind="_filePath" placeholder="Or path to All Vulnerabilities.xlsx" />
+            @if (!string.IsNullOrEmpty(_downloadedAllVulnsPath) && string.Equals(_filePath, _downloadedAllVulnsPath, StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="form-text text-success">Using file from the download above.</div>
+            }
         </div>
 
         <p class="text-muted small mb-3">
@@ -93,30 +164,32 @@
             <div class="alert alert-danger py-2">@_error</div>
         }
 
-        <button class="btn btn-primary btn-lg home-start-btn" disabled="@(_busy || string.IsNullOrWhiteSpace(SelectedCompanyName))" @onclick="StartReview">
-            Start review session
-        </button>
-    </div>
-</div>
-
-<div class="card home-prep-card mb-3">
-    <div class="card-body py-3 d-flex flex-wrap align-items-center justify-content-between gap-3">
-        <div>
-            <div class="text-muted text-uppercase small fw-semibold mb-1">Prep step</div>
-            <strong>Download ConnectSecure reports</strong>
-            <span class="text-muted ms-1">— standard bundle, full catalog, or global reports</span>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary btn-lg home-start-btn" disabled="@(_busy || string.IsNullOrWhiteSpace(SelectedCompanyName))" @onclick="StartReview">
+                Start review session
+            </button>
+            @if (!string.IsNullOrEmpty(_downloadedAllVulnsPath))
+            {
+                <button class="btn btn-outline-primary btn-lg" disabled="@_busy" @onclick="StartReviewFromDownload">
+                    Start review from download
+                </button>
+            }
         </div>
-        <a class="btn btn-outline-secondary" href="/report-downloader">Open report downloader</a>
     </div>
 </div>
 
 <div class="text-center small text-muted">
     <a href="/help">Workflow guide</a>
     ·
+    <a href="/report-downloader">Report downloader</a> (catalog / global)
+    ·
     <a href="/sessions">Review sessions</a>
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "allVulns")]
+    public string? AllVulnsFromQuery { get; set; }
+
     private DateTime _scanDate = DateTime.Today;
     private string _presenter = "";
     private string _filePath = "";
@@ -127,8 +200,14 @@
     private bool _busy;
     private string _selectedCompanyId = "";
     private List<CompanyInfo> _companies = [];
+    private List<StandardReportRequest> _standardReports = [];
+    private HashSet<string> _selectedReportTypes = new(StringComparer.OrdinalIgnoreCase);
+    private DownloadUiResult? _downloadResult;
+    private string? _downloadedAllVulnsPath;
+    private string? _resolvedPathHint;
     private UserSettings _userSettings = new();
     private bool _isRmitPlus;
+    private readonly CheckboxRangeColumn _reportSelectRange = new();
 
     private string SelectedCompanyName =>
         _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
@@ -148,30 +227,54 @@
             : RmitPlusSettings.GetOrDefault(name);
     }
 
+    private void OnOutputDirectoryChanged() => _resolvedPathHint = null;
+
     private void RefreshResolvedOutputPath()
     {
         if (string.IsNullOrEmpty(_selectedCompanyId) || !int.TryParse(_selectedCompanyId, out var companyId))
+        {
+            _resolvedPathHint = string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath)
+                ? null
+                : "Reports Base Path is set — select a company to resolve the client/quarter folder.";
             return;
+        }
 
         var layout = PathResolver.Resolve(
             _userSettings,
             companyId,
             SelectedCompanyName,
             _scanDate.ToString("yyyy-MM-dd"),
-            _outputDirectory);
+            fallbackPath: null);
 
         if (layout.UsesStructuredPaths)
+        {
             _outputDirectory = layout.OutputDirectory;
+            _resolvedPathHint = layout.ReportsPathPartial is not null
+                ? $"Resolved under Reports Base Path: ...\\{layout.ReportsPathPartial}"
+                : $"Resolved under Reports Base Path: {layout.OutputDirectory}";
+        }
+        else
+        {
+            _resolvedPathHint = null;
+        }
     }
 
     protected override async Task OnInitializedAsync()
     {
+        _standardReports = StandardReportCatalog.DefaultCompanyReports.ToList();
+        _selectedReportTypes = _standardReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var userSettings = Settings.LoadUserSettings();
         _userSettings = userSettings;
         _presenter = userSettings.PreparedBy;
-        _outputDirectory = userSettings.LastOutputDirectory;
-        if (string.IsNullOrWhiteSpace(_outputDirectory))
+        if (!string.IsNullOrWhiteSpace(userSettings.ReportsBasePath))
+            _outputDirectory = userSettings.ReportsBasePath.Trim();
+        else if (!string.IsNullOrWhiteSpace(userSettings.LastOutputDirectory))
+            _outputDirectory = userSettings.LastOutputDirectory;
+        else
             _outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Downloads");
+
+        ApplyAllVulnsFromQuery();
 
         var creds = Settings.LoadConnectSecureCredentials();
         if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
@@ -181,6 +284,41 @@
         }
 
         RefreshResolvedOutputPath();
+    }
+
+    protected override void OnParametersSet() => ApplyAllVulnsFromQuery();
+
+    private void ApplyAllVulnsFromQuery()
+    {
+        if (string.IsNullOrWhiteSpace(AllVulnsFromQuery))
+            return;
+
+        var path = Uri.UnescapeDataString(AllVulnsFromQuery);
+        if (!File.Exists(path))
+            return;
+
+        _filePath = path;
+        _downloadedAllVulnsPath = path;
+        _status = "All Vulnerabilities file loaded from Report downloader.";
+    }
+
+    private bool GetReportSelected(string type) => _selectedReportTypes.Contains(type);
+
+    private void SetReportSelected(string type, bool selected)
+    {
+        if (selected) _selectedReportTypes.Add(type);
+        else _selectedReportTypes.Remove(type);
+    }
+
+    private void OnReportCheckboxClick(int index, MouseEventArgs e)
+    {
+        if (index < 0 || index >= _standardReports.Count)
+            return;
+
+        var type = _standardReports[index].Type;
+        var newValue = !GetReportSelected(type);
+        _reportSelectRange.Click(index, newValue, e, (i, on) =>
+            SetReportSelected(_standardReports[i].Type, on));
     }
 
     private async Task OnFileSelected(InputFileChangeEventArgs e)
@@ -196,13 +334,113 @@
         _status = $"Uploaded {file.Name}";
     }
 
+    private async Task DownloadStandardReports()
+    {
+        _error = null;
+        _status = null;
+        _downloadResult = null;
+        _downloadedAllVulnsPath = null;
+
+        if (string.IsNullOrEmpty(_selectedCompanyId))
+        {
+            _error = "Select a company.";
+            return;
+        }
+
+        if (!int.TryParse(_selectedCompanyId, out var companyId))
+        {
+            _error = "Invalid company ID.";
+            return;
+        }
+
+        var clientName = SelectedCompanyName.Trim();
+        if (string.IsNullOrWhiteSpace(clientName))
+        {
+            _error = "Select a company with a valid name.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var layout = PathResolver.Resolve(
+                _userSettings,
+                companyId,
+                clientName,
+                _scanDate.ToString("yyyy-MM-dd"),
+                fallbackPath: null);
+            var outputDir = layout.OutputDirectory;
+            _outputDirectory = outputDir;
+
+            var reports = _standardReports.Where(r => _selectedReportTypes.Contains(r.Type)).ToList();
+            var result = await ReportService.DownloadStandardReportsAsync(
+                companyId,
+                clientName,
+                _scanDate.ToString("yyyy-MM-dd"),
+                outputDir,
+                reports,
+                new Progress<string>(m =>
+                {
+                    _status = m;
+                    _ = InvokeAsync(() =>
+                    {
+                        StateHasChanged();
+                        return Task.CompletedTask;
+                    });
+                }),
+                CancellationToken.None);
+
+            _downloadResult = new DownloadUiResult(outputDir, result.Succeeded.ToList(), result.Failed.ToList());
+            _downloadedAllVulnsPath = result.Succeeded
+                .FirstOrDefault(s => s.Name.Contains("All Vulnerabilities", StringComparison.OrdinalIgnoreCase))?.Path;
+
+            if (!string.IsNullOrEmpty(_downloadedAllVulnsPath))
+            {
+                _filePath = _downloadedAllVulnsPath;
+                _status = "All Vulnerabilities ready — start the review session below.";
+            }
+            else
+            {
+                _status = $"Downloaded {result.Succeeded.Count} report(s), {result.Failed.Count} failed. Select All Vulnerabilities in the bundle to ingest.";
+            }
+
+            FolderHistory.Add(clientName, outputDir);
+
+            var userSettings = Settings.LoadUserSettings();
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(userSettings, outputDir);
+            Settings.SaveUserSettings(userSettings);
+            _userSettings = userSettings;
+
+            RefreshResolvedOutputPath();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task StartReviewFromDownload()
+    {
+        if (string.IsNullOrEmpty(_downloadedAllVulnsPath))
+            return;
+
+        _filePath = _downloadedAllVulnsPath;
+        await StartReview();
+    }
+
     private async Task StartReview()
     {
         _error = null;
         var path = string.IsNullOrWhiteSpace(_filePath) ? _uploadedPath : _filePath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            _error = "Please upload or specify a valid All Vulnerabilities XLSX. Use Report downloader if you need to pull it from ConnectSecure first.";
+            _error = CsClient.IsConfigured
+                ? "Upload or download the All Vulnerabilities XLSX above (not Top Ten Data alone)."
+                : "Please upload or specify a valid All Vulnerabilities XLSX.";
             return;
         }
 
@@ -277,4 +515,6 @@
             _busy = false;
         }
     }
+
+    private sealed record DownloadUiResult(string OutputDirectory, List<DownloadedReport> Succeeded, List<FailedReport> Failed);
 }

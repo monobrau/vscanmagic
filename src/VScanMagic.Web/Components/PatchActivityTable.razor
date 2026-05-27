@@ -96,8 +96,9 @@
                                     {
                                         <button type="button" class="btn btn-sm btn-outline-primary"
                                                 disabled="@(_verifyingJobId is not null)"
+                                                title="Queue inventory refresh on patched hosts, sync ConnectSecure job status, and compare installed versions."
                                                 @onclick="() => VerifyJobAsync(job.JobId)">
-                                            @(_verifyingJobId == job.JobId ? "Checking…" : "Check version")
+                                            @(_verifyingJobId == job.JobId ? "Verifying…" : "Verify")
                                         </button>
                                     }
                                 </td>
@@ -118,6 +119,19 @@
                                                 <span class="text-muted"> — Target: @PatchCatalogHelper.FormatFixSummary(expandedJob.TargetFix)</span>
                                             }
                                         </p>
+                                        @if (!string.IsNullOrWhiteSpace(_verificationResult.InventoryRefreshMessage))
+                                        {
+                                            <p class="small mb-2 text-muted">
+                                                <strong>Inventory:</strong> @_verificationResult.InventoryRefreshMessage
+                                                Re-run <strong>Verify</strong> after agents finish scanning if versions are still pending.
+                                            </p>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(_verificationResult.ConnectSecureInsight))
+                                        {
+                                            <p class="small mb-2 text-warning-emphasis">
+                                                <strong>ConnectSecure job:</strong> @_verificationResult.ConnectSecureInsight
+                                            </p>
+                                        }
                                         @if (_verificationResult.Hosts.Count > 0)
                                         {
                                             <div class="table-responsive">
@@ -304,8 +318,14 @@
 
         try
         {
-            _verificationResult = await PatchService.VerifyPatchActivityAsync(CompanyId, jobId);
-            await VerificationMessageChanged.InvokeAsync(_verificationResult.Summary);
+            _verificationResult = await PatchService.VerifyPatchActivityAsync(
+                CompanyId,
+                jobId,
+                queueInventoryRefresh: true);
+            var banner = string.IsNullOrWhiteSpace(_verificationResult.InventoryRefreshMessage)
+                ? _verificationResult.Summary
+                : $"{_verificationResult.InventoryRefreshMessage} {_verificationResult.Summary}";
+            await VerificationMessageChanged.InvokeAsync(banner);
             await RefreshAsync();
         }
         catch (Exception ex)

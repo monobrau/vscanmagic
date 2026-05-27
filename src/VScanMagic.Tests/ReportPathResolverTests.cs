@@ -67,7 +67,9 @@ public sealed class ReportPathResolverTests : IDisposable
     public void ResolveVulnerabilityScansSubpath_AppendsNetworkDocumentationWhenMissing()
     {
         var result = ReportPathResolver.ResolveVulnerabilityScansSubpath("Contoso");
-        Assert.Equal(Path.Combine("Contoso", "Network Documentation", "Vulnerability Scans"), result);
+        Assert.Equal(
+            Path.Combine("Contoso", "Network Documentation", "Vulnerability Scans"),
+            result.Replace('/', Path.DirectorySeparatorChar));
     }
 
     [Fact]
@@ -109,7 +111,7 @@ public sealed class ReportPathResolverTests : IDisposable
         Directory.CreateDirectory(Path.Combine(clientFolder, "2026 - Q2 2026-05-25"));
 
         var settings = new UserSettings { ReportsBasePath = basePath };
-        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-05-25", _root);
+        var layout = _resolver.Resolve(settings, 0, "Fabrikam Industries Inc", "2026-05-25", _root);
 
         Assert.True(layout.UsesStructuredPaths);
         Assert.Contains("2026 - Q2 2026-05-25_", layout.OutputDirectory);
@@ -148,13 +150,14 @@ public sealed class ReportPathResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_WithBasePathConfigured_UsesClientQuarterOnFallbackWhenBaseMissing()
+    public void Resolve_WithBasePathConfigured_UsesConfiguredBaseNotDeepFallbackWhenBaseMissing()
     {
-        var fallback = Path.Combine(_root, "flat");
+        var fallback = Path.Combine(_root, "flat", "Global", "2026 - Q2", "Nested Client", "2026 - Q2");
         Directory.CreateDirectory(fallback);
+        var configuredBase = Path.Combine(_root, "ReportsBase");
         var settings = new UserSettings
         {
-            ReportsBasePath = Path.Combine(_root, "missing-base"),
+            ReportsBasePath = configuredBase,
             LastOutputDirectory = fallback
         };
 
@@ -162,9 +165,56 @@ public sealed class ReportPathResolverTests : IDisposable
 
         Assert.True(layout.UsesStructuredPaths);
         Assert.False(layout.UsesMiscSubfolder);
+        Assert.StartsWith(configuredBase, layout.OutputDirectory);
         Assert.EndsWith(Path.Combine("Unknown Client", "2026 - Q1"), layout.OutputDirectory);
-        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
+        Assert.DoesNotContain("flat", layout.OutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
+    }
+
+    [Fact]
+    public void Resolve_WithBasePath_DoesNotNestWhenFallbackIsPriorQuarterOutput()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        Directory.CreateDirectory(basePath);
+        _folderMap.SetFolder(12345, "Accurate Metal Products/Network Documentation/Vulnerability Scans");
+        var clientFolder = Path.Combine(basePath, "Accurate Metal Products", "Network Documentation", "Vulnerability Scans");
+        var priorOutput = Path.Combine(clientFolder, "2026 - Q2 2026-05-26_101012");
+        Directory.CreateDirectory(priorOutput);
+
+        var settings = new UserSettings
+        {
+            ReportsBasePath = basePath,
+            LastOutputDirectory = priorOutput
+        };
+
+        var layout = _resolver.Resolve(settings, 12345, "Accurate Metal Products Inc", "2026-05-26", priorOutput);
+
+        Assert.True(layout.UsesStructuredPaths);
+        Assert.StartsWith(clientFolder, layout.OutputDirectory);
+        Assert.DoesNotContain(Path.Combine("2026 - Q2", "Accurate Metal Products"), layout.OutputDirectory);
+    }
+
+    [Fact]
+    public void SanitizeMappedFolderPath_StripsQuarterSegments()
+    {
+        var input = @"Accurate Metal Products\Network Documentation\Vulnerability Scans\2026 - Q2\Accurate Metal Products\2026 - Q2";
+        var sanitized = ReportPathResolver.SanitizeMappedFolderPath(input);
+        Assert.Equal(@"Accurate Metal Products\Network Documentation\Vulnerability Scans", sanitized);
+    }
+
+    [Fact]
+    public void NormalizeConfiguredBasePath_StripsQuarterFolderAndFindsGlobalRoot()
+    {
+        var nested = Path.Combine(_root, "Global", "2026 - Q2", "Global", "2026 - Q2");
+        var normalized = ReportPathResolver.NormalizeConfiguredBasePath(nested);
+        Assert.Equal(Path.Combine(_root, "Global"), normalized);
+    }
+
+    [Fact]
+    public void NormalizeConfiguredBasePath_LeavesGlobalRootUnchanged()
+    {
+        var root = Path.Combine(_root, "Global");
+        Assert.Equal(root, ReportPathResolver.NormalizeConfiguredBasePath(root));
     }
 
     [Fact]

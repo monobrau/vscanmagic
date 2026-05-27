@@ -11,6 +11,8 @@ dotnet run --project VScanMagic.Web
 
 Open `http://127.0.0.1:8080` (override with `VSCANMAGIC_PORT` and `VSCANMAGIC_API_BIND`).
 
+**LAN access:** set `VSCANMAGIC_API_BIND=0.0.0.0`, allow TCP 8080 in Windows Firewall, browse `http://<this-pc-ip>:8080`. Use `archive/Start-VScanMagic-Lan.ps1`. If the UI is unstyled or shows a Blazor error bar, check the browser Network tab for failed `.css` or `_framework/blazor.web.js` requests (WebSockets must work on the same port).
+
 ## Projects
 
 | Project | Purpose |

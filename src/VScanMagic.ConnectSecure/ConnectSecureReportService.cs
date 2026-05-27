@@ -123,41 +123,38 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
                     break;
                 }
 
-                progress?.Report($"Waiting for reports... ({pending.Count} pending)");
-                var pollTasks = pending.Select(async p =>
+                var elapsed = (int)(DateTimeOffset.UtcNow - start).TotalSeconds;
+                var pendingNames = string.Join(", ", pending.Select(p => p.Report.Name));
+                progress?.Report(
+                    pending.Count == 1
+                        ? $"Waiting for {pending[0].Report.Name}… ({elapsed}s — ConnectSecure is still generating)"
+                        : $"Waiting for reports… ({elapsed}s, {pending.Count} pending: {pendingNames})");
+
+                var stillPending = new List<(CatalogReportDownloadRequest Report, string JobId, string Path)>();
+                foreach (var p in pending)
                 {
                     try
                     {
                         var url = await client.GetReportDownloadLinkAsync(p.JobId, isGlobal, companyId, ct).ConfigureAwait(false);
                         if (string.IsNullOrWhiteSpace(url))
-                            return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)null);
+                        {
+                            stillPending.Add(p);
+                            continue;
+                        }
 
+                        progress?.Report($"Downloading {p.Report.Name}…");
                         await client.DownloadFileFromUrlAsync(url, p.Path, ct).ConfigureAwait(false);
                         ReportArchiveHelper.NormalizeDownloadedReportFile(p.Path);
-                        return (Pending: p, Success: (DownloadedReport?)new DownloadedReport(
-                            p.Report.ReportId, p.Report.Name, p.Path), Failed: (FailedReport?)null);
+                        succeeded.Add(new DownloadedReport(p.Report.ReportId, p.Report.Name, p.Path));
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
-                        return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)null);
+                        stillPending.Add(p);
                     }
                     catch (Exception ex)
                     {
-                        return (Pending: p, Success: (DownloadedReport?)null, Failed: (FailedReport?)new FailedReport(
-                            p.Report.ReportId, p.Report.Name, ex.Message));
+                        failed.Add(new FailedReport(p.Report.ReportId, p.Report.Name, ex.Message));
                     }
-                }).ToList();
-
-                var pollResults = await Task.WhenAll(pollTasks).ConfigureAwait(false);
-                var stillPending = new List<(CatalogReportDownloadRequest Report, string JobId, string Path)>();
-                foreach (var result in pollResults)
-                {
-                    if (result.Success is not null)
-                        succeeded.Add(result.Success);
-                    else if (result.Failed is not null)
-                        failed.Add(result.Failed);
-                    else
-                        stillPending.Add(result.Pending);
                 }
 
                 pending = stillPending;

@@ -1,3 +1,5 @@
+using VScanMagic.Core.Services;
+
 namespace VScanMagic.ConnectSecure;
 
 public sealed record PatchableProductGroup(
@@ -342,7 +344,92 @@ public static class PatchCatalogHelper
             total,
             summary,
             hostResults,
-            verified);
+            verified,
+            ConnectSecureInsight: null);
+    }
+
+    public static string BuildConnectSecureJobInsight(
+        PatchActivityEntry entry,
+        PatchJobCorrelationHelper.ParsedConnectSecureJob? remote)
+    {
+        if (remote is null)
+        {
+            return entry.RequestedAt < DateTimeOffset.Now.AddHours(-1)
+                ? "No matching ConnectSecure patch job found in patch_jobview. Check the CS portal Patch Jobs tab for this product and time."
+                : "ConnectSecure patch job not visible yet in patch_jobview — use Refresh jobs in a minute.";
+        }
+
+        var parts = new List<string>
+        {
+            $"CS job {remote.JobId}: {PatchJobCorrelationHelper.FormatJobStatusLabel(remote.Status)}"
+        };
+
+        if (remote.SuccessCount is not null || remote.FailedCount is not null || remote.PendingCount is not null)
+            parts.Add($"agent counts Success {remote.SuccessCount ?? 0}, Failed {remote.FailedCount ?? 0}, Pending {remote.PendingCount ?? 0}");
+
+        if (remote.HostDetails is { Count: > 0 })
+        {
+            foreach (var host in remote.HostDetails)
+            {
+                var hostLabel = string.IsNullOrWhiteSpace(host.HostName) ? $"asset {host.AssetId}" : host.HostName;
+                var version = string.IsNullOrWhiteSpace(host.FromVersion) && string.IsNullOrWhiteSpace(host.ToVersion)
+                    ? ""
+                    : $" ({host.FromVersion ?? "?"} → {host.ToVersion ?? "?"})";
+                parts.Add($"{hostLabel}: {host.Status ?? "Unknown"}{version}");
+            }
+        }
+
+        if (PatchJobCorrelationHelper.IsInProgressJobStatus(remote.Status) &&
+            entry.RequestedAt < DateTimeOffset.Now.AddHours(-2))
+        {
+            parts.Add(
+                "Job has been in progress for 2+ hours. A vulnerability scan does not execute patches — the ConnectSecure agent must run the patch job. Check agent type (probe vs lightweight), Patch Management settings, and the job in the CS portal.");
+        }
+        else if (PatchJobCorrelationHelper.IsTerminalJobStatus(remote.Status) &&
+                 (remote.SuccessCount ?? 0) > 0)
+        {
+            parts.Add(
+                "ConnectSecure reports the patch job finished successfully. Version check uses remediation inventory — Verify queues an inventory scan; re-run Verify after agents finish if versions are still pending.");
+        }
+
+        return string.Join(". ", parts);
+    }
+
+    public static bool ShouldInferRemediationCleared(
+        PatchJobCorrelationHelper.ParsedConnectSecureJob? remoteJob,
+        int targetedHostCount,
+        int matchedHostCount)
+    {
+        if (remoteJob is null || targetedHostCount <= 0 || matchedHostCount > 0)
+            return false;
+
+        if ((remoteJob.SuccessCount ?? 0) <= 0)
+            return false;
+
+        var status = remoteJob.Status ?? "";
+        return status.Contains("success", StringComparison.OrdinalIgnoreCase) ||
+               status.Contains("partial", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static PatchVerificationResult BuildRemediationClearedVerificationResult(
+        string jobId,
+        IReadOnlyList<int> targetedAgentIds,
+        DateTimeOffset? verifiedAt = null)
+    {
+        var verified = verifiedAt ?? DateTimeOffset.Now;
+        return new PatchVerificationResult(
+            jobId,
+            "Verified",
+            targetedAgentIds.Count,
+            0,
+            0,
+            0,
+            0,
+            targetedAgentIds.Count,
+            $"Verified: product no longer appears in the remediation plan for {targetedAgentIds.Count} patched host(s) (typical after a successful patch).",
+            [],
+            verified,
+            ConnectSecureInsight: null);
     }
 
     public static string DetermineVerificationStatus(

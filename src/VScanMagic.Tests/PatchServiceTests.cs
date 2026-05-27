@@ -489,6 +489,162 @@ public sealed class PatchJobCorrelationHelperTests
     }
 
     [Fact]
+    public void FindBestMatch_IgnoresStoredJobId_WhenProductDoesNotMatch()
+    {
+        var local = new PatchActivityEntry(
+            17624,
+            "local-npcap",
+            "Application Patch",
+            "Submitted",
+            "Npcap on Zillah3.dorks.lan",
+            "Zillah3.dorks.lan",
+            null,
+            new DateTimeOffset(2026, 5, 27, 2, 40, 0, TimeSpan.FromHours(-5)),
+            "Message sent for patch update",
+            [402714],
+            [47],
+            "Npcap",
+            "1.83",
+            ConnectSecureJobId: "d83f6334-df66-471a-92ce-5227bfa661fb");
+
+        var wiresharkJob = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "d83f6334-df66-471a-92ce-5227bfa661fb",
+                  "job_status": "Success",
+                  "product_name": "Wireshark",
+                  "type": "Application",
+                  "created": "2026-05-27T02:36:54.000000",
+                  "msg": [2, 0, 0]
+                }
+                """).RootElement);
+
+        var npcapJob = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee",
+                  "job_status": "Success",
+                  "product_name": "Npcap",
+                  "type": "Application",
+                  "created": "2026-05-27T02:35:00.000000",
+                  "msg": [1, 0, 0],
+                  "patch_job_details": {
+                    "24079295": { "host_name": "Zillah3.dorks.lan", "status": "Success" }
+                  }
+                }
+                """).RootElement);
+
+        var byStoredId = PatchJobCorrelationHelper.FindBestMatch(local, [wiresharkJob], new HashSet<string>());
+        Assert.Null(byStoredId);
+
+        var match = PatchJobCorrelationHelper.FindBestMatch(local, [wiresharkJob, npcapJob], new HashSet<string>());
+        Assert.NotNull(match);
+        Assert.Equal("aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee", match!.JobId);
+    }
+
+    [Fact]
+    public void BuildConnectSecureJobInsight_StuckInitiated_IncludesAgentGuidance()
+    {
+        var entry = new PatchActivityEntry(
+            17624,
+            "local-1",
+            "Application Patch",
+            "Submitted",
+            "Mozilla Firefox on Roswell.dorks.lan",
+            "Roswell.dorks.lan",
+            null,
+            DateTimeOffset.Now.AddHours(-13),
+            "Message sent for patch update",
+            [402780],
+            [47],
+            "Mozilla Firefox",
+            "151.0.0",
+            AssetIds: [24079295]);
+
+        var remote = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "ac71ebf5-fcbe-4b57-9995-ff02ae21435a",
+                  "job_status": "Initiated",
+                  "product_name": "Mozilla Firefox",
+                  "type": "Application",
+                  "created": "2026-05-26T02:23:16.827459",
+                  "msg": [0, 0, 2],
+                  "patch_job_details": {
+                    "24079295": {
+                      "host_name": "Roswell.dorks.lan",
+                      "status": "Pending",
+                      "from_version": "150.0.1",
+                      "to_version": "151.0.1"
+                    }
+                  }
+                }
+                """).RootElement);
+
+        var insight = PatchCatalogHelper.BuildConnectSecureJobInsight(entry, remote);
+
+        Assert.Contains("Initiated", insight, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Roswell.dorks.lan", insight, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Pending", insight, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("vulnerability scan does not execute patches", insight, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ShouldInferRemediationCleared_WhenCsSuccessAndNoHostsMatched()
+    {
+        var remote = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "d83f6334-df66-471a-92ce-5227bfa661fb",
+                  "job_status": "Success",
+                  "product_name": "Wireshark",
+                  "type": "Application",
+                  "msg": [2, 0, 0]
+                }
+                """).RootElement);
+
+        Assert.True(PatchCatalogHelper.ShouldInferRemediationCleared(remote, targetedHostCount: 2, matchedHostCount: 0));
+        var cleared = PatchCatalogHelper.BuildRemediationClearedVerificationResult("job-1", [10, 11]);
+        Assert.Equal("Verified", cleared.Status);
+        Assert.Contains("no longer appears", cleared.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildConnectSecureJobInsight_Success_IncludesInventoryRefreshHint()
+    {
+        var entry = new PatchActivityEntry(
+            17624,
+            "local-1",
+            "Application Patch",
+            "Submitted",
+            "Wireshark on DC-05.dorks.lan",
+            "DC-05.dorks.lan",
+            null,
+            DateTimeOffset.Now.AddHours(-1),
+            null,
+            [1],
+            [1],
+            "Wireshark",
+            "4.4.0");
+
+        var remote = PatchJobCorrelationHelper.ParsePatchJobViewRow(
+            JsonDocument.Parse("""
+                {
+                  "job_id": "d83f6334-df66-471a-92ce-5227bfa661fb",
+                  "job_status": "Success",
+                  "product_name": "Wireshark",
+                  "type": "Application",
+                  "created": "2026-05-27T02:36:54.000000",
+                  "msg": [2, 0, 0]
+                }
+                """).RootElement);
+
+        var insight = PatchCatalogHelper.BuildConnectSecureJobInsight(entry, remote);
+
+        Assert.Contains("Verify", insight, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ResolveVersionCheckStatus_PrefersExplicitField()
     {
         var entry = new PatchActivityEntry(

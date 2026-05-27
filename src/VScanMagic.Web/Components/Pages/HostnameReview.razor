@@ -407,7 +407,7 @@
                 HostExporter.Export(request, layout.OutputDirectory, clientName, stamp, _exportPdf, _exportXlsx, _exportCsv));
 
             FolderHistory.Add(clientName, layout.OutputDirectory);
-            _userSettings.LastOutputDirectory = layout.OutputDirectory;
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(_userSettings, layout.OutputDirectory);
             Settings.SaveUserSettings(_userSettings);
             RefreshExportPathHint();
 
