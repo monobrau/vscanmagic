@@ -48,7 +48,7 @@ public sealed class ConnectSecureRemediationService(
         ConnectSecureRequestMetrics.LogPageFetch(
             "remediation_dataset", page: 0, batchRows: records.Count, keptRows: records.Count, elapsedMs: sw.ElapsedMilliseconds);
 
-        var dataset = new RemediationDataset(companyId, DateTimeOffset.UtcNow, records);
+        var dataset = new RemediationDataset(companyId, VScanMagic.Core.DisplayTime.Now, records);
         cache.SetRemediationDataset(companyId, dataset);
         return dataset;
     }
@@ -158,8 +158,6 @@ public sealed class ConnectSecureRemediationService(
         var text = ConnectSecureJsonReader.GetString(el, names);
         if (string.IsNullOrWhiteSpace(text))
             return null;
-        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto)
-            ? dto
-            : null;
+        return VScanMagic.Core.DisplayTime.ParseApiTimestamp(text);
     }
 }

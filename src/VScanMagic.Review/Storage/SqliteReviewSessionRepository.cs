@@ -101,7 +101,7 @@ public sealed class SqliteReviewSessionRepository : IReviewSessionRepository, ID
 
     public async Task SaveAsync(ReviewSession session, CancellationToken ct = default)
     {
-        session.UpdatedAt = DateTimeOffset.UtcNow;
+        session.UpdatedAt = DateTimeOffset.Now;
         var json = JsonSerializer.Serialize(session, JsonOptions);
 
         await _lock.WaitAsync(ct);

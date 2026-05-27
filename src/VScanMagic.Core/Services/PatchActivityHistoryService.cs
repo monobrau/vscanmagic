@@ -29,7 +29,7 @@ public sealed record PatchActivityEntry(
 
 public sealed class PatchActivityHistoryService(string? configDirectory = null)
 {
-    private const int MaxEntriesPerCompany = 100;
+    private const int MaxEntriesPerCompany = 250;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly object _lock = new();
 

@@ -140,7 +140,8 @@ public sealed record PatchJobListQuery(
     int PageSize = 15,
     int DaysBack = 7,
     bool PatchJobsOnly = true,
-    bool LocalOnly = false)
+    bool LocalOnly = false,
+    DateTimeOffset? NotBefore = null)
 {
     public DateTimeOffset? Since =>
         DaysBack <= 0 ? null : DateTimeOffset.Now.AddDays(-DaysBack);

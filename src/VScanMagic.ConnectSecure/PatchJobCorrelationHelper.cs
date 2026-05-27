@@ -25,13 +25,18 @@ public static class PatchJobCorrelationHelper
     internal static ParsedConnectSecureJob ParsePatchJobViewRow(JsonElement row)
     {
         var updatedText = ConnectSecureJsonReader.GetString(row, "updated", "created");
-        DateTimeOffset? updated = null;
-        if (!string.IsNullOrWhiteSpace(updatedText) && DateTimeOffset.TryParse(updatedText, out var parsed))
-            updated = parsed.ToLocalTime();
+        var updated = VScanMagic.Core.DisplayTime.ParseApiTimestamp(updatedText);
 
         var jobId = ConnectSecureJsonReader.GetString(row, "job_id", "jobId", "patch_id", "patchId") ?? "";
         var status = ConnectSecureJsonReader.GetString(row, "job_status", "jobStatus", "status") ?? "";
-        var productName = ConnectSecureJsonReader.GetString(row, "product_name", "productName") ?? "";
+        var productName = ConnectSecureJsonReader.GetString(
+            row,
+            "product_name",
+            "productName",
+            "software_name",
+            "softwareName",
+            "application_name",
+            "applicationName") ?? "";
         var type = ConnectSecureJsonReader.GetString(row, "type") ?? "";
 
         ParsePatchJobCounts(row, out var successCount, out var failedCount, out var pendingCount);

@@ -87,8 +87,8 @@ public sealed class ReviewSession
     public string ReportsFolderUrl { get; set; } = "";
     /// <summary>TimeZest or other scheduling link for this deliverable (overrides Settings default).</summary>
     public string SchedulingLinkUrl { get; set; } = "";
-    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
-    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
     /// <summary>When set, the review is hidden from the default list but kept for reference.</summary>
     public DateTimeOffset? ArchivedAt { get; set; }
     public List<ReviewFinding> Findings { get; set; } = [];

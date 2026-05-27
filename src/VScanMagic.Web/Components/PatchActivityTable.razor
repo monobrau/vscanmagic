@@ -1,3 +1,4 @@
+@using VScanMagic.Core
 @using VScanMagic.ConnectSecure
 @inject ConnectSecurePatchService PatchService
 
@@ -56,6 +57,10 @@
             <p class="text-muted small mb-2">
                 Showing @ResultRangeStart–@ResultRangeEnd of @_result.TotalCount
                 @TimeRangeLabel
+                @if (_notBefore is not null)
+                {
+                    <span class="badge text-bg-info ms-1">bulk run</span>
+                }
             </p>
             <div class="table-responsive">
                 <table class="table table-sm mb-0">
@@ -65,8 +70,9 @@
                             <th>Type</th>
                             <th>CS status</th>
                             <th>Version check</th>
+                            <th>Application</th>
                             <th>Host</th>
-                            <th>Description</th>
+                            <th>Details</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -74,7 +80,7 @@
                         @foreach (var job in _result.Items)
                         {
                             <tr class="@(string.Equals(_expandedJobId, job.JobId, StringComparison.OrdinalIgnoreCase) ? "table-active" : null)">
-                                <td class="text-nowrap small">@(job.Updated?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                                <td class="text-nowrap small">@(DisplayTime.Format(job.Updated))</td>
                                 <td>@job.Type</td>
                                 <td>
                                     <span class="@JobStatusClass(job.JobStatus)">@job.JobStatus</span>
@@ -89,8 +95,9 @@
                                         <span class="@VersionCheckStatusClass(job.VersionCheckStatus)">@job.VersionCheckStatus</span>
                                     }
                                 </td>
+                                <td class="small fw-medium">@PatchJobDisplayHelper.ResolveApplication(job)</td>
                                 <td class="small">@(string.IsNullOrWhiteSpace(job.HostName) ? "—" : job.HostName)</td>
-                                <td class="small text-muted">@job.Description</td>
+                                <td class="small text-muted">@PatchJobDisplayHelper.ResolveDetail(job)</td>
                                 <td class="text-end text-nowrap">
                                     @if (job.CanVerify)
                                     {
@@ -107,7 +114,7 @@
                                  _verificationResult is not null)
                             {
                                 <tr>
-                                    <td colspan="7" class="bg-light">
+                                    <td colspan="8" class="bg-light">
                                         @{
                                             var expandedJob = _result.Items.FirstOrDefault(j =>
                                                 string.Equals(j.JobId, _expandedJobId, StringComparison.OrdinalIgnoreCase));
@@ -190,6 +197,7 @@
 @code {
     [Parameter] public int CompanyId { get; set; }
     [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool DefaultLocalOnly { get; set; }
     [Parameter] public EventCallback<string?> VerificationMessageChanged { get; set; }
     [Parameter] public EventCallback<string?> VerificationErrorChanged { get; set; }
 
@@ -200,6 +208,7 @@
     private int _pageSize = 15;
     private int _page = 1;
     private bool _localOnly;
+    private DateTimeOffset? _notBefore;
     private bool _loadingJobs;
     private PatchJobListResult _result = new([], 0, 1, 15);
     private string? _verifyingJobId;
@@ -231,9 +240,24 @@
         {
             _loadedCompanyId = CompanyId;
             _page = 1;
+            _localOnly = DefaultLocalOnly;
             _loadGeneration++;
             await LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
         }
+    }
+
+    public Task FocusRecentLocalActivityAsync() =>
+        FocusBulkPatchActivityAsync(DisplayTime.Now.AddHours(-1));
+
+    public async Task FocusBulkPatchActivityAsync(DateTimeOffset notBefore)
+    {
+        _daysBack = 1;
+        _localOnly = true;
+        _notBefore = notBefore;
+        _page = 1;
+        _pageSize = Math.Max(_pageSize, 50);
+        _loadGeneration++;
+        await LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
     }
 
     public Task RefreshAsync(bool fetchRemoteJobs = true)
@@ -244,6 +268,7 @@
 
     private Task OnQueryChangedAsync()
     {
+        _notBefore = null;
         _page = 1;
         _loadGeneration++;
         return LoadJobsAsync(_loadGeneration, fetchRemoteJobs: true);
@@ -285,7 +310,8 @@
                 PageSize: _pageSize,
                 DaysBack: _daysBack,
                 PatchJobsOnly: true,
-                LocalOnly: _localOnly);
+                LocalOnly: _localOnly,
+                NotBefore: _notBefore);
 
             var result = await PatchService.GetCompanyJobsAsync(
                 CompanyId,
@@ -349,7 +375,8 @@
             status.Contains("error", StringComparison.OrdinalIgnoreCase))
             return "text-danger fw-semibold";
         if (string.Equals(status, "Submitted", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase))
+            string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "Queued", StringComparison.OrdinalIgnoreCase))
             return "text-muted";
         return "";
     }

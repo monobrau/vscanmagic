@@ -1,6 +1,7 @@
 @page "/application-patching"
 @rendermode InteractiveServer
 @implements IAsyncDisposable
+@using VScanMagic.Core
 @using VScanMagic.ConnectSecure
 @using VScanMagic.Web.Services
 @inject ConnectSecureClient ConnectSecure
@@ -72,6 +73,7 @@ else
     <PatchActivityTable @ref="_patchActivityTable"
                         CompanyId="_companyId"
                         Busy="_busy"
+                        DefaultLocalOnly="true"
                         VerificationMessageChanged="SetVerificationMessage"
                         VerificationErrorChanged="SetVerificationError" />
 
@@ -571,10 +573,14 @@ else
 
         var products = VisibleProductGroups
             .Where(product => _selectedProductNames.Contains(product.Product))
+            .GroupBy(product => product.Product, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToList();
         var patched = 0;
         var skipped = 0;
         var failed = new List<string>();
+        var queuedJobIds = new List<string>();
+        var bulkStartedAt = DisplayTime.Now;
 
         try
         {
@@ -588,7 +594,11 @@ else
                 {
                     var outcome = await PatchProductOnlineHostsAsync(product);
                     if (outcome.Patched)
+                    {
                         patched++;
+                        if (!string.IsNullOrWhiteSpace(outcome.JobId))
+                            queuedJobIds.Add(outcome.JobId);
+                    }
                     else
                         skipped++;
                 }
@@ -599,14 +609,19 @@ else
             }
 
             _bulkPatchConfirm = false;
+            _bulkPatchStatus = "Linking ConnectSecure patch jobs…";
+            await InvokeAsync(StateHasChanged);
+            await PatchService.SyncPatchActivityWithConnectSecureAsync(_companyId, LoadCancellationToken);
+
             if (_patchActivityTable is not null)
-                await _patchActivityTable.RefreshAsync();
+                await _patchActivityTable.FocusBulkPatchActivityAsync(bulkStartedAt.AddSeconds(-10));
 
             var parts = new List<string> { $"Bulk patch finished: {patched} product(s) queued." };
             if (skipped > 0)
                 parts.Add($"{skipped} skipped (no online patchable hosts or missing installed version).");
             if (failed.Count > 0)
                 parts.Add($"Failed: {string.Join("; ", failed.Take(3))}" + (failed.Count > 3 ? $" (+{failed.Count - 3} more)" : ""));
+            parts.Add($"Showing {patched} bulk job(s) in Recent patch activity (bulk run filter, 50 per page).");
             _message = string.Join(" ", parts);
         }
         finally
@@ -617,7 +632,7 @@ else
         }
     }
 
-    private async Task<(bool Patched, string? Reason)> PatchProductOnlineHostsAsync(PatchableProductGroup product)
+    private async Task<(bool Patched, string? JobId, string? Reason)> PatchProductOnlineHostsAsync(PatchableProductGroup product)
     {
         var cacheKey = ExpandCacheKey(_companyId, product);
         List<PatchHostView> hostViews;
@@ -641,11 +656,14 @@ else
             .Select(view => view.Detail)
             .ToList();
         if (selectedTargets.Count == 0)
-            return (false, "no online hosts");
+            return (false, null, "no online hosts");
 
         var request = BuildPatchRequest(_companyId, product, selectedTargets);
         ConnectSecurePatchService.ValidateApplicationPatchVersions(request);
-        var result = await PatchService.PatchApplicationsNowAsync(request, LoadCancellationToken);
+        var result = await PatchService.PatchApplicationsNowAsync(
+            request,
+            linkConnectSecureJob: false,
+            LoadCancellationToken);
         try
         {
             await ScanService.TriggerAgentUpdatesAsync(_companyId, request.AgentIds, LoadCancellationToken);
@@ -655,7 +673,7 @@ else
             // Patch already queued; inventory refresh is best-effort per product.
         }
 
-        return (true, result.Message);
+        return (true, result.JobId, result.Message);
     }
 
     private async Task BulkRefreshInventoryAsync()

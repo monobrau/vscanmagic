@@ -23,6 +23,9 @@ var loopbackOnly = AppRestartSupport.IsLocalBind(bind);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog();
+Log.Information("Timestamps use local timezone: {TimeZone} (UTC{Offset})",
+    TimeZoneInfo.Local.DisplayName,
+    TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).ToString(@"hh\:mm"));
 
 builder.Services.AddVScanMagicCore();
 builder.Services.AddVScanMagicData();

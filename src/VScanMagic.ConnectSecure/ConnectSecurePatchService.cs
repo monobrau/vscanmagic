@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VScanMagic.Core;
 using VScanMagic.Core.Risk;
 using VScanMagic.Core.Services;
 
@@ -222,15 +223,31 @@ public sealed class ConnectSecurePatchService(
         return merged;
     }
 
+    public Task<PatchOperationResult> PatchApplicationsNowAsync(
+        ApplicationPatchRequest request,
+        CancellationToken ct = default) =>
+        PatchApplicationsNowAsync(request, linkConnectSecureJob: true, ct);
+
     public async Task<PatchOperationResult> PatchApplicationsNowAsync(
         ApplicationPatchRequest request,
+        bool linkConnectSecureJob,
         CancellationToken ct = default)
     {
         ValidatePatchRequest(request);
         await EnsureApplicationPatchTargetsAsync(request, ct);
         ValidateApplicationPatchVersions(request);
         var body = BuildPatchPayload(request, ConnectSecurePatchWhen.Now, scheduledAt: null);
-        return await InvokePatchAsync(request, "Application Patch", body, ct);
+        return await InvokePatchAsync(request, "Application Patch", body, linkConnectSecureJob, ct);
+    }
+
+    public async Task SyncPatchActivityWithConnectSecureAsync(int companyId, CancellationToken ct = default)
+    {
+        if (companyId <= 0)
+            return;
+
+        var localEntries = patchActivityHistory.GetEntries(companyId, limit: 500).ToList();
+        var remoteJobs = await FetchConnectSecurePatchJobsAsync(companyId, limit: 200, ct);
+        SyncLocalEntriesWithConnectSecureJobs(companyId, localEntries, remoteJobs);
     }
 
     public Task<PatchOperationResult> PatchOsNowAsync(
@@ -241,7 +258,7 @@ public sealed class ConnectSecurePatchService(
         osRequest.PatchType = ConnectSecurePatchType.Os;
         ValidatePatchRequest(osRequest);
         var body = BuildPatchPayload(osRequest, ConnectSecurePatchWhen.Now, scheduledAt: null);
-        return InvokePatchAsync(osRequest, "OS Patch", body, ct);
+        return InvokePatchAsync(osRequest, "OS Patch", body, linkConnectSecureJob: true, ct);
     }
 
     public async Task<PatchJobListResult> GetCompanyJobsAsync(
@@ -257,11 +274,18 @@ public sealed class ConnectSecurePatchService(
         var pageSize = Math.Clamp(query.PageSize, 5, 100);
         var since = query.Since;
 
-        var localEntries = patchActivityHistory.GetEntries(companyId, limit: 200).ToList();
+        var localEntries = patchActivityHistory.GetEntries(companyId, limit: 500).ToList();
         if (since is not null)
         {
             localEntries = localEntries
                 .Where(entry => entry.RequestedAt >= since.Value)
+                .ToList();
+        }
+
+        if (query.NotBefore is not null)
+        {
+            localEntries = localEntries
+                .Where(entry => entry.RequestedAt >= query.NotBefore.Value)
                 .ToList();
         }
 
@@ -279,11 +303,18 @@ public sealed class ConnectSecurePatchService(
         if (fetchRemoteJobs)
             SyncLocalEntriesWithConnectSecureJobs(companyId, localEntries, remoteJobs);
 
-        localEntries = patchActivityHistory.GetEntries(companyId, limit: 200).ToList();
+        localEntries = patchActivityHistory.GetEntries(companyId, limit: 500).ToList();
         if (since is not null)
         {
             localEntries = localEntries
                 .Where(entry => entry.RequestedAt >= since.Value)
+                .ToList();
+        }
+
+        if (query.NotBefore is not null)
+        {
+            localEntries = localEntries
+                .Where(entry => entry.RequestedAt >= query.NotBefore.Value)
                 .ToList();
         }
 
@@ -721,7 +752,7 @@ public sealed class ConnectSecurePatchService(
             throw new InvalidOperationException("Scheduled patch time must be in the future.");
 
         var body = BuildPatchPayload(request, ConnectSecurePatchWhen.Later, request.ScheduledAt);
-        return InvokePatchAsync(request, "Scheduled Application Patch", body, ct);
+        return InvokePatchAsync(request, "Scheduled Application Patch", body, linkConnectSecureJob: true, ct);
     }
 
     internal static Dictionary<string, object?> BuildPatchPayload(
@@ -843,6 +874,7 @@ public sealed class ConnectSecurePatchService(
         ApplicationPatchRequest request,
         string jobType,
         Dictionary<string, object?> body,
+        bool linkConnectSecureJob,
         CancellationToken ct)
     {
         var response = await client.InvokeAuthenticatedAsync(
@@ -862,7 +894,9 @@ public sealed class ConnectSecurePatchService(
         cache.InvalidateCompany(request.CompanyId);
 
         var jobId = RecordPatchActivity(request, jobType, message);
-        await TryLinkConnectSecureJobAsync(request.CompanyId, jobId, ct);
+        if (linkConnectSecureJob)
+            await TryLinkConnectSecureJobAsync(request.CompanyId, jobId, ct);
+
         return new PatchOperationResult(true, message, jobId);
     }
 
@@ -906,7 +940,7 @@ public sealed class ConnectSecurePatchService(
             description,
             hostNames.Count == 1 ? hostNames[0] : hostSummary,
             null,
-            DateTimeOffset.Now,
+            DisplayTime.Now,
             message,
             request.AgentIds.Where(id => id > 0).Distinct().ToList(),
             request.SolutionIds.Where(id => id > 0).Distinct().ToList(),
@@ -963,7 +997,7 @@ public sealed class ConnectSecurePatchService(
     {
         var linkedRemoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var entry in localEntries)
+        foreach (var entry in localEntries.OrderBy(e => e.RequestedAt))
         {
             var working = ClearStaleConnectSecureJobLink(entry, remoteJobs);
             var remote = PatchJobCorrelationHelper.FindBestMatch(working, remoteJobs, linkedRemoteIds);
@@ -1051,9 +1085,8 @@ public sealed class ConnectSecurePatchService(
         var canVerify = entry.AgentIds is { Count: > 0 } &&
                         (entry.SolutionIds is { Count: > 0 } || entry.IsOsPatch);
 
-        var description = !string.IsNullOrWhiteSpace(remote?.Description)
-            ? remote.Description
-            : entry.Description;
+        var product = PatchJobDisplayHelper.ResolveProduct(entry, remote);
+        var description = PatchJobDisplayHelper.BuildMergedDescription(entry, remote, product);
 
         var csJobId = entry.ConnectSecureJobId ?? remote?.JobId;
 
@@ -1061,7 +1094,7 @@ public sealed class ConnectSecurePatchService(
 
         var jobStatus = entry.ConnectSecureJobStatus ?? remote?.Status;
         if (string.IsNullOrWhiteSpace(jobStatus))
-            jobStatus = string.IsNullOrWhiteSpace(csJobId) ? "Accepted" : "Submitted";
+            jobStatus = "Queued";
 
         return new PatchJobEntry(
             entry.JobId,
@@ -1070,7 +1103,7 @@ public sealed class ConnectSecurePatchService(
             description,
             entry.HostName,
             entry.AgentIp,
-            remote?.Updated ?? entry.VerifiedAt ?? entry.RequestedAt,
+            DisplayTime.ToLocal(remote?.Updated ?? entry.VerifiedAt ?? entry.RequestedAt),
             IsLocal: true,
             CanVerify: canVerify,
             VerificationSummary: entry.VerificationSummary,
@@ -1078,23 +1111,40 @@ public sealed class ConnectSecurePatchService(
             VersionCheckStatus: string.IsNullOrWhiteSpace(versionCheck) ? null : versionCheck,
             AgentId: remote?.AgentId ?? entry.AgentIds?.FirstOrDefault(),
             TargetFix: entry.TargetFix,
-            Product: entry.Product);
+            Product: product);
     }
 
-    private static PatchJobEntry ToRemotePatchJobEntry(PatchJobCorrelationHelper.ParsedConnectSecureJob remote) =>
-        new(
+    private static PatchJobEntry ToRemotePatchJobEntry(PatchJobCorrelationHelper.ParsedConnectSecureJob remote)
+    {
+        var product = PatchJobDisplayHelper.ResolveProduct(null, remote);
+        var description = PatchJobDisplayHelper.BuildMergedDescription(
+            new PatchActivityEntry(
+                0,
+                remote.JobId,
+                remote.Type,
+                remote.Status,
+                remote.Description,
+                remote.HostName,
+                remote.AgentIp,
+                remote.Updated ?? DisplayTime.Now,
+                ConnectSecureMessage: null),
+            remote,
+            product);
+
+        return new PatchJobEntry(
             remote.JobId,
             remote.Type,
             PatchJobCorrelationHelper.FormatJobStatusLabel(remote.Status),
-            remote.Description,
+            description,
             remote.HostName,
             remote.AgentIp,
-            remote.Updated,
+            DisplayTime.ToLocal(remote.Updated),
             IsLocal: false,
             CanVerify: false,
             ConnectSecureJobId: remote.JobId,
             AgentId: remote.AgentId,
-            Product: remote.ProductName);
+            Product: product);
+    }
 
     private static void ValidatePatchRequest(ApplicationPatchRequest request)
     {
