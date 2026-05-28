@@ -1,0 +1,134 @@
+﻿@inject ConnectSecureClient ConnectSecure
+
+<div class="nav-shell">
+    <div class="top-row ps-3 navbar navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="">VScanMagic</a>
+        </div>
+    </div>
+
+    <input type="checkbox" id="nav-menu-toggle" class="nav-menu-toggle" title="Navigation menu" />
+
+    <label for="nav-menu-toggle" class="navbar-toggler">
+        <span class="navbar-toggler-icon" aria-hidden="true"></span>
+    </label>
+
+    <div id="main-nav" class="nav-scrollable">
+        <nav class="nav-main flex-column" aria-label="Main">
+            <div class="nav-section-label">Client review</div>
+            <div class="nav-item px-3 nav-item-featured">
+                <NavLink class="nav-link nav-link-featured" href="" Match="NavLinkMatch.All">
+                    <i class="bi bi-play-circle" aria-hidden="true"></i>
+                    <span>Start client review</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="sessions">
+                    <i class="bi bi-collection" aria-hidden="true"></i>
+                    <span>Review sessions</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="rules">
+                    <i class="bi bi-journal-text" aria-hidden="true"></i>
+                    <span>Rules</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="templates">
+                    <i class="bi bi-envelope" aria-hidden="true"></i>
+                    <span>Templates</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="report-downloader">
+                    <i class="bi bi-cloud-download" aria-hidden="true"></i>
+                    <span>Report downloader</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label">ConnectSecure prep</div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="company-review">
+                    <i class="bi bi-building" aria-hidden="true"></i>
+                    <span>Company review</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="probe-config">
+                    <i class="bi bi-hdd-network" aria-hidden="true"></i>
+                    <span>Probe &amp; credentials</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label nav-section-label-nested">Remediation</div>
+            <div class="nav-item px-3 nav-item-nested">
+                <NavLink class="nav-link" href="application-patching">
+                    <i class="bi bi-bandaid" aria-hidden="true"></i>
+                    <span>Application patching</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3 nav-item-nested">
+                <NavLink class="nav-link" href="os-patching">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    <span>OS patching</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3 nav-item-nested">
+                <NavLink class="nav-link" href="vulnerability-suppress">
+                    <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                    <span>Suppress vulnerabilities</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="hostname-review">
+                    <i class="bi bi-pc-display-horizontal" aria-hidden="true"></i>
+                    <span>Host counts</span>
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label">Setup</div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="settings">
+                    <i class="bi bi-gear" aria-hidden="true"></i>
+                    <span>Settings</span>
+                </NavLink>
+            </div>
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="configuration">
+                    <i class="bi bi-sliders" aria-hidden="true"></i>
+                    <span>Client mappings</span>
+                </NavLink>
+            </div>
+        </nav>
+
+        <div class="nav-footer px-3">
+            <NavRestartButton />
+            <NavLink class="nav-link nav-link-footer" href="help">
+                <i class="bi bi-book" aria-hidden="true"></i>
+                <span>Help</span>
+            </NavLink>
+            <NavLink class="nav-link nav-link-footer" href="about">
+                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                <span>About</span>
+            </NavLink>
+            <div class="nav-status" title="@ApiStatusDetail">
+                <span class="nav-status-dot @ApiStatusClass" aria-hidden="true"></span>
+                <span class="nav-status-text">@ApiStatusText</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool ApiConfigured => ConnectSecure.IsConfigured;
+
+    private string ApiStatusClass => ApiConfigured ? "nav-status-dot-ok" : "nav-status-dot-warn";
+
+    private string ApiStatusText => ApiConfigured ? "ConnectSecure connected" : "API not configured";
+
+    private string ApiStatusDetail => ApiConfigured
+        ? "ConnectSecure credentials are configured."
+        : "Add ConnectSecure API credentials on Settings.";
+}

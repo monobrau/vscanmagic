@@ -10,3 +10,5 @@ Always create test scripts in the `archive/` folder. The archive folder is gitig
 - One-off utilities and reference scripts
 
 Do not create test scripts in the project root or other tracked directories.
+
+Never write temp files, export defaults, or test HTML output to the repo root — use `%TEMP%\VScanMagic\` (see `Get-VScanMagicTempDirectory` in Core).

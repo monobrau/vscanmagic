@@ -43,7 +43,7 @@ function Show-VScanMagicGUI {
 
     # Create main form
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "$($script:Config.AppName) - Vulnerability Report Generator"
+    $form.Text = "VScanMagic v$($script:Config.Version) - Vulnerability Report Generator"
     $form.Size = New-Object System.Drawing.Size(750, 945)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -377,7 +377,7 @@ function Show-VScanMagicGUI {
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $standardReports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate ($datePickerDownloadScanDate.Value.ToString("MM/dd/yyyy")) -SkipPostDownloadTopX -OnProgress $onProgress
                     if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                        Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                     }
                     break
                 } catch {
@@ -475,7 +475,7 @@ function Show-VScanMagicGUI {
                     $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                     $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
                     if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                        foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                        Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                     }
                     break
                 } catch {
@@ -552,7 +552,7 @@ function Show-VScanMagicGUI {
             $form.Refresh()
             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId 0 -ClientName "Global" -ScanDate $scanDate -SkipPostDownloadTopX -OnProgress $onProgress
             if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
             }
             $successCount = if ($batchResult.Succeeded) { $batchResult.Succeeded.Count } else { 0 }
             $failCount = if ($batchResult.Failed) { $batchResult.Failed.Count } else { 0 }
@@ -1068,7 +1068,7 @@ function Show-VScanMagicGUI {
                             $timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss.fff") + "_" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
                             $batchResult = Invoke-ConnectSecureReportsBatch -Reports $reports -OutputPathTemplate $outputPathScript -CompanyId $company.Id -ClientName $clientName -ScanDate $scanDate -TopCount $topCount -MinEPSS $script:FilterMinEPSS -IncludeCritical $script:FilterIncludeCritical -IncludeHigh $script:FilterIncludeHigh -IncludeMedium $script:FilterIncludeMedium -IncludeLow $script:FilterIncludeLow -SkipPostDownloadTopX -OnProgress $onProgress
                             if ($script:UserSettings.DownloadAutoResizeColumns -and $batchResult.Succeeded) {
-                                foreach ($r in $batchResult.Succeeded) { if ($r.Ext -eq 'xlsx') { $p = & $outputPathScript $r; if (Test-Path -LiteralPath $p) { Invoke-AutoResizeExcelColumns -ExcelPath $p } } }
+                                Invoke-AutoResizeDownloadedXlsx -Succeeded $batchResult.Succeeded -OutputPathResolver $outputPathScript
                             }
                             break
                         } catch {
@@ -1123,7 +1123,8 @@ function Show-VScanMagicGUI {
                             $clientName = $companyData.ClientName
                             $scanDate = $companyData.ScanDate
                             $outputDir = if ($companyData.OutputDir) { $companyData.OutputDir } else { $textBoxOutputDir.Text }
-                            $isRMITPlus = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $script:IsRMITPlus }
+                            $rawRmit = if ($companyData.IsRMITPlus -ne $null) { $companyData.IsRMITPlus } else { $checkBoxRMITPlus.Checked }
+                            $isRMITPlus = ConvertTo-StrictBool $rawRmit -IfNullOrUnknown:([bool]$checkBoxRMITPlus.Checked)
                             $companyId = if ($companyData.Company -and $companyData.Company.Id -ne $null) { $companyData.Company.Id } else { if ($companyData.Id -ne $null) { $companyData.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info
@@ -1417,7 +1418,7 @@ function Show-VScanMagicGUI {
                 $scanDate = $datePickerScanDate.Value.ToShortDateString()
                 $inputPath = $company.InputPath
                 $outputDir = if ($company.OutputDir) { $company.OutputDir } else { $textBoxOutputDir.Text }
-                $isRMITPlus = $script:IsRMITPlus
+                $isRMITPlus = ConvertTo-StrictBool $checkBoxRMITPlus.Checked
                 $companyId = if ($company.Company -and $company.Company.Id -ne $null) { $company.Company.Id } else { if ($company.Id -ne $null) { $company.Id } else { 0 } }
 
             Write-Log "=== Processing client: $clientName ===" -Level Info

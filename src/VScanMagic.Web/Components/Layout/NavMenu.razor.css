@@ -1,0 +1,209 @@
+.nav-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.top-row {
+    height: 3.5rem;
+    background-color: rgba(0, 0, 0, 0.4);
+    flex-shrink: 0;
+}
+
+.navbar-brand {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: white;
+    text-decoration: none;
+}
+
+.navbar-brand:hover {
+    color: white;
+    opacity: 0.92;
+}
+
+.nav-menu-toggle {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+.navbar-toggler {
+    cursor: pointer;
+    width: 3.5rem;
+    height: 2.5rem;
+    position: absolute;
+    top: 0.5rem;
+    right: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.375rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    padding: 0;
+    margin: 0;
+}
+
+.navbar-toggler-icon {
+    display: block;
+    width: 1.75rem;
+    height: 1.75rem;
+    margin: 0 auto;
+    background: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255, 255, 255, 0.85%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e") no-repeat center/1.75rem;
+}
+
+.nav-scrollable {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.nav-main {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 0.5rem;
+}
+
+.nav-section-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.55);
+    padding: 1.15rem 1rem 0.35rem 1rem;
+}
+
+.nav-section-label-nested {
+    padding-top: 0.35rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.42);
+}
+
+.nav-item {
+    font-size: 0.9rem;
+    padding-bottom: 0.15rem;
+}
+
+.nav-item-nested {
+    padding-left: 0.35rem;
+}
+
+.nav-item ::deep .nav-link {
+    color: #e8e8e8;
+    background: none;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0 4px 4px 0;
+    min-height: 2.65rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    line-height: 1.25;
+    width: 100%;
+    padding: 0.45rem 0.65rem;
+    text-decoration: none;
+}
+
+.nav-item ::deep .nav-link .bi {
+    font-size: 1rem;
+    width: 1.15rem;
+    text-align: center;
+    flex-shrink: 0;
+    opacity: 0.95;
+}
+
+.nav-item ::deep .nav-link span {
+    line-height: 1.25;
+}
+
+.nav-item ::deep a.active {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-left-color: #ffffff;
+    color: white;
+    font-weight: 600;
+}
+
+.nav-item ::deep .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+.nav-item-featured ::deep .nav-link-featured {
+    font-weight: 600;
+    border-left-color: rgba(91, 214, 122, 0.55);
+}
+
+.nav-item-featured ::deep a.active.nav-link-featured {
+    border-left-color: #5bd67a;
+    background-color: rgba(91, 214, 122, 0.14);
+}
+
+.nav-item-featured ::deep .nav-link-featured:hover {
+    background-color: rgba(91, 214, 122, 0.1);
+}
+
+.nav-footer {
+    flex-shrink: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    padding-top: 0.65rem;
+    padding-bottom: 1rem;
+    margin-top: 0.25rem;
+}
+
+.nav-link-footer {
+    color: #e8e8e8 !important;
+    min-height: 2.25rem !important;
+    margin-bottom: 0.35rem;
+}
+
+.nav-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.72);
+    padding: 0.25rem 0.65rem;
+}
+
+.nav-status-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.nav-status-dot-ok {
+    background-color: #5bd67a;
+    box-shadow: 0 0 0 2px rgba(91, 214, 122, 0.25);
+}
+
+.nav-status-dot-warn {
+    background-color: #ffb347;
+    box-shadow: 0 0 0 2px rgba(255, 179, 71, 0.25);
+}
+
+.nav-status-text {
+    line-height: 1.2;
+}
+
+@media (max-width: 640.98px) {
+    .nav-scrollable {
+        display: none;
+    }
+
+    .nav-menu-toggle:checked ~ .nav-scrollable {
+        display: flex;
+    }
+}
+
+@media (min-width: 641px) {
+    .navbar-toggler {
+        display: none;
+    }
+
+    .nav-scrollable {
+        height: calc(100vh - 3.5rem);
+    }
+}

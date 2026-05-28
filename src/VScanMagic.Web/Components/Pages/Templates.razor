@@ -1,0 +1,153 @@
+@page "/templates"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Models
+@inject TemplatesService TemplatesSvc
+
+<PageTitle>Templates</PageTitle>
+
+<h1>Email &amp; Ticket Note Templates <HelpTip Text="Email placeholders include {TopNReportLink} and {ReportsFolderLink} — values come from Deliverables after you paste Explorer share links." /></h1>
+<p class="text-muted">
+    Placeholders: <code>{Year}</code>, <code>{Quarter}</code>, <code>{Greeting}</code>, <code>{TopNLabel}</code>, <code>{TopNReportLink}</code>, <code>{ReportsFolderLink}</code>, <code>{SchedulingLink}</code>, <code>{NoteText}</code>, <code>{PreparedBy}</code>, <code>{ReportStepLine}</code>.
+    Link placeholders: <code>{TopNReportLink}</code> and <code>{ReportsFolderLink}</code> are filled when you paste share links on the review Deliverables page (after export and Copy link in Explorer).
+    <code>{SchedulingLink}</code> uses the default from <a href="/settings">Settings</a>, or a per-session override on Deliverables.
+</p>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_emailTab == "rmit" ? "active" : "")" @onclick='() => _emailTab = "rmit"'>Email — RMIT / CMIT</button>
+    </li>
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_emailTab == "rmitplus" ? "active" : "")" @onclick='() => _emailTab = "rmitplus"'>Email — RMIT+</button>
+    </li>
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_emailTab == "notes" ? "active" : "")" @onclick='() => _emailTab = "notes"'>Ticket notes</button>
+    </li>
+</ul>
+
+@if (_emailTab == "rmit")
+{
+    <div class="card mb-3">
+        <div class="card-header">Email template — RMIT / CMIT</div>
+        <div class="card-body">
+            <p class="form-text">Hourly-billing clients: default note requires approval before remediation begins.</p>
+            <div class="mb-3">
+                <label class="form-label">Subject format</label>
+                <input class="form-control" @bind="_templates.EmailTemplate.SubjectFormat" />
+            </div>
+            <div>
+                <label class="form-label">Body (include Subject line at top if desired)</label>
+                <textarea class="form-control font-monospace" rows="16" @bind="_templates.EmailTemplate.Body"></textarea>
+            </div>
+        </div>
+    </div>
+}
+else if (_emailTab == "rmitplus")
+{
+    <div class="card mb-3">
+        <div class="card-header">Email template — RMIT+</div>
+        <div class="card-body">
+            <p class="form-text">Agreement clients: default note explains tickets for covered items and third-party quoting.</p>
+            <div class="mb-3">
+                <label class="form-label">Subject format</label>
+                <input class="form-control" @bind="_templates.EmailTemplateRmitPlus.SubjectFormat" />
+            </div>
+            <div>
+                <label class="form-label">Body (include Subject line at top if desired)</label>
+                <textarea class="form-control font-monospace" rows="16" @bind="_templates.EmailTemplateRmitPlus.Body"></textarea>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">Manage PSA ticket notes template</div>
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Steps before tickets</label>
+                <textarea class="form-control font-monospace" rows="8" @bind="_templates.TicketNotes.StepsBeforeTickets"></textarea>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Steps after tickets</label>
+                <textarea class="form-control font-monospace" rows="4" @bind="_templates.TicketNotes.StepsAfterTickets"></textarea>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">Resolved question</label>
+                    <input class="form-control" @bind="_templates.TicketNotes.ResolvedQuestion" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Resolved answer</label>
+                    <input class="form-control" @bind="_templates.TicketNotes.ResolvedAnswer" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Next steps question</label>
+                    <input class="form-control" @bind="_templates.TicketNotes.NextStepsQuestion" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Next steps text</label>
+                    <input class="form-control" @bind="_templates.TicketNotes.NextStepsText" />
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="mb-3">
+    <button class="btn btn-outline-secondary me-2" @onclick="Reload">Reload</button>
+    <button class="btn btn-outline-secondary me-2" @onclick="LoadDefaults">Load defaults</button>
+    <button class="btn btn-primary" @onclick="Save">Save templates</button>
+</div>
+
+@code {
+    private VScanMagicTemplates _templates = new();
+    private string _emailTab = "rmit";
+    private string? _message;
+    private string? _error;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _templates = TemplatesSvc.Load();
+        _message = null;
+        _error = null;
+    }
+
+    private void LoadDefaults()
+    {
+        if (_emailTab == "rmit")
+            _templates.EmailTemplate = EmailTemplateSettings.CreateRmitDefault();
+        else if (_emailTab == "rmitplus")
+            _templates.EmailTemplateRmitPlus = EmailTemplateSettings.CreateRmitPlusDefault();
+        else
+            _templates.TicketNotes = TicketNotesTemplateSettings.CreateDefault();
+
+        _message = "Defaults loaded for the current tab (not saved yet).";
+        _error = null;
+    }
+
+    private void Save()
+    {
+        _message = null;
+        _error = null;
+        try
+        {
+            TemplatesSvc.Save(_templates);
+            _message = "Templates saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

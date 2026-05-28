@@ -1,0 +1,183 @@
+namespace VScanMagic.ConnectSecure;
+
+public enum ConnectSecurePatchType
+{
+    App,
+    Os
+}
+
+public enum ConnectSecurePatchWhen
+{
+    Now,
+    Later
+}
+
+public sealed record PatchableApplicationEntry(
+    int SolutionId,
+    string Product,
+    string Fix,
+    bool IsPatchable,
+    int AffectedAssets,
+    IReadOnlyList<int> AssetIds,
+    string Severity,
+    string RemediationAction);
+
+public sealed record PatchAssetDetail(
+    int AssetId,
+    string Ip,
+    string HostName,
+    int AgentId,
+    bool OnlineStatus,
+    IReadOnlyList<string> ApplicationNames,
+    IReadOnlyList<string> Versions,
+    IReadOnlyList<string> Paths,
+    string? RegisteredHostName = null,
+    string? AgentType = null,
+    string? AgentVersion = null,
+    string? LastPingTime = null);
+
+public class ApplicationPatchRequest
+{
+    public int CompanyId { get; set; }
+    public IReadOnlyList<int> AssetIds { get; set; } = [];
+    public IReadOnlyList<int> AgentIds { get; set; } = [];
+    public IReadOnlyList<string> IncludedApplications { get; set; } = [];
+    public IReadOnlyList<string> ExcludedApplications { get; set; } = [];
+    public IReadOnlyList<string> IncludeTags { get; set; } = [];
+    public IReadOnlyList<string> ExcludeTags { get; set; } = [];
+    public IReadOnlyList<string> TargetHostNames { get; set; } = [];
+    public Dictionary<string, string> FromVersions { get; set; } = new(StringComparer.Ordinal);
+    public ConnectSecurePatchType PatchType { get; set; } = ConnectSecurePatchType.App;
+    public bool TriggerReboot { get; set; }
+    public IReadOnlyList<int> SolutionIds { get; set; } = [];
+    public string? TargetFix { get; set; }
+    public bool IsEndOfLife { get; set; }
+    public IReadOnlyList<int> OsAssetIds { get; set; } = [];
+
+    public ApplicationPatchRequest Clone() =>
+        new()
+        {
+            CompanyId = CompanyId,
+            AssetIds = AssetIds.ToList(),
+            AgentIds = AgentIds.ToList(),
+            IncludedApplications = IncludedApplications.ToList(),
+            ExcludedApplications = ExcludedApplications.ToList(),
+            IncludeTags = IncludeTags.ToList(),
+            ExcludeTags = ExcludeTags.ToList(),
+            TargetHostNames = TargetHostNames.ToList(),
+            FromVersions = new Dictionary<string, string>(FromVersions, StringComparer.Ordinal),
+            PatchType = PatchType,
+            TriggerReboot = TriggerReboot,
+            SolutionIds = SolutionIds.ToList(),
+            TargetFix = TargetFix,
+            IsEndOfLife = IsEndOfLife,
+            OsAssetIds = OsAssetIds.ToList()
+        };
+}
+
+public sealed class ScheduledApplicationPatchRequest : ApplicationPatchRequest
+{
+    public DateTime ScheduledAt { get; set; }
+}
+
+public sealed record PatchOperationResult(bool Success, string Message, string? JobId = null);
+
+public sealed record PatchVerificationHostResult(
+    int AgentId,
+    string HostName,
+    HostPatchStatus Status,
+    string? InstalledVersion,
+    string StatusLabel);
+
+public sealed record PatchVerificationResult(
+    string JobId,
+    string Status,
+    int AtTargetCount,
+    int PendingCount,
+    int OfflineCount,
+    int EndOfLifeCount,
+    int UnknownCount,
+    int TotalHosts,
+    string Summary,
+    IReadOnlyList<PatchVerificationHostResult> Hosts,
+    DateTimeOffset VerifiedAt,
+    string? ConnectSecureInsight = null,
+    string? InventoryRefreshMessage = null);
+
+public enum HostPatchStatus
+{
+    Unknown,
+    Offline,
+    EndOfLife,
+    AtTarget,
+    Pending
+}
+
+public sealed record PatchHostView(
+    PatchAssetDetail Detail,
+    HostPatchStatus Status,
+    string StatusLabel);
+
+public sealed record PatchJobEntry(
+    string JobId,
+    string Type,
+    string JobStatus,
+    string Description,
+    string? HostName,
+    string? AgentIp,
+    DateTimeOffset? Updated,
+    bool IsLocal = false,
+    bool CanVerify = false,
+    string? VerificationSummary = null,
+    string? ConnectSecureJobId = null,
+    string? VersionCheckStatus = null,
+    int? AgentId = null,
+    string? TargetFix = null,
+    string? Product = null);
+
+public sealed record PatchJobListQuery(
+    int Page = 1,
+    int PageSize = 15,
+    int DaysBack = 7,
+    bool PatchJobsOnly = true,
+    bool LocalOnly = false,
+    DateTimeOffset? NotBefore = null)
+{
+    public DateTimeOffset? Since =>
+        DaysBack <= 0 ? null : DateTimeOffset.Now.AddDays(-DaysBack);
+}
+
+public sealed record PatchJobListResult(
+    IReadOnlyList<PatchJobEntry> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);
+
+public sealed record OsPendingPatchEntry(
+    string OsName,
+    string OsVersion,
+    string Fix,
+    int AffectedAssets,
+    IReadOnlyList<int> AssetIds);
+
+public sealed record SuppressibleRemediationEntry(
+    int SolutionId,
+    string Product,
+    string Fix,
+    string Severity,
+    string RemediationAction,
+    bool IsPatchable,
+    int AffectedAssets);
+
+public sealed record SuppressVulnerabilityRequest
+{
+    public int CompanyId { get; set; }
+    public int SolutionId { get; set; }
+    public int ProblemId { get; set; }
+    public int AssetId { get; set; }
+    public string Product { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public string Comments { get; set; } = "";
+}
+
+public sealed record ScanTriggerResult(bool Success, string Message, int TriggeredCount);

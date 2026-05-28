@@ -1,0 +1,595 @@
+@page "/os-patching"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Services
+@inject ConnectSecureClient ConnectSecure
+@inject ConnectSecurePatchService PatchService
+@inject ConnectSecureScanService ScanService
+@inject SettingsService Settings
+@inject CompanyListService CompanyList
+
+<PageTitle>OS Patching</PageTitle>
+
+<h1>OS Patching</h1>
+<p class="text-muted">
+    Pending Windows OS updates from ConnectSecure. Agent online/offline follows the ConnectSecure Agents view (lightweight and probe), using <code>last_ping_time</code>. Only online agents can be patched.
+    After patching, use <strong>Verify</strong> on the activity row (queues inventory refresh, syncs CS job status, and checks installed versions).
+    Third-party app patching is on <a href="application-patching">Application Patching</a>.
+</p>
+
+@if (!ConnectSecure.IsConfigured)
+{
+    <div class="alert alert-warning">Configure ConnectSecure credentials on <a href="settings">Settings</a> first.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label">Company</label>
+                    <div class="input-group">
+                        <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanySelectionChanged">
+                            <option value="">-- Select company --</option>
+                            @foreach (var c in _companies)
+                            {
+                                <option value="@c.Id">@c.Name</option>
+                            }
+                        </select>
+                        <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary w-100" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="LoadOsPatchesAsync">
+                        Load pending OS patches
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_loaded)
+{
+    <PatchActivityTable @ref="_patchActivityTable"
+                        CompanyId="_companyId"
+                        Busy="_busy"
+                        VerificationMessageChanged="SetVerificationMessage"
+                        VerificationErrorChanged="SetVerificationError" />
+
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Pending OS updates</span>
+            <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="triggerReboot" @bind="_triggerReboot" />
+                <label class="form-check-label" for="triggerReboot">Reboot after patch</label>
+            </div>
+        </div>
+        <div class="card-body">
+            @if (_loadingPatches)
+            {
+                <p class="text-muted mb-0">Loading pending OS patches…</p>
+            }
+            else if (_osPatches.Count == 0)
+            {
+                <p class="text-muted mb-0">No pending OS patches reported for this company.</p>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>OS</th>
+                                <th>Version</th>
+                                <th class="text-end">Hosts</th>
+                                <th>Update</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var patch in _osPatches)
+                            {
+                                var key = PatchKey(patch);
+                                var expanded = string.Equals(_expandedKey, key, StringComparison.Ordinal);
+                                <tr class="@(expanded ? "table-active" : null)">
+                                    <td>@patch.OsName</td>
+                                    <td>@patch.OsVersion</td>
+                                    <td class="text-end">@patch.AffectedAssets</td>
+                                    <td class="small text-muted">@PatchCatalogHelper.FormatFixSummary(patch.Fix)</td>
+                                    <td class="text-end">
+                                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                                disabled="@_loadingHosts"
+                                                @onclick="() => TogglePatchAsync(patch)">
+                                            @(expanded ? "Hide" : "Hosts")
+                                        </button>
+                                    </td>
+                                </tr>
+                                @if (expanded)
+                                {
+                                    <tr>
+                                        <td colspan="5" class="bg-light">
+                                            @if (_loadingHosts)
+                                            {
+                                                <p class="text-muted mb-0 py-2">Loading hosts…</p>
+                                            }
+                                            else if (_patchHostViews.Count == 0)
+                                            {
+                                                <p class="text-muted mb-0 py-2">No hosts returned for this update.</p>
+                                            }
+                                            else
+                                            {
+                                                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                                                    <div class="small text-muted">
+                                                        @_selectedAgentIds.Count of @_patchHostViews.Count selected
+                                                    </div>
+                                                    <div class="btn-group btn-group-sm">
+                                                        <button type="button" class="btn btn-outline-secondary" @onclick="RefreshHostsAsync">Refresh</button>
+                                                        <button type="button" class="btn btn-outline-secondary" @onclick="SelectOnline">Select online</button>
+                                                        <button type="button" class="btn btn-outline-secondary"
+                                                                disabled="@(_loadingHosts || _agentUpdateBusy || _selectedAgentIds.Count == 0)"
+                                                                @onclick="RequestAgentUpdateForSelectedAsync">
+                                                            @(_agentUpdateBusy ? "Requesting…" : "Refresh inventory")
+                                                        </button>
+                                                        <button type="button" class="btn btn-outline-secondary" @onclick="ClearSelection">Clear</button>
+                                                    </div>
+                                                </div>
+                                                <div class="table-responsive">
+                                                    <table class="table table-sm mb-2">
+                                                        <thead>
+                                                            <tr>
+                                                                <th style="width:2rem"></th>
+                                                                <th>Host</th>
+                                                                <th>IP</th>
+                                                                <th>Agent</th>
+                                                                <th>OS version</th>
+                                                                <th>Connectivity</th>
+                                                                <th>Patch status</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            @foreach (var host in _patchHostViews)
+                                                            {
+                                                                var detail = host.Detail;
+                                                                var selected = detail.AgentId > 0 && _selectedAgentIds.Contains(detail.AgentId);
+                                                                <tr class="@(detail.OnlineStatus ? null : "table-warning")">
+                                                                    <td>
+                                                                        @if (detail.AgentId > 0 && detail.OnlineStatus)
+                                                                        {
+                                                                            <input type="checkbox" class="form-check-input" checked="@selected"
+                                                                                   @onchange="e => ToggleAgent(detail.AgentId, e.Value is true)" />
+                                                                        }
+                                                                    </td>
+                                                                    <td>
+                                                                        @detail.HostName
+                                                                        @if (!string.IsNullOrWhiteSpace(detail.RegisteredHostName) &&
+                                                                             !string.Equals(detail.HostName, detail.RegisteredHostName, StringComparison.OrdinalIgnoreCase))
+                                                                        {
+                                                                            <span class="text-muted small"> (agent: @detail.RegisteredHostName)</span>
+                                                                        }
+                                                                    </td>
+                                                                    <td><code>@detail.Ip</code></td>
+                                                                    <td><PatchAgentStatusCell Detail="detail" /></td>
+                                                                    <td class="small">@PatchCatalogHelper.FormatVersionSummary(detail.Versions)</td>
+                                                                    <td><PatchAgentConnectivityCell Detail="detail" /></td>
+                                                                    <td>
+                                                                        <span class="@PatchStatusClass(host.Status)">@host.StatusLabel</span>
+                                                                    </td>
+                                                                </tr>
+                                                            }
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                @if (_confirmKey == key)
+                                                {
+                                                    <div class="alert alert-warning py-2">
+                                                        Patch OS update on @_selectedAgentIds.Count host(s) now?
+                                                        @if (_triggerReboot)
+                                                        {
+                                                            <span> Reboot will be triggered if required.</span>
+                                                        }
+                                                    </div>
+                                                    <div class="d-flex gap-2">
+                                                        <button type="button" class="btn btn-sm btn-danger" disabled="@_patching"
+                                                                @onclick="() => ConfirmPatchAsync(patch)">
+                                                            @(_patching ? "Patching…" : "Confirm patch now")
+                                                        </button>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelConfirm">Cancel</button>
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-warning" disabled="@(_patching || _selectedAgentIds.Count == 0)"
+                                                            @onclick="() => BeginConfirm(key)">
+                                                        Patch selected now
+                                                    </button>
+                                                }
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private List<CompanyInfo> _companies = [];
+    private string _selectedCompanyId = "";
+    private int _companyId;
+    private bool _loaded;
+    private bool _busy;
+    private bool _loadingPatches;
+    private bool _loadingHosts;
+    private bool _patching;
+    private bool _agentUpdateBusy;
+    private bool _triggerReboot;
+    private string? _error;
+    private string? _message;
+    private List<OsPendingPatchEntry> _osPatches = [];
+    private List<PatchHostView> _patchHostViews = [];
+    private OsPendingPatchEntry? _expandedPatch;
+    private string? _expandedKey;
+    private string? _confirmKey;
+    private readonly HashSet<int> _selectedAgentIds = [];
+    private readonly Dictionary<string, List<PatchHostView>> _expandedOsHostCache = new(StringComparer.OrdinalIgnoreCase);
+    private int _loadGeneration;
+    private int _expandGeneration;
+    private CancellationTokenSource? _loadCts;
+    private PatchActivityTable? _patchActivityTable;
+
+    private CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loadCts = new CancellationTokenSource();
+        if (ConnectSecure.IsConfigured)
+            await LoadCompanies();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_loadCts is not null)
+        {
+            await _loadCts.CancelAsync();
+            _loadCts.Dispose();
+        }
+    }
+
+    private async Task LoadCompanies()
+    {
+        _busy = true;
+        try
+        {
+            _companies = (await CompanyList.GetCompaniesAsync(LoadCancellationToken)).ToList();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnCompanySelectionChanged()
+    {
+        if (_loaded && int.TryParse(_selectedCompanyId, out var selected) && selected == _companyId)
+            return;
+
+        if (string.IsNullOrEmpty(_selectedCompanyId) || !int.TryParse(_selectedCompanyId, out _))
+        {
+            ClearLoadedCompanyState();
+            return;
+        }
+
+        if (_loaded)
+            ClearLoadedCompanyState();
+    }
+
+    private void ClearLoadedCompanyState()
+    {
+        _loadGeneration++;
+        _expandGeneration++;
+        _companyId = 0;
+        _loaded = false;
+        _error = null;
+        _message = null;
+        _osPatches = [];
+        _expandedKey = null;
+        _expandedPatch = null;
+        _confirmKey = null;
+        _patchHostViews = [];
+        _selectedAgentIds.Clear();
+        _expandedOsHostCache.Clear();
+    }
+
+    private static string OsExpandCacheKey(int companyId, OsPendingPatchEntry patch) =>
+        $"{companyId}:{patch.Fix}:{string.Join(',', patch.AssetIds.OrderBy(id => id))}";
+
+    private Task LoadOsPatchesAsync() => LoadOsPatchesAsync(forceRefresh: false);
+
+    private Task RefreshOsPatchesAsync() => LoadOsPatchesAsync(forceRefresh: true);
+
+    private async Task LoadOsPatchesAsync(bool forceRefresh)
+    {
+        if (!int.TryParse(_selectedCompanyId, out var companyId) || companyId <= 0)
+            return;
+
+        var sameCompany = _loaded && _companyId == companyId;
+        if (sameCompany && !forceRefresh)
+            forceRefresh = true;
+
+        _companyId = companyId;
+        _loaded = true;
+        _error = null;
+        _message = null;
+        _loadingPatches = true;
+        _expandedKey = null;
+        _expandedPatch = null;
+        _confirmKey = null;
+        _selectedAgentIds.Clear();
+        _patchHostViews = [];
+        _busy = true;
+        var generation = ++_loadGeneration;
+
+        try
+        {
+            _osPatches = (await PatchService.GetOsPendingPatchesAsync(_companyId, forceRefresh: forceRefresh, ct: LoadCancellationToken)).ToList();
+            if (generation != _loadGeneration)
+                return;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _osPatches = [];
+        }
+        finally
+        {
+            _loadingPatches = false;
+            _busy = false;
+        }
+    }
+
+    private async Task TogglePatchAsync(OsPendingPatchEntry patch)
+    {
+        var key = PatchKey(patch);
+        if (string.Equals(_expandedKey, key, StringComparison.Ordinal))
+        {
+            _expandedKey = null;
+            _expandedPatch = null;
+            _confirmKey = null;
+            _patchHostViews = [];
+            _selectedAgentIds.Clear();
+            return;
+        }
+
+        _expandedKey = key;
+        _expandedPatch = patch;
+        _confirmKey = null;
+        var generation = ++_expandGeneration;
+        await LoadHostsAsync(patch, generation);
+    }
+
+    private async Task RefreshHostsAsync()
+    {
+        if (_expandedPatch is null)
+            return;
+
+        _loadingHosts = true;
+        try
+        {
+            await LoadHostsAsync(_expandedPatch, _expandGeneration);
+        }
+        finally
+        {
+            _loadingHosts = false;
+        }
+    }
+
+    private async Task LoadHostsAsync(OsPendingPatchEntry patch, int generation)
+    {
+        _loadingHosts = true;
+        _selectedAgentIds.Clear();
+        try
+        {
+            var cacheKey = OsExpandCacheKey(_companyId, patch);
+            if (_expandedOsHostCache.TryGetValue(cacheKey, out var cachedViews))
+            {
+                if (generation != _expandGeneration)
+                    return;
+
+                _patchHostViews = cachedViews;
+                foreach (var host in _patchHostViews.Where(h => h.Detail.OnlineStatus && h.Detail.AgentId > 0))
+                    _selectedAgentIds.Add(host.Detail.AgentId);
+                return;
+            }
+
+            var details = await PatchService.GetOsPatchHostsAsync(_companyId, patch, LoadCancellationToken);
+            if (generation != _expandGeneration)
+                return;
+
+            _patchHostViews = (await PatchService.BuildOsPatchHostViewsAsync(_companyId, patch.Fix, details, LoadCancellationToken)).ToList();
+            _expandedOsHostCache[cacheKey] = _patchHostViews;
+            foreach (var host in _patchHostViews.Where(h => h.Detail.OnlineStatus && h.Detail.AgentId > 0))
+                _selectedAgentIds.Add(host.Detail.AgentId);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loadingHosts = false;
+        }
+    }
+
+    private async Task ConfirmPatchAsync(OsPendingPatchEntry patch)
+    {
+        if (_companyId <= 0 || _selectedAgentIds.Count == 0)
+            return;
+
+        _patching = true;
+        _error = null;
+        _message = null;
+        try
+        {
+            var selected = _patchHostViews.Where(h => _selectedAgentIds.Contains(h.Detail.AgentId)).ToList();
+            var agentIds = selected.Select(h => h.Detail.AgentId).Distinct().ToList();
+            var result = await PatchService.PatchOsNowAsync(new ApplicationPatchRequest
+            {
+                CompanyId = _companyId,
+                AgentIds = agentIds,
+                AssetIds = selected.Select(h => h.Detail.AssetId > 0 ? h.Detail.AssetId : h.Detail.AgentId).Distinct().ToList(),
+                IncludedApplications = [BuildOsProductName(patch)],
+                TriggerReboot = _triggerReboot,
+                TargetHostNames = selected
+                    .Select(h => h.Detail.HostName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                TargetFix = patch.Fix,
+                OsAssetIds = patch.AssetIds
+            });
+
+            _message = await BuildPatchSuccessMessageAsync(result.Message, agentIds);
+            _confirmKey = null;
+            if (_patchActivityTable is not null)
+                await _patchActivityTable.RefreshAsync();
+            await RefreshHostsAsync();
+            if (!string.IsNullOrWhiteSpace(result.JobId) && _patchActivityTable is not null)
+                await _patchActivityTable.VerifyJobAsync(result.JobId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _patching = false;
+        }
+    }
+
+    private async Task RequestAgentUpdateForSelectedAsync()
+    {
+        if (_companyId <= 0 || _selectedAgentIds.Count == 0)
+            return;
+
+        _error = null;
+        _message = null;
+        _agentUpdateBusy = true;
+        try
+        {
+            var agentIds = _selectedAgentIds.Where(id => id > 0).Distinct().ToList();
+            var result = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            _message = $"{result.Message} Use Verify on the activity row after agents report updated inventory.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _agentUpdateBusy = false;
+        }
+    }
+
+    private async Task<string> BuildPatchSuccessMessageAsync(string patchMessage, IReadOnlyList<int> agentIds)
+    {
+        try
+        {
+            var update = await ScanService.TriggerAgentUpdatesAsync(_companyId, agentIds, LoadCancellationToken);
+            return $"{patchMessage} {update.Message} Use Verify on the activity row after agents finish installing and reporting back.";
+        }
+        catch
+        {
+            return $"{patchMessage} Use Verify on the activity row after agents report back.";
+        }
+    }
+
+    private static string BuildOsProductName(OsPendingPatchEntry patch)
+    {
+        if (!string.IsNullOrWhiteSpace(patch.OsName) && !string.IsNullOrWhiteSpace(patch.OsVersion))
+            return $"{patch.OsName} {patch.OsVersion}".Trim();
+        return string.IsNullOrWhiteSpace(patch.OsName) ? patch.OsVersion : patch.OsName;
+    }
+
+    private static string PatchKey(OsPendingPatchEntry patch) =>
+        $"{patch.OsName}|{patch.OsVersion}|{patch.Fix}";
+
+    private void ToggleAgent(int agentId, bool selected)
+    {
+        if (agentId <= 0)
+            return;
+        if (selected)
+            _selectedAgentIds.Add(agentId);
+        else
+            _selectedAgentIds.Remove(agentId);
+        _confirmKey = null;
+    }
+
+    private void SelectOnline()
+    {
+        _selectedAgentIds.Clear();
+        foreach (var host in _patchHostViews.Where(h => h.Detail.OnlineStatus && h.Detail.AgentId > 0))
+            _selectedAgentIds.Add(host.Detail.AgentId);
+        _confirmKey = null;
+    }
+
+    private void ClearSelection()
+    {
+        _selectedAgentIds.Clear();
+        _confirmKey = null;
+    }
+
+    private void BeginConfirm(string key) => _confirmKey = key;
+    private void CancelConfirm() => _confirmKey = null;
+
+    private Task SetVerificationMessage(string? message)
+    {
+        if (!string.IsNullOrWhiteSpace(message))
+            _message = message;
+        return Task.CompletedTask;
+    }
+
+    private Task SetVerificationError(string? error)
+    {
+        if (!string.IsNullOrWhiteSpace(error))
+            _error = error;
+        return Task.CompletedTask;
+    }
+
+    private static string PatchStatusClass(HostPatchStatus status) =>
+        status switch
+        {
+            HostPatchStatus.AtTarget => "text-success",
+            HostPatchStatus.Pending => "text-primary",
+            HostPatchStatus.Offline => "text-warning",
+            HostPatchStatus.EndOfLife => "text-danger",
+            _ => "text-muted"
+        };
+}

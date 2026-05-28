@@ -1,0 +1,28 @@
+{
+  "profiles": {
+    "VScanMagic.Web": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://127.0.0.1:8080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "VSCANMAGIC_PORT": "8080",
+        "VSCANMAGIC_API_BIND": "127.0.0.1"
+      }
+    },
+    "VScanMagic.Web.Lan": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://0.0.0.0:8080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "VSCANMAGIC_PORT": "8080",
+        "VSCANMAGIC_API_BIND": "0.0.0.0",
+        "VSCANMAGIC_DETAILED_ERRORS": "1",
+        "ASPNETCORE_URLS": "http://0.0.0.0:8080"
+      }
+    }
+  }
+}

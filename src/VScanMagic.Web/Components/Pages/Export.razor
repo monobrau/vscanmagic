@@ -1,0 +1,182 @@
+@page "/export/{SessionId}"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Paths
+@using VScanMagic.Core.Services
+@using VScanMagic.Data
+@using VScanMagic.Review.Models
+@inject IReviewSessionRepository SessionRepo
+@inject ExportOrchestrator Exporter
+@inject VulnerabilityPipeline Pipeline
+@inject SettingsService Settings
+@inject ReportPathResolver PathResolver
+@inject ReportFolderHistoryService FolderHistory
+
+<PageTitle>Export</PageTitle>
+
+<h1>Export Review Session <HelpTip Text="Writes DOCX, PDF, and XLSX to the output folder. Copy email and tickets from Deliverables — not generated here." /></h1>
+
+@if (_session is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <p>@_session.ClientName — @_session.ScanDate | Client type: @(_session.IsRmitPlus ? "RMIT+" : "RMIT/CMIT")</p>
+    <div class="mb-3">
+        <label class="form-label">Output Directory <HelpTip Text="Local quarterly folder under Reports Base Path. After export, use Explorer Copy link for Deliverables email URLs." AlignEnd="true" /></label>
+        <input class="form-control" @bind="_outputDir" @bind:after="OnOutputDirectoryChanged" />
+        @if (!string.IsNullOrWhiteSpace(_pathHint))
+        {
+            <div class="form-text">@_pathHint</div>
+        }
+    </div>
+    <div class="card mb-3">
+        <div class="card-body">
+            <h2 class="h6">Optional exports</h2>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" @bind="_includeHostCounts" id="includeHostCounts"
+                       disabled="@(!CanExportHostCounts)" />
+                <label class="form-check-label" for="includeHostCounts">
+                    Host vulnerability counts (PDF + XLSX) <HelpTip Text="Optional per-host totals from the full All Vulnerabilities source file." />
+                </label>
+            </div>
+            @if (!CanExportHostCounts)
+            {
+                <div class="form-text">Requires the session source All Vulnerabilities XLSX on disk.</div>
+            }
+            else if (_includeHostCounts)
+            {
+                <div class="form-text">Per-host totals from the full vulnerability report — useful for spotting outlier hosts during review.</div>
+            }
+        </div>
+    </div>
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+    <div class="mb-3">
+        <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">
+            Open deliverables
+        </a>
+        <span class="form-text">Ticket instructions, email, time estimate, and Manage PSA notes — copy from Deliverables during review.</span>
+    </div>
+    @if (_result is not null)
+    {
+        <div class="alert alert-success">
+            <p class="mb-2"><strong>Reports folder:</strong> @_result.OutputDirectory</p>
+            <ul class="mb-0">
+                <li>DOCX: @_result.DocxPath</li>
+                <li>PDF: @_result.PdfPath</li>
+                <li>XLSX: @_result.XlsxPath</li>
+                @if (!string.IsNullOrWhiteSpace(_result.HostCountsPdfPath))
+                {
+                    <li>Host counts PDF: @_result.HostCountsPdfPath</li>
+                }
+                @if (!string.IsNullOrWhiteSpace(_result.HostCountsXlsxPath))
+                {
+                    <li>Host counts XLSX: @_result.HostCountsXlsxPath</li>
+                }
+            </ul>
+        </div>
+    }
+    <button class="btn btn-primary" disabled="@_busy" @onclick="RunExport">Export client reports</button>
+}
+
+@code {
+    [Parameter] public string SessionId { get; set; } = "";
+    private ReviewSession? _session;
+    private string _outputDir = "";
+    private string? _pathHint;
+    private ExportResult? _result;
+    private string? _error;
+    private bool _busy;
+    private bool _includeHostCounts;
+    private UserSettings _userSettings = new();
+
+    private bool CanExportHostCounts =>
+        _session is not null &&
+        !string.IsNullOrWhiteSpace(_session.SourceFilePath) &&
+        File.Exists(_session.SourceFilePath);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _session = await SessionRepo.GetAsync(SessionId);
+        _userSettings = Settings.LoadUserSettings();
+        _outputDir = _userSettings.LastOutputDirectory;
+        if (string.IsNullOrWhiteSpace(_outputDir))
+            _outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Exports");
+
+        _includeHostCounts = CanExportHostCounts;
+        RefreshResolvedPath();
+    }
+
+    private void OnOutputDirectoryChanged() => _pathHint = null;
+
+    private void RefreshResolvedPath()
+    {
+        if (_session is null)
+            return;
+
+        var companyId = int.TryParse(_session.CompanyId, out var id) ? id : 0;
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            _session.ClientName,
+            _session.ScanDate,
+            _outputDir);
+
+        if (layout.UsesStructuredPaths)
+        {
+            _outputDir = layout.OutputDirectory;
+            _pathHint = layout.ReportsPathPartial is not null
+                ? $"Resolved: ...\\{layout.ReportsPathPartial}. Client reports (DOCX, PDF, XLSX) export to this quarter folder."
+                : $"Resolved under Reports Base Path: {layout.OutputDirectory}.";
+        }
+    }
+
+    private ReportOutputLayout BuildLayout()
+    {
+        var companyId = _session is not null && int.TryParse(_session.CompanyId, out var id) ? id : 0;
+        return PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            _session!.ClientName,
+            _session.ScanDate,
+            _outputDir);
+    }
+
+    private async Task RunExport()
+    {
+        if (_session is null) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            var layout = BuildLayout();
+            _outputDir = layout.OutputDirectory;
+
+            SessionExportOptions? options = null;
+            if (_includeHostCounts && CanExportHostCounts)
+            {
+                var summary = await Task.Run(() => Pipeline.SummarizeHosts(_session.SourceFilePath!));
+                options = new SessionExportOptions(true, summary.Hosts);
+            }
+
+            _result = Exporter.ExportAll(_session, layout, options);
+            FolderHistory.Add(_session.ClientName, layout.OutputDirectory);
+
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(_userSettings, layout.OutputDirectory);
+            Settings.SaveUserSettings(_userSettings);
+
+            RefreshResolvedPath();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -1,0 +1,18 @@
+<span class="help-tip @CssClass" tabindex="0" role="note" aria-label="@Text" title="@Text">
+    <i class="bi bi-question-circle help-tip-icon" aria-hidden="true"></i>
+    <span class="help-tip-popover @PopoverClass">@Text</span>
+</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Text { get; set; } = "";
+
+    [Parameter]
+    public string? CssClass { get; set; }
+
+    /// <summary>Align popover to the right edge (use near left screen edge).</summary>
+    [Parameter]
+    public bool AlignEnd { get; set; }
+
+    private string PopoverClass => AlignEnd ? "help-tip-popover-end" : "";
+}

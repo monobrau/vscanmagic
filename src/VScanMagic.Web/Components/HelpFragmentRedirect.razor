@@ -1,0 +1,55 @@
+@inject NavigationManager Nav
+@implements IDisposable
+
+@code {
+    private static readonly HashSet<string> HelpSectionIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "setup",
+        "quarterly",
+        "review",
+        "deliverables",
+        "pages",
+        "glossary",
+        "tips",
+        "testimonials"
+    };
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        TryRedirectToHelpSection();
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        TryRedirectToHelpSection();
+
+    private void TryRedirectToHelpSection()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.Length == 0)
+            path = "/";
+
+        if (string.Equals(path, "/testimonials", StringComparison.OrdinalIgnoreCase))
+        {
+            var section = uri.Fragment.TrimStart('#');
+            if (string.IsNullOrEmpty(section))
+                section = "testimonials";
+            if (HelpSectionIds.Contains(section))
+                Nav.NavigateTo($"/help#{section}", replace: true);
+            return;
+        }
+
+        var fragment = uri.Fragment.TrimStart('#');
+        if (string.IsNullOrEmpty(fragment) || !HelpSectionIds.Contains(fragment))
+            return;
+
+        if (string.Equals(path, "/help", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (string.Equals(path, "/", StringComparison.OrdinalIgnoreCase))
+            Nav.NavigateTo($"/help#{fragment}", replace: true);
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

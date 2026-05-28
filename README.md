@@ -2,6 +2,18 @@
 
 A PowerShell tool for vulnerability management and report generation from ConnectSecure.
 
+## .NET 8 Rebuild (cross-platform)
+
+A new **.NET 8** implementation lives under [`src/`](src/README.md). It centers on **Client Review Sessions** (presenter web UI, read-only client view, post-review editable DOCX/PDF export) and does **not** require Microsoft Office.
+
+```bash
+cd src
+dotnet run --project VScanMagic.Web
+# Open http://127.0.0.1:8080
+```
+
+The legacy PowerShell + WinForms + Office COM application remains in this repo until full cutover.
+
 ## Tools Included
 
 ### VScanMagic v4 - Vulnerability Report Generator (`VScanMagic-GUI.ps1`)
@@ -82,7 +94,7 @@ For building an application remediation database (baseline of applications with 
 .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath "C:\...\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
 
 # From ConnectSecure (using saved API credentials; CompanyId from VScanMagic GUI company list)
-.\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+.\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Example Client" -UseSavedCredentials -UniqueProductsOnly
 
 # Seed Remediation Steps from ConnectSecure Fix text, or from NVD when CVE IDs are present (requires CVE/Fix columns in source)
 .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -OutputPath ".\applications-baseline.csv"
@@ -97,6 +109,13 @@ Output includes Product, severity counts, affected hosts, **CVE** (when present 
 - [ConnectSecure API Usage](ConnectSecure-API-Usage.md) – API configuration and usage
 - [Quick Start](QUICK_START.md) – Step-by-step guide
 - [Release Notes](https://github.com/monobrau/vscanmagic/releases) – Changelog and downloads
+
+### Development
+
+- **Tests (no COM):** `.\tests\Run-Tests.ps1`
+- **PSScriptAnalyzer:** `Install-Module PSScriptAnalyzer -Scope CurrentUser -Force` then `.\scripts\Invoke-ScriptAnalyzer.ps1` (use `-Severity Error` for CI-level strictness)
+- **ConnectSecure client** is split into `ConnectSecure-API.ps1` (loader) plus `ConnectSecure-API.Part1.ps1` … `Part3.ps1`.
+- **REST API** (`VScanMagic-API.ps1`) loads `VScanMagic-ApiBootstrap.ps1` (Core + Data + Reports only), not the full GUI stack.
 
 ---
 

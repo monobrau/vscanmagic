@@ -30,9 +30,11 @@ Memberberry needs to be configured with a shared network location for multi-user
 ## Step 2: Verify VScanMagic Can Find Memberberry
 
 VScanMagic automatically searches for Memberberry's `config.json` in these locations (in order):
-1. `c:\git\memberberry\config.json`
-2. `%USERPROFILE%\Documents\memberberry\config.json`
-3. Relative paths from VScanMagic installation
+1. **`MEMBERBERRY_CONFIG`** — full path to `config.json` (recommended for portability)
+2. **`MEMBERBERRY_HOME`** — directory containing `config.json`
+3. `c:\git\memberberry\config.json`
+4. `%USERPROFILE%\Documents\memberberry\config.json`
+5. Relative paths from VScanMagic installation
 
 **To verify VScanMagic found Memberberry:**
 1. Launch VScanMagic GUI

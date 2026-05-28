@@ -1,0 +1,192 @@
+@page "/sessions"
+@rendermode InteractiveServer
+@inject IReviewSessionRepository SessionRepo
+@inject NavigationManager Nav
+
+<PageTitle>Review sessions</PageTitle>
+
+<h1>Review sessions <HelpTip Text="Saved quarterly client reviews — findings, notes, remediation edits, and deliverable links. Stored locally in your config folder." /></h1>
+<p class="text-muted small mb-3">
+    Need a walkthrough? See <a href="/help#quarterly">Help → Quarterly workflow</a>.
+    Archive hides old reviews from this list; delete removes them permanently.
+</p>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success py-2">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger py-2">@_error</div>
+}
+
+<div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+    <div class="form-check mb-0">
+        <input class="form-check-input" type="checkbox" id="show-archived" @bind="_showArchived" @bind:after="ReloadAsync" />
+        <label class="form-check-label" for="show-archived">Show archived</label>
+    </div>
+    <a class="btn btn-sm btn-outline-primary" href="/">Start new review</a>
+</div>
+
+@if (_sessions.Count == 0)
+{
+    <p class="text-muted">@(_showArchived ? "No review sessions yet." : "No active review sessions. Start one from Start client review, or show archived.")</p>
+}
+else
+{
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>Client</th>
+                <th>Scan</th>
+                <th>Presenter</th>
+                <th>Updated</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var s in _sessions)
+            {
+                <tr class="@(s.IsArchived ? "table-secondary" : null)">
+                    <td>
+                        @s.ClientName
+                        @if (s.IsArchived)
+                        {
+                            <span class="badge bg-secondary ms-1">Archived</span>
+                        }
+                    </td>
+                    <td>@s.ScanDate</td>
+                    <td>@(string.IsNullOrWhiteSpace(s.Presenter) ? "—" : s.Presenter)</td>
+                    <td>@s.UpdatedAt.LocalDateTime.ToString("g")</td>
+                    <td class="text-end text-nowrap">
+                        <a class="btn btn-sm btn-outline-primary me-1" href="/review/@s.Id">Open</a>
+                        @if (s.IsArchived)
+                        {
+                            @if (_confirmRestoreId == s.Id)
+                            {
+                                <button type="button" class="btn btn-sm btn-success me-1" disabled="@_busy" @onclick="() => RestoreAsync(s)">Confirm restore</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary me-1" disabled="@_busy" @onclick="CancelConfirm">Cancel</button>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary me-1" disabled="@_busy" @onclick="() => _confirmRestoreId = s.Id">Restore</button>
+                            }
+                        }
+                        else if (_confirmArchiveId == s.Id)
+                        {
+                            <button type="button" class="btn btn-sm btn-warning me-1" disabled="@_busy" @onclick="() => ArchiveAsync(s)">Confirm archive</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-1" disabled="@_busy" @onclick="CancelConfirm">Cancel</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-1" disabled="@_busy" @onclick="() => _confirmArchiveId = s.Id">Archive</button>
+                        }
+
+                        @if (_confirmDeleteId == s.Id)
+                        {
+                            <button type="button" class="btn btn-sm btn-danger me-1" disabled="@_busy" @onclick="() => DeleteAsync(s)">Confirm delete</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="CancelConfirm">Cancel</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="() => _confirmDeleteId = s.Id">Delete</button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private IReadOnlyList<ReviewSession> _sessions = [];
+    private bool _showArchived;
+    private bool _busy;
+    private string? _message;
+    private string? _error;
+    private string? _confirmArchiveId;
+    private string? _confirmDeleteId;
+    private string? _confirmRestoreId;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _sessions = await SessionRepo.ListAsync(_showArchived);
+    }
+
+    private void CancelConfirm()
+    {
+        _confirmArchiveId = null;
+        _confirmDeleteId = null;
+        _confirmRestoreId = null;
+    }
+
+    private async Task ArchiveAsync(ReviewSession session)
+    {
+        _busy = true;
+        _message = null;
+        _error = null;
+        try
+        {
+            session.ArchivedAt = DateTimeOffset.Now;
+            await SessionRepo.SaveAsync(session);
+            _message = $"Archived review for {session.ClientName}.";
+            CancelConfirm();
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RestoreAsync(ReviewSession session)
+    {
+        _busy = true;
+        _message = null;
+        _error = null;
+        try
+        {
+            session.ArchivedAt = null;
+            await SessionRepo.SaveAsync(session);
+            _message = $"Restored review for {session.ClientName}.";
+            CancelConfirm();
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(ReviewSession session)
+    {
+        _busy = true;
+        _message = null;
+        _error = null;
+        try
+        {
+            await SessionRepo.DeleteAsync(session.Id);
+            _message = $"Deleted review for {session.ClientName}.";
+            CancelConfirm();
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

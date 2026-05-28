@@ -64,6 +64,12 @@ All Vulnerabilities Report*.xlsx
 # Export outputs
 VulnerabilitiesExport_*.csv
 unique-software-*.csv
+EmailTemplate-TestPreview.html
+debug-*.log
+
+# Stray temp/work files (canonical location is %TEMP%\VScanMagic)
+VScanMagic_*.xlsx
+VScanMagic_*.docx
 
 VScanMagic_Settings.json
 VScanMagic_CompanyFolderMap.json

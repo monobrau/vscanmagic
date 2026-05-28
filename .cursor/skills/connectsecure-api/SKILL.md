@@ -46,6 +46,19 @@ Default limits (per `ConnectSecure-API.ps1`):
 | Registry | `/r/report_queries/registry_problems_remediation` | Uses `condition` param |
 | Network | `/r/report_queries/application_vulnerabilities_net` | Uses `condition` (e.g. `software_type='networksoftware'`) |
 
+## Patch Management
+
+**Full reference:** `ConnectSecure-Patch-Management.md`
+
+| Action | Endpoint | Notes |
+|--------|----------|-------|
+| Trigger patch | `POST /w/company/patch_now` | `patch_when: now`, `type: application`, `from_versions` keyed by **asset ID** |
+| Patch job status | `GET /r/report_queries/patch_jobview` | Portal **Patch Jobs** tab; `condition=company_id=X`, `order_by=created desc` |
+| Refresh inventory | `POST /w/company/reset_agents` | `message: update_agent`; does not install patches |
+| Patch settings | `GET /r/company/get_patch_settings` | Verify patch management enabled per company |
+
+**Wrong endpoint for patch jobs:** `/r/company/jobs_view` (scans/reports only). VScanMagic uses `patch_jobview` for CS job correlation.
+
 ## Common Query Parameters
 
 | Param | Purpose |
@@ -80,6 +93,7 @@ For pre-built report downloads: `GET /report_builder/standard_reports?isGlobal=f
 
 ## Additional Reference
 
+- `ConnectSecure-Patch-Management.md` – patch_now, patch_jobview, portal payload shapes
 - `ConnectSecure-Vulnerability-Endpoints.md` – Full endpoint list
 - `ConnectSecure-Standard-Reports-Reference.md` – Report IDs, data APIs
 - `ConnectSecure-API-401-Troubleshooting.md` – Auth debugging

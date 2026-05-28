@@ -1,0 +1,669 @@
+@page "/report-downloader"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Paths
+@using VScanMagic.Core.Services
+@using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Helpers
+@using VScanMagic.Web.Services
+@inject ConnectSecureClient CsClient
+@inject ConnectSecureReportService ReportService
+@inject SettingsService Settings
+@inject ReportPathResolver PathResolver
+@inject ReportFolderHistoryService FolderHistory
+@inject NativeFolderPickerService FolderPicker
+@inject NavigationManager Nav
+
+<PageTitle>Report downloader</PageTitle>
+
+<div class="alert alert-secondary py-2 mb-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <span class="small mb-0">
+        <strong>Prep step.</strong> Pull reports from ConnectSecure before your review.
+        When you have <strong>All Vulnerabilities</strong>, continue on
+        <a href="/">Start client review</a>.
+    </span>
+    <a class="btn btn-sm btn-primary" href="/">Start client review</a>
+</div>
+
+<h1>Report downloader <HelpTip Text="Download ConnectSecure standard report templates for a company or global (tenant) scope. Pick the default quarterly bundle or any report/format from the live catalog." /></h1>
+
+@if (!CsClient.IsConfigured)
+{
+    <div class="alert alert-warning">Configure ConnectSecure API credentials on <a href="/settings">Settings</a> first.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">Scope &amp; destination</div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label class="form-label">Report scope</label>
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn @ScopeButtonClass(ReportCatalogScope.Company)" @onclick="() => SetScope(ReportCatalogScope.Company)">Company</button>
+                        <button type="button" class="btn @ScopeButtonClass(ReportCatalogScope.Global)" @onclick="() => SetScope(ReportCatalogScope.Global)">Global</button>
+                    </div>
+                    <div class="form-text">
+                        @(_scope == ReportCatalogScope.Global
+                            ? "Tenant-wide report templates (no company filter)."
+                            : "Reports scoped to the selected ConnectSecure company.")
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Scan date <HelpTip Text="Used to resolve the year-quarter output folder under Reports Base Path." /></label>
+                    <input class="form-control" type="date" @bind="_scanDate" @bind:after="RefreshResolvedOutputPath" />
+                </div>
+            </div>
+
+            @if (_scope == ReportCatalogScope.Company)
+            {
+                <div class="row mb-3">
+                    <div class="col-md-12">
+                        <label class="form-label">Company</label>
+                        <div class="input-group">
+                            <select class="form-select" @bind="_selectedCompanyId" @bind:after="OnCompanyChanged">
+                                <option value="">-- Select company --</option>
+                                @foreach (var c in _companies)
+                                {
+                                    <option value="@c.Id">@c.Name</option>
+                                }
+                            </select>
+                            <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="mb-0">
+                <label class="form-label">Output directory <HelpTip Text="Pre-filled from client mapping and scan date. Browse to use a one-off folder for this download instead of the auto-resolved path." /></label>
+                <div class="input-group">
+                    <input class="form-control" @bind="_outputDirectory" @bind:after="OnOutputDirectoryChanged" />
+                    <button type="button" class="btn btn-outline-secondary" disabled="@_busy" @onclick="BrowseOutputDirectory">Browse…</button>
+                </div>
+                @if (_outputDirectoryOverridden)
+                {
+                    <div class="form-text">Using custom folder for this download (browse overrides auto-resolved path).</div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_resolvedPathHint))
+                {
+                    <div class="form-text">@_resolvedPathHint</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_scope == ReportCatalogScope.Company)
+    {
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Quarterly bundle (company)</span>
+                <div class="btn-group btn-group-sm">
+                    <button type="button" class="btn btn-outline-secondary" disabled="@_busy" @onclick="SelectDefaultBundle">Select default bundle</button>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@_busy" @onclick="ClearBundleSelection">Clear bundle</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <p class="form-text">Typical quarterly set. Include <strong>All Vulnerabilities</strong> before starting a review on <a href="/">Start client review</a>.</p>
+                <div class="row">
+                    @for (var ri = 0; ri < _bundleReports.Count; ri++)
+                    {
+                        var report = _bundleReports[ri];
+                        var bundleIndex = ri;
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" checked="@GetBundleSelected(report.Type)"
+                                       @onclick="e => OnBundleCheckboxClick(bundleIndex, e)" @onclick:preventDefault
+                                       id="@($"bundle_{report.Type}")" />
+                                <label class="form-check-label" for="@($"bundle_{report.Type}")">@report.Name (@report.Extension.ToUpperInvariant())</label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <span>ConnectSecure catalog</span>
+            <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-outline-secondary" disabled="@_busy" @onclick="LoadCatalog">@( _catalogLoaded ? "Reload catalog" : "Load catalog")</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@(_busy || _catalogGroups.Count == 0)" @onclick="SelectAllCatalog">Select all</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@(_busy || _catalogGroups.Count == 0)" @onclick="ClearCatalogSelection">Clear catalog</button>
+            </div>
+        </div>
+        <div class="card-body">
+            @if (_catalogLoading)
+            {
+                <p class="text-muted mb-0">Loading report list from ConnectSecure…</p>
+            }
+            else if (!string.IsNullOrWhiteSpace(_catalogError))
+            {
+                <div class="alert alert-warning mb-0">@_catalogError</div>
+            }
+            else if (!_catalogLoaded)
+            {
+                <p class="text-muted mb-0">Load the catalog to choose any standard report and format (XLSX, DOCX, PDF) available for this scope.</p>
+            }
+            else if (_catalogGroups.Count == 0)
+            {
+                <p class="text-muted mb-0">No reports returned for this scope.</p>
+            }
+            else
+            {
+                <p class="form-text mb-3">@_catalogGroups.Count report categories · @_selectedCatalogKeys.Count format(s) selected. Shift-click to select a range.</p>
+                <div class="report-catalog-list">
+                    @for (var gi = 0; gi < _catalogGroups.Count; gi++)
+                    {
+                        var group = _catalogGroups[gi];
+                        var groupIndex = gi;
+                        <div class="border rounded p-2 mb-2">
+                            <div class="fw-semibold mb-1">@group.Name</div>
+                            <div class="d-flex flex-wrap gap-3">
+                                @foreach (var fmt in ReportCatalogBuilder.FormatOrderList)
+                                {
+                                    if (!group.Formats.TryGetValue(fmt, out var option))
+                                    {
+                                        continue;
+                                    }
+
+                                    var key = CatalogKey(group.Name, fmt);
+                                    var catalogIndex = CatalogFlatIndex(groupIndex, fmt);
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" checked="@_selectedCatalogKeys.Contains(key)"
+                                               @onclick="e => OnCatalogCheckboxClick(catalogIndex, key, e)" @onclick:preventDefault
+                                               id="@($"cat_{catalogIndex}")" />
+                                        <label class="form-check-label" for="@($"cat_{catalogIndex}")">@fmt.ToUpperInvariant()</label>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="mb-3">
+        @if (!string.IsNullOrWhiteSpace(_status))
+        {
+            <div class="alert alert-info py-2">@_status</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="alert alert-danger py-2">@_error</div>
+        }
+        <button class="btn btn-success me-2" disabled="@(!CanDownload)" @onclick="DownloadSelected">
+            Download selected reports
+        </button>
+        @if (_scope == ReportCatalogScope.Company && !string.IsNullOrEmpty(_downloadedAllVulnsPath))
+        {
+            <button class="btn btn-primary" disabled="@_busy" @onclick="GoToIngest">Start review from All Vulnerabilities</button>
+        }
+    </div>
+
+    @if (_downloadResult is not null)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Download results</div>
+            <div class="card-body">
+                <p class="mb-2"><strong>Saved to:</strong> <code>@_downloadResult.OutputDirectory</code></p>
+                @if (_downloadResult.Succeeded.Count > 0)
+                {
+                    <ul class="mb-2">
+                        @foreach (var s in _downloadResult.Succeeded)
+                        {
+                            <li>@s.Name — <code class="small">@s.Path</code></li>
+                        }
+                    </ul>
+                }
+                @if (_downloadResult.Failed.Count > 0)
+                {
+                    <p class="text-danger mb-1">Failed:</p>
+                    <ul class="mb-0">
+                        @foreach (var f in _downloadResult.Failed)
+                        {
+                            <li>@f.Name: @f.Error</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private ReportCatalogScope _scope = ReportCatalogScope.Company;
+    private DateTime _scanDate = DateTime.Today;
+    private string _outputDirectory = "";
+    private bool _outputDirectoryOverridden;
+    private string? _resolvedPathHint;
+    private string? _status;
+    private string? _error;
+    private bool _busy;
+    private bool _catalogLoading;
+    private bool _catalogLoaded;
+    private string? _catalogError;
+    private string _selectedCompanyId = "";
+    private List<CompanyInfo> _companies = [];
+    private List<StandardReportRequest> _bundleReports = [];
+    private HashSet<string> _selectedBundleTypes = new(StringComparer.OrdinalIgnoreCase);
+    private List<ReportCatalogGroup> _catalogGroups = [];
+    private HashSet<string> _selectedCatalogKeys = new(StringComparer.OrdinalIgnoreCase);
+    private List<(int GroupIndex, string Format, string Key)> _catalogFlat = [];
+    private DownloadUiResult? _downloadResult;
+    private string? _downloadedAllVulnsPath;
+    private UserSettings _userSettings = new();
+    private readonly CheckboxRangeColumn _bundleSelectRange = new();
+    private readonly CheckboxRangeColumn _catalogSelectRange = new();
+
+    private bool CanDownload =>
+        !_busy &&
+        !string.IsNullOrWhiteSpace(_outputDirectory) &&
+        (_scope == ReportCatalogScope.Global || !string.IsNullOrEmpty(_selectedCompanyId)) &&
+        (HasBundleSelection() || _selectedCatalogKeys.Count > 0);
+
+    private string SelectedClientName =>
+        _scope == ReportCatalogScope.Global
+            ? "Global"
+            : _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _bundleReports = StandardReportCatalog.DefaultCompanyReports.ToList();
+        _selectedBundleTypes = _bundleReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _userSettings = Settings.LoadUserSettings();
+        if (!string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath))
+            _outputDirectory = _userSettings.ReportsBasePath.Trim();
+        else if (!string.IsNullOrWhiteSpace(_userSettings.LastOutputDirectory))
+            _outputDirectory = _userSettings.LastOutputDirectory;
+        else
+            _outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Downloads");
+
+        var creds = Settings.LoadConnectSecureCredentials();
+        if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
+        {
+            CsClient.Configure(creds);
+            await LoadCompanies();
+        }
+    }
+
+    private string ScopeButtonClass(ReportCatalogScope scope) =>
+        _scope == scope ? "btn-primary" : "btn-outline-primary";
+
+    private async Task SetScope(ReportCatalogScope scope)
+    {
+        if (_scope == scope)
+            return;
+
+        _scope = scope;
+        _catalogLoaded = false;
+        _catalogGroups = [];
+        _catalogFlat = [];
+        _selectedCatalogKeys.Clear();
+        _catalogError = null;
+        _downloadResult = null;
+        _downloadedAllVulnsPath = null;
+        RefreshResolvedOutputPath();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnCompanyChanged()
+    {
+        _error = null;
+        _downloadResult = null;
+        _downloadedAllVulnsPath = null;
+        RefreshResolvedOutputPath();
+    }
+
+    private void OnOutputDirectoryChanged()
+    {
+        _outputDirectoryOverridden = true;
+        _resolvedPathHint = null;
+    }
+
+    private async Task BrowseOutputDirectory()
+    {
+        _error = null;
+        var result = await FolderPicker.PickFolderAsync(_outputDirectory);
+        if (result.WasCancelled)
+            return;
+
+        if (!result.Success)
+        {
+            if (!string.IsNullOrWhiteSpace(result.Error))
+                _error = result.Error;
+            return;
+        }
+
+        _outputDirectory = result.Path!.Trim();
+        _outputDirectoryOverridden = true;
+        _resolvedPathHint = null;
+    }
+
+    private string ResolveDownloadOutputDirectory(int companyId, string clientName)
+    {
+        if (_outputDirectoryOverridden && !string.IsNullOrWhiteSpace(_outputDirectory))
+        {
+            var manual = Path.GetFullPath(_outputDirectory.Trim());
+            Directory.CreateDirectory(manual);
+            return manual;
+        }
+
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            clientName,
+            _scanDate.ToString("yyyy-MM-dd"),
+            fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
+        return layout.OutputDirectory;
+    }
+
+    private void RefreshResolvedOutputPath()
+    {
+        if (_scope == ReportCatalogScope.Global)
+        {
+            var layout = PathResolver.Resolve(
+                _userSettings,
+                0,
+                "Global",
+                _scanDate.ToString("yyyy-MM-dd"),
+                fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
+            if (!_outputDirectoryOverridden && layout.UsesStructuredPaths)
+                _outputDirectory = layout.OutputDirectory;
+
+            _resolvedPathHint = layout.UsesStructuredPaths
+                ? layout.ReportsPathPartial is not null
+                    ? $"Global reports: ...\\{layout.ReportsPathPartial}"
+                    : layout.OutputDirectory
+                : "Global downloads use the output directory above (no Reports Base Path).";
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_selectedCompanyId) || !int.TryParse(_selectedCompanyId, out var companyId))
+        {
+            _resolvedPathHint = string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath)
+                ? null
+                : "Select a company to resolve the client/quarter folder.";
+            return;
+        }
+
+        var companyLayout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            SelectedClientName,
+            _scanDate.ToString("yyyy-MM-dd"),
+            fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
+
+        if (!_outputDirectoryOverridden && companyLayout.UsesStructuredPaths)
+            _outputDirectory = companyLayout.OutputDirectory;
+
+        _resolvedPathHint = companyLayout.UsesStructuredPaths
+            ? companyLayout.ReportsPathPartial is not null
+                ? $"Resolved: ...\\{companyLayout.ReportsPathPartial}"
+                : companyLayout.OutputDirectory
+            : null;
+    }
+
+    private async Task LoadCompanies()
+    {
+        try
+        {
+            _companies = (await CsClient.GetCompaniesAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task LoadCatalog()
+    {
+        _catalogError = null;
+        _catalogLoading = true;
+        _catalogLoaded = false;
+        _catalogGroups = [];
+        _catalogFlat = [];
+        _selectedCatalogKeys.Clear();
+        _busy = true;
+        try
+        {
+            var companyId = ResolveCompanyId();
+            var descriptors = await CsClient.GetStandardReportsAsync(_scope, companyId);
+            _catalogGroups = ReportCatalogBuilder.BuildGroups(descriptors).ToList();
+            RebuildCatalogFlatIndex();
+            _catalogLoaded = true;
+            if (_catalogGroups.Count == 0)
+                _catalogError = "ConnectSecure returned no standard reports for this scope.";
+        }
+        catch (Exception ex)
+        {
+            _catalogError = ex.Message;
+        }
+        finally
+        {
+            _catalogLoading = false;
+            _busy = false;
+        }
+    }
+
+    private void RebuildCatalogFlatIndex()
+    {
+        _catalogFlat = [];
+        for (var gi = 0; gi < _catalogGroups.Count; gi++)
+        {
+            foreach (var fmt in ReportCatalogBuilder.FormatOrderList)
+            {
+                if (_catalogGroups[gi].Formats.ContainsKey(fmt))
+                    _catalogFlat.Add((gi, fmt, CatalogKey(_catalogGroups[gi].Name, fmt)));
+            }
+        }
+    }
+
+    private int CatalogFlatIndex(int groupIndex, string format)
+    {
+        for (var i = 0; i < _catalogFlat.Count; i++)
+        {
+            if (_catalogFlat[i].GroupIndex == groupIndex && _catalogFlat[i].Format == format)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string CatalogKey(string groupName, string format) => $"{groupName}|{format}";
+
+    private bool HasBundleSelection() =>
+        _scope == ReportCatalogScope.Company && _selectedBundleTypes.Count > 0;
+
+    private bool GetBundleSelected(string type) => _selectedBundleTypes.Contains(type);
+
+    private void SetBundleSelected(string type, bool selected)
+    {
+        if (selected) _selectedBundleTypes.Add(type);
+        else _selectedBundleTypes.Remove(type);
+    }
+
+    private void OnBundleCheckboxClick(int index, MouseEventArgs e)
+    {
+        if (index < 0 || index >= _bundleReports.Count)
+            return;
+
+        var type = _bundleReports[index].Type;
+        var newValue = !GetBundleSelected(type);
+        _bundleSelectRange.Click(index, newValue, e, (i, on) =>
+            SetBundleSelected(_bundleReports[i].Type, on));
+    }
+
+    private void SelectDefaultBundle()
+    {
+        _selectedBundleTypes = _bundleReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void ClearBundleSelection() => _selectedBundleTypes.Clear();
+
+    private void SelectAllCatalog()
+    {
+        foreach (var entry in _catalogFlat)
+            _selectedCatalogKeys.Add(entry.Key);
+    }
+
+    private void ClearCatalogSelection() => _selectedCatalogKeys.Clear();
+
+    private void OnCatalogCheckboxClick(int flatIndex, string key, MouseEventArgs e)
+    {
+        if (flatIndex < 0 || flatIndex >= _catalogFlat.Count)
+            return;
+
+        var newValue = !_selectedCatalogKeys.Contains(key);
+        _catalogSelectRange.Click(flatIndex, newValue, e, (i, on) =>
+        {
+            var k = _catalogFlat[i].Key;
+            if (on) _selectedCatalogKeys.Add(k);
+            else _selectedCatalogKeys.Remove(k);
+        });
+    }
+
+    private int ResolveCompanyId() =>
+        _scope == ReportCatalogScope.Global ? 0 : int.TryParse(_selectedCompanyId, out var id) ? id : 0;
+
+    private async Task DownloadSelected()
+    {
+        _error = null;
+        _status = null;
+        _downloadResult = null;
+        _downloadedAllVulnsPath = null;
+
+        if (_scope == ReportCatalogScope.Company && string.IsNullOrEmpty(_selectedCompanyId))
+        {
+            _error = "Select a company.";
+            return;
+        }
+
+        if (!HasBundleSelection() && _selectedCatalogKeys.Count == 0)
+        {
+            _error = "Select at least one report from the bundle or catalog.";
+            return;
+        }
+
+        var companyId = ResolveCompanyId();
+        var clientName = SelectedClientName.Trim();
+        if (string.IsNullOrWhiteSpace(clientName))
+        {
+            _error = _scope == ReportCatalogScope.Global ? "Global scope is misconfigured." : "Select a company with a valid name.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var outputDir = ResolveDownloadOutputDirectory(companyId, clientName);
+            if (!_outputDirectoryOverridden)
+                _outputDirectory = outputDir;
+
+            StandardReportDownloadResult? bundleResult = null;
+            if (HasBundleSelection())
+            {
+                var bundle = _bundleReports.Where(r => _selectedBundleTypes.Contains(r.Type)).ToList();
+                bundleResult = await ReportService.DownloadStandardReportsAsync(
+                    companyId,
+                    clientName,
+                    outputDir,
+                    bundle,
+                    new Progress<string>(m =>
+                    {
+                        _status = m;
+                        _ = InvokeAsync(() => { StateHasChanged(); return Task.CompletedTask; });
+                    }));
+            }
+
+            StandardReportDownloadResult? catalogResult = null;
+            var catalogItems = BuildCatalogDownloadRequests();
+            if (catalogItems.Count > 0)
+            {
+                catalogResult = await ReportService.DownloadCatalogReportsAsync(
+                    companyId,
+                    clientName,
+                    outputDir,
+                    catalogItems,
+                    new Progress<string>(m =>
+                    {
+                        _status = m;
+                        _ = InvokeAsync(() => { StateHasChanged(); return Task.CompletedTask; });
+                    }));
+            }
+
+            var succeeded = new List<DownloadedReport>();
+            var failed = new List<FailedReport>();
+            if (bundleResult is not null)
+            {
+                succeeded.AddRange(bundleResult.Succeeded);
+                failed.AddRange(bundleResult.Failed);
+            }
+
+            if (catalogResult is not null)
+            {
+                succeeded.AddRange(catalogResult.Succeeded);
+                failed.AddRange(catalogResult.Failed);
+            }
+
+            _downloadResult = new DownloadUiResult(outputDir, succeeded, failed);
+            _downloadedAllVulnsPath = succeeded
+                .FirstOrDefault(s => s.Name.Contains("All Vulnerabilities", StringComparison.OrdinalIgnoreCase))?.Path;
+
+            FolderHistory.Add(clientName, outputDir);
+            var userSettings = Settings.LoadUserSettings();
+            ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(userSettings, outputDir);
+            Settings.SaveUserSettings(userSettings);
+            _userSettings = userSettings;
+            RefreshResolvedOutputPath();
+            _status = $"Downloaded {succeeded.Count} report(s), {failed.Count} failed.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private List<CatalogReportDownloadRequest> BuildCatalogDownloadRequests()
+    {
+        var items = new List<CatalogReportDownloadRequest>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in _catalogGroups)
+        {
+            foreach (var fmt in ReportCatalogBuilder.FormatOrderList)
+            {
+                var key = CatalogKey(group.Name, fmt);
+                if (!_selectedCatalogKeys.Contains(key) || !group.Formats.TryGetValue(fmt, out var option))
+                    continue;
+
+                var dedupe = $"{option.ReportId}|{option.Extension}";
+                if (!seen.Add(dedupe))
+                    continue;
+
+                items.Add(new CatalogReportDownloadRequest(option.ReportId, group.Name, option.Extension));
+            }
+        }
+
+        return items;
+    }
+
+    private void GoToIngest()
+    {
+        if (string.IsNullOrEmpty(_downloadedAllVulnsPath))
+            return;
+
+        var path = Uri.EscapeDataString(_downloadedAllVulnsPath);
+        Nav.NavigateTo($"/?allVulns={path}");
+    }
+
+    private sealed record DownloadUiResult(
+        string OutputDirectory,
+        IReadOnlyList<DownloadedReport> Succeeded,
+        IReadOnlyList<FailedReport> Failed);
+}

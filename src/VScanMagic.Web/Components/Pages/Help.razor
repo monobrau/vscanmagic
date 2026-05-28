@@ -1,0 +1,253 @@
+@page "/help"
+@page "/testimonials"
+@rendermode InteractiveServer
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Help</PageTitle>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+        <h1 class="mb-1">Help &amp; workflow guide</h1>
+        <p class="text-muted mb-0">Quarterly vulnerability delivery from ConnectSecure through client email, review meeting, and remediation tickets.</p>
+    </div>
+    <a class="btn btn-primary btn-sm" href="/">Start client review</a>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-3">
+        <div class="list-group help-page-nav sticky-top" style="top: 1rem;">
+            <a class="list-group-item list-group-item-action" href="/help#setup">First-time setup</a>
+            <a class="list-group-item list-group-item-action" href="/help#quarterly">Quarterly workflow</a>
+            <a class="list-group-item list-group-item-action" href="/help#review">Review session</a>
+            <a class="list-group-item list-group-item-action" href="/help#deliverables">Deliverables &amp; email</a>
+            <a class="list-group-item list-group-item-action" href="/help#pages">Pages in the app</a>
+            <a class="list-group-item list-group-item-action" href="/help#glossary">Glossary</a>
+            <a class="list-group-item list-group-item-action" href="/help#tips">Tips</a>
+            <a class="list-group-item list-group-item-action" href="/help#testimonials">Testimonials</a>
+        </div>
+    </div>
+    <div class="col-lg-9">
+        <section id="setup" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">First-time setup</h2></div>
+            <div class="card-body">
+                <ol class="mb-0">
+                    <li class="mb-2">
+                        <strong><a href="/settings">Settings</a></strong> — Add ConnectSecure API credentials (Global → Settings → Users → API Key).
+                        Set <em>Reports Base Path</em> to your synced client documentation root (OneDrive/SharePoint local sync folder).
+                        Enter your name under <em>Prepared By</em> and your default TimeZest scheduling link.
+                    </li>
+                    <li class="mb-2">
+                        <strong><a href="/configuration">Client mappings</a></strong> — Map each ConnectSecure company ID to the relative folder path under Reports Base Path
+                        (e.g. <code>Acme Corp/Network Documentation/Vulnerability Scans</code>). This is a <em>local path</em>, not a share URL.
+                    </li>
+                    <li class="mb-2">
+                        <strong><a href="/rules">Rules</a></strong> (optional) — Customize remediation text appended to ticket instructions by product pattern.
+                    </li>
+                    <li>
+                        <strong><a href="/templates">Templates</a></strong> (optional) — Edit the client email and Manage PSA ticket-note templates (RMIT vs RMIT+ variants).
+                    </li>
+                </ol>
+            </div>
+        </section>
+
+        <section id="quarterly" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Quarterly workflow</h2></div>
+            <div class="card-body">
+                <p class="text-muted small">Technician steps before and through the client call. Remediation work after delivery is handled by new tickets, not in this flow.</p>
+                <ol class="mb-0">
+                    <li class="mb-2"><strong>Pre-call prep</strong> — Run <a href="/company-review">Company review</a> and <a href="/probe-config">Probe &amp; credentials</a> (probes, subnets, external targets, offline agents) if needed.</li>
+                    <li class="mb-2"><strong>Start client review</strong> — On the home page, download the standard quarterly bundle from ConnectSecure (or upload an existing <strong>All Vulnerabilities</strong> XLSX). The file path fills in automatically after download. Set scan date, presenter, and RMIT+ if applicable.</li>
+                    <li class="mb-2"><strong>Report downloader</strong> (optional) — Use <a href="/report-downloader">Report downloader</a> for the full catalog, global reports, or browse-to-override output paths; then continue on Start client review.</li>
+                    <li class="mb-2"><strong>Export</strong> — Generate DOCX, PDF, and XLSX from the review session into the quarterly folder.</li>
+                    <li class="mb-2"><strong>Share links</strong> — In Windows Explorer (or SharePoint online), use <em>Copy link</em> on the Top N doc and quarterly reports folder after sync.</li>
+                    <li class="mb-2"><strong>Email client</strong> — Open <em>Deliverables</em> from the review session, paste share links on the Email tab, and send the quarterly follow-up (secure email). Include your TimeZest scheduling link.</li>
+                    <li class="mb-2"><strong>Client schedules meeting</strong> — Client may book via TimeZest, or proceed without a meeting.</li>
+                    <li class="mb-2"><strong>Review with client</strong> — Live session: walk findings, revise remediation, capture tasks and decisions. Use <em>Open Client View</em> for screen share if helpful.</li>
+                    <li class="mb-2"><strong>Deliver</strong> — Finalize deliverables from the call (updated notes, ticket instructions, time estimates, Manage PSA ticket notes).</li>
+                    <li><strong>Remediation</strong> — New tickets created from the review handle actual remediation work; not part of this prep/send flow.</li>
+                </ol>
+            </div>
+        </section>
+
+        <section id="review" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Review session</h2></div>
+            <div class="card-body">
+                <p class="text-muted small">The session is started before export. Most export curation happens before the client email; the live <strong>Review with client</strong> step (workflow step 8) is when you walk through findings on a call after they have report links.</p>
+                <h3 class="h6">Before the client call (steps 3–5)</h3>
+                <p>Promote network/registry candidates from <em>Add to export</em>, adjust the export set, and export reports. You can enter preliminary time estimates and remediation text, but expect changes after the meeting.</p>
+                <h3 class="h6">Findings review tab</h3>
+                <p>Work through the export set. Edit remediation text, meeting notes, and per-host inclusion. Use ConnectSecure suppress when a finding should be company-wide suppressed.</p>
+                <h3 class="h6">Add to export tab</h3>
+                <p>Network and registry findings are <em>candidates</em> — not in the initial Top N. Promote items that should appear in the quarterly report before you export.</p>
+                <h3 class="h6">Time estimates tab</h3>
+                <p>Enter hours and billing flags (after hours, third party, ticket generated). RMIT+ sessions show additional billing fields. Update after the client call when scope is agreed.</p>
+                <h3 class="h6">Client view</h3>
+                <p><em>Open Client View</em> opens a read-only session in a new tab — useful during the live review on screen share.</p>
+            </div>
+        </section>
+
+        <section id="deliverables" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Deliverables &amp; email links</h2></div>
+            <div class="card-body">
+                <p>Used in workflow steps 4–6 and again at <strong>Deliver</strong> after the client call. Share URLs exist only after export and <strong>Copy link</strong> in Explorer or SharePoint.</p>
+                <ul class="mb-3">
+                    <li><strong>Top N report link</strong> — Share link for the Top N document for this quarter.</li>
+                    <li><strong>Reports folder link</strong> — Share link for the folder containing all quarterly reports.</li>
+                    <li><strong>Scheduling link</strong> — TimeZest (or similar) from Settings; lets the client book the review meeting.</li>
+                </ul>
+                <p class="mb-0 small text-muted">Tabs: ticket instructions and Manage PSA notes for technician tickets; email for the client send; time estimate for quoting and billing.</p>
+            </div>
+        </section>
+
+        <section id="pages" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Pages in the app</h2></div>
+            <div class="card-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-sm-4">Company review</dt>
+                    <dd class="col-sm-8">Tenant checks: probes, internal/external scan targets, patching shortcuts, offline agents.</dd>
+                    <dt class="col-sm-4">Start client review</dt>
+                    <dd class="col-sm-8">Main workflow: download standard ConnectSecure reports (including All Vulnerabilities), ingest, and open a live client review session.</dd>
+                    <dt class="col-sm-4">Report downloader</dt>
+                    <dd class="col-sm-8">Extended prep: full catalog, global scope, custom output folder — then hand off to Start client review.</dd>
+                    <dt class="col-sm-4">Review sessions</dt>
+                    <dd class="col-sm-8">Resume, archive, or delete saved quarterly client reviews.</dd>
+                    <dt class="col-sm-4">Suppress vulnerabilities</dt>
+                    <dd class="col-sm-8">Standalone ConnectSecure suppress by remediation item or CVE problem id.</dd>
+                    <dt class="col-sm-4">Probe &amp; credentials</dt>
+                    <dd class="col-sm-8">ConnectSecure prep: probe mappings, credential assignments, integration settings.</dd>
+                    <dt class="col-sm-4">Host counts</dt>
+                    <dd class="col-sm-8">Per-host vulnerability totals from the full report file.</dd>
+                    <dt class="col-sm-4">Application / OS patching</dt>
+                    <dd class="col-sm-8">Schedule ConnectSecure patches from the web UI.</dd>
+                </dl>
+            </div>
+        </section>
+
+        <section id="glossary" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Glossary</h2></div>
+            <div class="card-body help-glossary">
+                <dl class="mb-0">
+                    <dt>Export set / Top N</dt>
+                    <dd>Findings included in the quarterly client report. Default count comes from Settings (Top 10, 20, etc.).</dd>
+                    <dt>RMIT+ vs RMIT/CMIT</dt>
+                    <dd>RMIT+ clients get agreement-coverage wording and ticket defaults; hourly clients require explicit approval before remediation.</dd>
+                    <dt>EPSS</dt>
+                    <dd>Exploit Prediction Scoring System — likelihood of exploitation in the next 30 days (0–1).</dd>
+                    <dt>All Vulnerabilities XLSX</dt>
+                    <dd>Required source file from ConnectSecure. Top Ten Data alone does not contain enough detail for review.</dd>
+                    <dt>Reports Base Path</dt>
+                    <dd>Local synced root containing client folders — not the same as a SharePoint share URL.</dd>
+                </dl>
+            </div>
+        </section>
+
+        <section id="tips" class="card mb-3">
+            <div class="card-header"><h2 class="h5 mb-0">Tips</h2></div>
+            <div class="card-body mb-0">
+                <ul class="mb-0">
+                    <li>Look for <i class="bi bi-question-circle text-muted"></i> icons throughout the app for field-level help.</li>
+                    <li>Shift-click severity or report checkboxes to toggle a range.</li>
+                    <li>ConnectSecure suppress in review requires loading options first, then selecting the CVE problem or remediation item.</li>
+                    <li>NVD enrichment fetches CVE descriptions when you open a session or use Fetch NVD on a finding.</li>
+                    <li>See <a href="/about">About</a> for config file locations and version info.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="testimonials" class="card mb-3 border-warning">
+            <div class="card-header bg-warning bg-opacity-10">
+                <h2 class="h5 mb-0">What technicians are saying</h2>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">
+                    <em>Completely fictional endorsements. VScanMagic has not been evaluated by the FDA, the Vatican, or any volcano safety board.</em>
+                </p>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“Before VScanMagic I was adrift. After my first Top Ten export I found purpose, paid off my house, and was asked to be godparent to a child I’d never met. The baptism was EPSS-themed—they sprinkled holy water ranked by exploit probability.”</p>
+                            <footer>— Pat Example, Senior Vulnerability Sommelier</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“I was copy-pasting ticket notes manually when a kid wandered too close to an active volcano. I hit <strong>Suppress in ConnectSecure</strong>, the lava paused, and the child waved. My manager said it was ‘probably unrelated.’ I know the truth.”</p>
+                            <footer>— Sam Sample, Part-time Lava Consultant</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“The Deliverables email tab alone saved my marriage. I pasted the OneDrive link, my spouse pasted the TimeZest link, and we met in the middle at a quarterly review. CVE couples therapy is real.”</p>
+                            <footer>— Jamie and Jordan Example, RMIT+ (both)</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“I used to dream in Excel #REF! errors. Now I dream in ranked findings with tasteful remediation prose. The <em>Add to export</em> tab promoted my inner network finding to CTO.”</p>
+                            <footer>— Anonymous Registry Entry</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“Company review flagged an offline agent. I fixed it. That agent later became sentient, passed the bar exam, and represents me in probe-mapping disputes. We still use VScanMagic for holidays.”</p>
+                            <footer>— Rev. Probe ID 44102</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-md-6">
+                        <blockquote class="help-testimonial mb-0">
+                            <p>“Shift-click changed my life. One gesture toggled an entire severity range, a flock of doves appeared, and the Nobel committee called about ‘contributions to checkbox ergonomics.’ I forwarded them to Settings → Top N.”</p>
+                            <footer>— Dr. Click Range, PhD (Pending)</footer>
+                        </blockquote>
+                    </div>
+                    <div class="col-12">
+                        <blockquote class="help-testimonial help-testimonial-featured mb-0">
+                            <p>“VScanMagic didn’t just streamline quarterly delivery—it rewrote my biography. I’m listed as ‘Father’ on two birth certificates, ‘Emergency Contact’ on a third, and ‘Preferred SharePoint Link Provider’ on a fourth. The volcano kid sends a Christmas card every year. It always says CVE-2017-2619 in the envelope. We don’t ask why.”</p>
+                            <footer>— Alex Demo, Technician, Life Architect, and Honorary Godparent (Export Set Class of 2019)</footer>
+                        </blockquote>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private string? _lastScrolledFragment;
+
+    protected override void OnInitialized() =>
+        Nav.LocationChanged += OnHelpLocationChanged;
+
+    private void OnHelpLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        _lastScrolledFragment = null;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender) =>
+        await ScrollToSectionIfNeededAsync();
+
+    private async Task ScrollToSectionIfNeededAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        if (!string.Equals(uri.AbsolutePath.TrimEnd('/'), "/help", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var fragment = uri.Fragment.TrimStart('#');
+        if (string.IsNullOrEmpty(fragment) || fragment == _lastScrolledFragment)
+            return;
+
+        _lastScrolledFragment = fragment;
+
+        try
+        {
+            await Js.InvokeVoidAsync("vscanmagic.scrollToHelpSection", fragment);
+        }
+        catch
+        {
+            // Non-critical if JS helper is unavailable.
+        }
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnHelpLocationChanged;
+    }
+}

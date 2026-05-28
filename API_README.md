@@ -24,7 +24,7 @@ Reports can be generated from two data sources:
 - Windows PowerShell 5.1 or later
 - Microsoft Excel installed
 - Microsoft Word installed (for Executive Summary)
-- VScanMagic-GUI.ps1 in the same directory
+- `VScanMagic-ApiBootstrap.ps1` in the same directory (loads Core, Data, Reports). If it is missing, the server falls back to dot-sourcing `VScanMagic-GUI.ps1` (full GUI stack).
 
 ## Starting the Server
 
@@ -32,7 +32,17 @@ Reports can be generated from two data sources:
 .\VScanMagic-API.ps1
 ```
 
-The server will start on `http://localhost:8080` by default.
+The server binds to **loopback** by default: `http://127.0.0.1:8080/` (not reachable from other machines).
+
+### Security (recommended)
+
+| Setting | Purpose |
+|--------|---------|
+| `VSCANMAGIC_API_KEY` | If set, every request must send the same value in header `X-VScanMagic-Api-Key` or `Authorization: Bearer <key>`. OPTIONS preflight is exempt. |
+| `VSCANMAGIC_API_BIND` | Optional. Override bind host (default `127.0.0.1`). Do not expose this API to untrusted networks without authentication. |
+
+- **Do not pass** `ConnectSecureClientSecret` in the query string; **JSON body only** (query strings appear in logs and browser history).
+- CORS allows `*` for local development; treat as **trusted local use only**.
 
 ## API Endpoints
 

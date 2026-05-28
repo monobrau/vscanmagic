@@ -1,0 +1,786 @@
+@page "/probe-config"
+@rendermode InteractiveServer
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@using VScanMagic.ConnectSecure
+@inject ConnectSecureClient ConnectSecure
+@inject ConnectSecureProbeConfigurationService ProbeConfigService
+@inject ConnectSecureCompanyCredentialsService CredentialsService
+@inject ConnectSecureIntegrationService IntegrationService
+@inject SettingsService Settings
+
+<PageTitle>Probe & Credentials</PageTitle>
+
+<h1>Probe & Credentials</h1>
+<p class="text-muted">
+    Map probe agents to credentials and internal subnets, and manage company credentials and ConnectSecure integrations.
+    <a href="company-review">Company Review</a> covers scan targets and nmap interfaces.
+</p>
+
+@if (!ConnectSecure.IsConfigured)
+{
+    <div class="alert alert-warning">Configure ConnectSecure credentials on <a href="settings">Settings</a> first.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label">Company</label>
+                    <div class="input-group">
+                        <select class="form-select" @bind="_selectedCompanyId">
+                            <option value="">-- Select company --</option>
+                            @foreach (var c in _companies)
+                            {
+                                <option value="@c.Id">@c.Name</option>
+                            }
+                        </select>
+                        <button class="btn btn-outline-secondary" type="button" disabled="@_busy" @onclick="LoadCompanies">Refresh</button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-primary w-100" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="LoadConfiguration">
+                        Load configuration
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_config is not null)
+{
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item"><button type="button" class="nav-link @TabClass("probes")" @onclick='() => SetTab("probes")'>Probes & mappings</button></li>
+        <li class="nav-item"><button type="button" class="nav-link @TabClass("credentials")" @onclick='() => SetTab("credentials")'>Credentials</button></li>
+        <li class="nav-item"><button type="button" class="nav-link @TabClass("integrations")" @onclick='() => SetTab("integrations")'>Integrations</button></li>
+    </ul>
+
+    @if (_activeTab == "probes")
+    {
+        @if (_config.Probes.Count == 0)
+        {
+            <p class="text-muted">No probe agents found for this company.</p>
+        }
+        @foreach (var probe in _config.Probes)
+        {
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>@probe.HostName</strong>
+                    <code>@probe.Ip</code>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-lg-6">
+                            <div class="fw-semibold mb-2">Mapped credentials</div>
+                            @if (_config.Credentials.Count == 0)
+                            {
+                                <p class="text-muted mb-0">No credentials defined yet — add them on the Credentials tab.</p>
+                            }
+                            else
+                            {
+                                @foreach (var cred in _config.Credentials)
+                                {
+                                    var selected = IsCredentialSelected(probe.AgentId, cred.Id);
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" checked="@selected"
+                                               @onchange="e => ToggleCredential(probe.AgentId, cred.Id, e.Value is true)" id="@($"cred-{probe.AgentId}-{cred.Id}")" />
+                                        <label class="form-check-label" for="@($"cred-{probe.AgentId}-{cred.Id}")">
+                                            @cred.Name <span class="text-muted">(@cred.CredentialType)</span>
+                                        </label>
+                                    </div>
+                                }
+                            }
+                        </div>
+                        <div class="col-lg-6">
+                            <div class="fw-semibold mb-2">Mapped internal subnets</div>
+                            @if (_config.InternalSubnets.Count == 0)
+                            {
+                                <p class="text-muted mb-0">No internal subnets — add them on <a href="company-review">Company Review</a>.</p>
+                            }
+                            else
+                            {
+                                @foreach (var subnet in _config.InternalSubnets)
+                                {
+                                    if (subnet.DiscoverySettingId is not > 0) { continue; }
+                                    var selected = IsSubnetSelected(probe.AgentId, subnet.DiscoverySettingId.Value);
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" checked="@selected"
+                                               @onchange="e => ToggleSubnet(probe.AgentId, subnet.DiscoverySettingId.Value, e.Value is true)" id="@($"subnet-{probe.AgentId}-{subnet.DiscoverySettingId}")" />
+                                        <label class="form-check-label" for="@($"subnet-{probe.AgentId}-{subnet.DiscoverySettingId}")">
+                                            @subnet.Name <code class="ms-1">@subnet.Address</code>
+                                        </label>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                    <div class="mt-3 text-end">
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@IsProbeSaving(probe.AgentId)"
+                                @onclick="() => SaveProbeMappings(probe.AgentId)">
+                            @(IsProbeSaving(probe.AgentId) ? "Saving…" : "Save probe mappings")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+    else if (_activeTab == "credentials")
+    {
+        <div class="card mb-3">
+            <div class="card-header">Company credentials</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Address</th>
+                                <th>Params</th>
+                                <th>Valid</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var cred in _config.Credentials)
+                            {
+                                var editing = _editingCredentialId == cred.Id;
+                                <tr>
+                                    <td>@(editing ? RenderCredentialNameEditor() : cred.Name)</td>
+                                    <td>@(editing ? RenderCredentialTypeEditor() : cred.CredentialType)</td>
+                                    <td>@(editing ? RenderCredentialAddressEditor() : cred.Address)</td>
+                                    <td class="small text-muted">@(editing ? "Edit fields below" : cred.ParamsSummary)</td>
+                                    <td>@(cred.IsValid ? "Yes" : "No")</td>
+                                    <td class="text-end text-nowrap">
+                                        @if (editing)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-primary me-1" disabled="@_savingCredential" @onclick="SaveCredential">Save</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelCredentialEdit">Cancel</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-primary me-1" @onclick="() => BeginCredentialEdit(cred.Id)">Edit</button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteCredential(cred.Id)">Delete</button>
+                                        }
+                                    </td>
+                                </tr>
+                                @if (editing)
+                                {
+                                    <tr>
+                                        <td colspan="6">@RenderCredentialParamEditor()</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Add credential</div>
+            <div class="card-body">
+                @RenderCredentialForm(isNew: true)
+                <button type="button" class="btn btn-success btn-sm mt-3" disabled="@_savingCredential" @onclick="AddCredential">
+                    @(_savingCredential ? "Adding…" : "Add credential")
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card mb-3">
+            <div class="card-header">Integration credentials</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr><th>Name</th><th>Integration</th><th>Ticket URL</th><th>Params</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _config.Integrations)
+                            {
+                                var editing = _editingIntegrationId == item.Id;
+                                <tr>
+                                    <td>@(editing ? RenderIntegrationNameEditor() : item.Name)</td>
+                                    <td>@(editing ? RenderIntegrationTypeEditor() : item.IntegrationName)</td>
+                                    <td>@(editing ? RenderIntegrationTicketEditor() : item.TicketUrl)</td>
+                                    <td class="small text-muted">@(editing ? "Edit params below" : item.ParamsSummary)</td>
+                                    <td class="text-end">
+                                        @if (editing)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-primary me-1" disabled="@_savingIntegration" @onclick="SaveIntegration">Save</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelIntegrationEdit">Cancel</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-primary me-1" @onclick="() => BeginIntegrationEdit(item.Id)">Edit</button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteIntegration(item.Id)">Delete</button>
+                                        }
+                                    </td>
+                                </tr>
+                                @if (editing)
+                                {
+                                    <tr><td colspan="5">@RenderIntegrationParamEditor()</td></tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-body border-top">
+                <div class="fw-semibold mb-2">Add integration credential</div>
+                @RenderIntegrationForm(isNew: true)
+                <button type="button" class="btn btn-success btn-sm mt-3" disabled="@_savingIntegration" @onclick="AddIntegration">Add integration credential</button>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">Integration company mappings</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr><th>Integration</th><th>Source</th><th>Destination</th><th>Site</th><th>Credential</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var map in _config.IntegrationMappings)
+                            {
+                                var editing = _editingMappingId == map.Id;
+                                <tr>
+                                    <td>@(editing ? RenderMappingIntegrationEditor() : map.IntegrationName)</td>
+                                    <td>@(editing ? RenderMappingSourceEditor() : map.SourceCompanyName)</td>
+                                    <td>@(editing ? RenderMappingDestEditor() : map.DestCompanyName)</td>
+                                    <td>@(editing ? RenderMappingSiteEditor() : map.SiteName)</td>
+                                    <td>@(editing ? RenderMappingCredentialEditor() : map.CredentialId?.ToString() ?? "—")</td>
+                                    <td class="text-end">
+                                        @if (editing)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-primary me-1" disabled="@_savingMapping" @onclick="SaveMapping">Save</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelMappingEdit">Cancel</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-primary me-1" @onclick="() => BeginMappingEdit(map.Id)">Edit</button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteMapping(map.Id)">Delete</button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-body border-top">
+                <div class="fw-semibold mb-2">Add company mapping</div>
+                @RenderMappingForm(isNew: true)
+                <button type="button" class="btn btn-success btn-sm mt-3" disabled="@_savingMapping" @onclick="AddMapping">Add mapping</button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<CompanyInfo> _companies = [];
+    private string _selectedCompanyId = "";
+    private ProbeConfigurationData? _config;
+    private string _activeTab = "probes";
+    private string? _message;
+    private string? _error;
+    private bool _busy;
+
+    private readonly Dictionary<int, HashSet<int>> _selectedCredentialsByProbe = new();
+    private readonly Dictionary<int, HashSet<int>> _selectedSubnetsByProbe = new();
+    private readonly HashSet<int> _savingProbeIds = [];
+
+    private int? _editingCredentialId;
+    private bool _savingCredential;
+    private string _credName = "";
+    private string _credType = "windows";
+    private string _credOsType = "";
+    private string _credAddressType = "";
+    private string _credAddress = "";
+    private string _credParamsJson = "{}";
+    private readonly Dictionary<string, string?> _credFormFields = new(StringComparer.OrdinalIgnoreCase);
+
+    private int? _editingIntegrationId;
+    private bool _savingIntegration;
+    private string _integrationName = "";
+    private string _integrationType = "";
+    private string _integrationTicketUrl = "";
+    private string _integrationParamsJson = "{}";
+
+    private int? _editingMappingId;
+    private bool _savingMapping;
+    private string _mappingIntegrationName = "";
+    private string _mappingSource = "";
+    private string _mappingDest = "";
+    private string _mappingSite = "";
+    private string _mappingParamsJson = "{}";
+    private int? _mappingCredentialId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ConnectSecure.IsConfigured)
+            await LoadCompanies();
+    }
+
+    private string TabClass(string tab) => _activeTab == tab ? "active" : "";
+
+    private void SetTab(string tab) => _activeTab = tab;
+
+    private async Task LoadCompanies()
+    {
+        _error = null;
+        _message = null;
+        _busy = true;
+        try
+        {
+            _companies = (await ConnectSecure.GetCompaniesAsync()).ToList();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task LoadConfiguration()
+    {
+        if (!int.TryParse(_selectedCompanyId, out var companyId))
+            return;
+
+        _error = null;
+        _message = null;
+        _busy = true;
+        try
+        {
+            var name = _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
+            _config = await ProbeConfigService.GetConfigurationAsync(companyId, name);
+            SeedProbeSelections();
+            ResetEditors();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private void SeedProbeSelections()
+    {
+        _selectedCredentialsByProbe.Clear();
+        _selectedSubnetsByProbe.Clear();
+        if (_config is null)
+            return;
+
+        foreach (var probe in _config.Probes)
+        {
+            _selectedCredentialsByProbe[probe.AgentId] = probe.CredentialIds.ToHashSet();
+            _selectedSubnetsByProbe[probe.AgentId] = probe.DiscoverySettingIds.ToHashSet();
+        }
+    }
+
+    private bool IsCredentialSelected(int agentId, int credentialId) =>
+        _selectedCredentialsByProbe.TryGetValue(agentId, out var set) && set.Contains(credentialId);
+
+    private bool IsSubnetSelected(int agentId, int discoverySettingId) =>
+        _selectedSubnetsByProbe.TryGetValue(agentId, out var set) && set.Contains(discoverySettingId);
+
+    private void ToggleCredential(int agentId, int credentialId, bool selected)
+    {
+        if (!_selectedCredentialsByProbe.TryGetValue(agentId, out var set))
+        {
+            set = [];
+            _selectedCredentialsByProbe[agentId] = set;
+        }
+        if (selected) set.Add(credentialId); else set.Remove(credentialId);
+    }
+
+    private void ToggleSubnet(int agentId, int discoverySettingId, bool selected)
+    {
+        if (!_selectedSubnetsByProbe.TryGetValue(agentId, out var set))
+        {
+            set = [];
+            _selectedSubnetsByProbe[agentId] = set;
+        }
+        if (selected) set.Add(discoverySettingId); else set.Remove(discoverySettingId);
+    }
+
+    private bool IsProbeSaving(int agentId) => _savingProbeIds.Contains(agentId);
+
+    private async Task SaveProbeMappings(int agentId)
+    {
+        if (_config is null)
+            return;
+
+        _error = null;
+        _message = null;
+        _savingProbeIds.Add(agentId);
+        try
+        {
+            var creds = _selectedCredentialsByProbe.TryGetValue(agentId, out var c) ? c.ToList() : [];
+            var subnets = _selectedSubnetsByProbe.TryGetValue(agentId, out var s) ? s.ToList() : [];
+            await ProbeConfigService.SetProbeCredentialMappingsAsync(_config.CompanyId, agentId, creds);
+            await ProbeConfigService.SetProbeDiscoveryMappingsAsync(_config.CompanyId, agentId, subnets);
+            _message = "Probe mappings saved.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingProbeIds.Remove(agentId); }
+    }
+
+    private void ResetEditors()
+    {
+        _editingCredentialId = null;
+        _editingIntegrationId = null;
+        _editingMappingId = null;
+        _credName = "";
+        _credType = _config?.KnownCredentialTypes.FirstOrDefault() ?? "windows";
+        _credOsType = "";
+        _credAddressType = "";
+        _credAddress = "";
+        _credParamsJson = "{}";
+        _credFormFields.Clear();
+        _integrationName = "";
+        _integrationType = _config?.KnownIntegrationNames.FirstOrDefault() ?? "";
+        _integrationTicketUrl = "";
+        _integrationParamsJson = "{}";
+        _mappingIntegrationName = _config?.KnownIntegrationNames.FirstOrDefault() ?? "";
+        _mappingSource = "";
+        _mappingDest = "";
+        _mappingSite = "";
+        _mappingParamsJson = "{}";
+        _mappingCredentialId = null;
+    }
+
+    private RenderFragment RenderCredentialNameEditor() => builder =>
+    {
+        builder.OpenElement(0, "input");
+        builder.AddAttribute(1, "class", "form-control form-control-sm");
+        builder.AddAttribute(2, "value", _credName);
+        builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _credName = e.Value?.ToString() ?? ""));
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderCredentialTypeEditor() => builder =>
+    {
+        builder.OpenElement(0, "select");
+        builder.AddAttribute(1, "class", "form-select form-select-sm");
+        builder.AddAttribute(2, "value", _credType);
+        builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+        {
+            _credType = e.Value?.ToString() ?? "generic";
+            EnsureCredentialFields();
+        }));
+        foreach (var type in _config?.KnownCredentialTypes ?? CredentialTypeCatalog.MergeKnownTypes([]))
+        {
+            builder.OpenElement(4, "option");
+            builder.AddAttribute(5, "value", type);
+            builder.AddContent(6, type);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderCredentialAddressEditor() => builder =>
+    {
+        builder.OpenElement(0, "input");
+        builder.AddAttribute(1, "class", "form-control form-control-sm");
+        builder.AddAttribute(2, "value", _credAddress);
+        builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _credAddress = e.Value?.ToString() ?? ""));
+        builder.CloseElement();
+    };
+
+    private RenderFragment RenderCredentialForm(bool isNew) => @<div class="row g-2">
+        <div class="col-md-3"><input class="form-control form-control-sm" placeholder="Name" @bind="_credName" /></div>
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" @bind="_credType" @bind:after="EnsureCredentialFields">
+                @foreach (var type in _config?.KnownCredentialTypes ?? CredentialTypeCatalog.MergeKnownTypes([]))
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-3"><input class="form-control form-control-sm" placeholder="Address / target" @bind="_credAddress" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="OS type" @bind="_credOsType" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Address type" @bind="_credAddressType" /></div>
+        <div class="col-12">@RenderCredentialParamEditor()</div>
+    </div>;
+
+    private RenderFragment RenderCredentialParamEditor()
+    {
+        EnsureCredentialFields();
+        var definition = CredentialTypeCatalog.Resolve(_credType);
+        return @<div>
+            @foreach (var field in definition.Fields)
+            {
+                <div class="row g-2 mb-2">
+                    <div class="col-md-3"><label class="col-form-label col-form-label-sm">@field.Label</label></div>
+                    <div class="col-md-9">
+                        <input class="form-control form-control-sm" type="@(field.IsSecret ? "password" : "text")"
+                               placeholder="@(field.Placeholder ?? "")"
+                               value="@GetCredField(field.Key)"
+                               @onchange="e => SetCredField(field.Key, e.Value?.ToString())" />
+                    </div>
+                </div>
+            }
+            <label class="form-label form-label-sm">Advanced params JSON</label>
+            <textarea class="form-control form-control-sm font-monospace" rows="4" @bind="_credParamsJson"></textarea>
+            <div class="form-text">Leave secret fields blank when editing to keep existing values. Unknown credential types can be configured entirely via JSON.</div>
+        </div>;
+    }
+
+    private void EnsureCredentialFields()
+    {
+        var definition = CredentialTypeCatalog.Resolve(_credType);
+        foreach (var field in definition.Fields)
+        {
+            if (!_credFormFields.ContainsKey(field.Key))
+                _credFormFields[field.Key] = "";
+        }
+    }
+
+    private string? GetCredField(string key) => _credFormFields.TryGetValue(key, out var value) ? value : "";
+
+    private void SetCredField(string key, string? value) => _credFormFields[key] = value ?? "";
+
+    private string BuildCredentialParamsJson(bool mergeSecrets)
+    {
+        var definition = CredentialTypeCatalog.Resolve(_credType);
+        var fromForm = ConnectSecureParamsHelper.MergeParamsFromForm(new JsonObject(), _credFormFields, mergeSecrets);
+        if (!string.IsNullOrWhiteSpace(_credParamsJson) && _credParamsJson.Trim() != "{}")
+        {
+            var advanced = ConnectSecureParamsHelper.ParseParamsObject(_credParamsJson);
+            return ConnectSecureParamsHelper.MergeParamsJson(fromForm, advanced, mergeSecrets).ToJsonString();
+        }
+        return fromForm.ToJsonString();
+    }
+
+    private async Task BeginCredentialEdit(int id)
+    {
+        if (_config is null)
+            return;
+
+        var (entry, paramsJson) = await CredentialsService.GetCredentialAsync(id, _config.CompanyId);
+        _editingCredentialId = id;
+        _credName = entry.Name;
+        _credType = entry.CredentialType;
+        _credOsType = entry.OsType;
+        _credAddressType = entry.AddressType;
+        _credAddress = entry.Address;
+        _credParamsJson = paramsJson;
+        _credFormFields.Clear();
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(paramsJson) ? "{}" : paramsJson);
+        foreach (var pair in ConnectSecureParamsHelper.ExtractFormValues(doc.RootElement, CredentialTypeCatalog.Resolve(_credType)))
+            _credFormFields[pair.Key] = pair.Value;
+    }
+
+    private void CancelCredentialEdit() => ResetEditors();
+
+    private async Task AddCredential()
+    {
+        if (_config is null || string.IsNullOrWhiteSpace(_credName))
+            return;
+
+        _savingCredential = true;
+        _error = null;
+        try
+        {
+            await CredentialsService.CreateCredentialAsync(_config.CompanyId, new CredentialSaveRequest(
+                _credName, _credType, _credOsType, _credAddressType, _credAddress, BuildCredentialParamsJson(false), false));
+            _message = "Credential added.";
+            await LoadConfiguration();
+            _activeTab = "credentials";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingCredential = false; }
+    }
+
+    private async Task SaveCredential()
+    {
+        if (_config is null || _editingCredentialId is not > 0)
+            return;
+
+        _savingCredential = true;
+        _error = null;
+        try
+        {
+            await CredentialsService.UpdateCredentialAsync(_editingCredentialId.Value, _config.CompanyId, new CredentialSaveRequest(
+                _credName, _credType, _credOsType, _credAddressType, _credAddress, BuildCredentialParamsJson(true), true));
+            _message = "Credential updated.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingCredential = false; }
+    }
+
+    private async Task DeleteCredential(int id)
+    {
+        _error = null;
+        try
+        {
+            await CredentialsService.DeleteCredentialAsync(id);
+            _message = "Credential deleted.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private RenderFragment RenderIntegrationNameEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _integrationName); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _integrationName = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderIntegrationTypeEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _integrationType); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _integrationType = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderIntegrationTicketEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _integrationTicketUrl); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _integrationTicketUrl = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+
+    private RenderFragment RenderIntegrationForm(bool isNew) => @<div class="row g-2">
+        <div class="col-md-3"><input class="form-control form-control-sm" placeholder="Name" @bind="_integrationName" /></div>
+        <div class="col-md-3"><input class="form-control form-control-sm" placeholder="Integration name" @bind="_integrationType" list="integration-names" /></div>
+        <datalist id="integration-names">@foreach (var name in _config?.KnownIntegrationNames ?? []) { <option value="@name"></option> }</datalist>
+        <div class="col-md-4"><input class="form-control form-control-sm" placeholder="Ticket URL" @bind="_integrationTicketUrl" /></div>
+        <div class="col-12">@RenderIntegrationParamEditor()</div>
+    </div>;
+
+    private RenderFragment RenderIntegrationParamEditor() => @<div>
+        <label class="form-label form-label-sm">Integration params JSON</label>
+        <textarea class="form-control form-control-sm font-monospace" rows="4" @bind="_integrationParamsJson"></textarea>
+    </div>;
+
+    private async Task BeginIntegrationEdit(int id)
+    {
+        var (entry, paramsJson) = await IntegrationService.GetIntegrationCredentialAsync(id);
+        _editingIntegrationId = id;
+        _integrationName = entry.Name;
+        _integrationType = entry.IntegrationName;
+        _integrationTicketUrl = entry.TicketUrl;
+        _integrationParamsJson = paramsJson;
+    }
+
+    private void CancelIntegrationEdit() => ResetEditors();
+
+    private async Task AddIntegration()
+    {
+        if (_config is null || string.IsNullOrWhiteSpace(_integrationName))
+            return;
+
+        _savingIntegration = true;
+        try
+        {
+            await IntegrationService.CreateIntegrationCredentialAsync(_config.CompanyId, new IntegrationCredentialSaveRequest(
+                _integrationName, _integrationType, _integrationTicketUrl, _integrationParamsJson, false));
+            _message = "Integration credential added.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingIntegration = false; }
+    }
+
+    private async Task SaveIntegration()
+    {
+        if (_config is null || _editingIntegrationId is not > 0)
+            return;
+
+        _savingIntegration = true;
+        try
+        {
+            await IntegrationService.UpdateIntegrationCredentialAsync(_editingIntegrationId.Value, _config.CompanyId, new IntegrationCredentialSaveRequest(
+                _integrationName, _integrationType, _integrationTicketUrl, _integrationParamsJson, true));
+            _message = "Integration credential updated.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingIntegration = false; }
+    }
+
+    private async Task DeleteIntegration(int id)
+    {
+        try
+        {
+            await IntegrationService.DeleteIntegrationCredentialAsync(id);
+            _message = "Integration credential deleted.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private RenderFragment RenderMappingIntegrationEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _mappingIntegrationName); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _mappingIntegrationName = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderMappingSourceEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _mappingSource); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _mappingSource = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderMappingDestEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _mappingDest); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _mappingDest = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderMappingSiteEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "value", _mappingSite); builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _mappingSite = e.Value?.ToString() ?? "")); builder.CloseElement(); };
+    private RenderFragment RenderMappingCredentialEditor() => builder => { builder.OpenElement(0, "input"); builder.AddAttribute(1, "class", "form-control form-control-sm"); builder.AddAttribute(2, "type", "number"); builder.AddAttribute(3, "value", _mappingCredentialId); builder.AddAttribute(4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _mappingCredentialId = int.TryParse(e.Value?.ToString(), out var id) ? id : null)); builder.CloseElement(); };
+
+    private RenderFragment RenderMappingForm(bool isNew) => @<div class="row g-2">
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Integration" @bind="_mappingIntegrationName" list="integration-names" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Source company" @bind="_mappingSource" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Dest company" @bind="_mappingDest" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Site name" @bind="_mappingSite" /></div>
+        <div class="col-md-2"><input class="form-control form-control-sm" type="number" placeholder="Credential id" @bind="_mappingCredentialId" /></div>
+        <div class="col-12"><textarea class="form-control form-control-sm font-monospace" rows="3" placeholder="Extra mapping JSON" @bind="_mappingParamsJson"></textarea></div>
+    </div>;
+
+    private async Task BeginMappingEdit(int id)
+    {
+        if (_config is null)
+            return;
+
+        var map = _config.IntegrationMappings.First(m => m.Id == id);
+        _editingMappingId = id;
+        _mappingIntegrationName = map.IntegrationName;
+        _mappingSource = map.SourceCompanyName;
+        _mappingDest = map.DestCompanyName;
+        _mappingSite = map.SiteName;
+        _mappingCredentialId = map.CredentialId;
+        _mappingParamsJson = "{}";
+    }
+
+    private void CancelMappingEdit() => ResetEditors();
+
+    private async Task AddMapping()
+    {
+        if (_config is null)
+            return;
+
+        _savingMapping = true;
+        try
+        {
+            await IntegrationService.CreateCompanyMappingAsync(_config.CompanyId, BuildMappingRequest(false));
+            _message = "Integration mapping added.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingMapping = false; }
+    }
+
+    private async Task SaveMapping()
+    {
+        if (_config is null || _editingMappingId is not > 0)
+            return;
+
+        _savingMapping = true;
+        try
+        {
+            await IntegrationService.UpdateCompanyMappingAsync(_editingMappingId.Value, _config.CompanyId, BuildMappingRequest(true));
+            _message = "Integration mapping updated.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _savingMapping = false; }
+    }
+
+    private async Task DeleteMapping(int id)
+    {
+        try
+        {
+            await IntegrationService.DeleteCompanyMappingAsync(id);
+            _message = "Integration mapping deleted.";
+            await LoadConfiguration();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private IntegrationMappingSaveRequest BuildMappingRequest(bool mergeExisting) =>
+        new(_mappingIntegrationName, _mappingSource, _mappingDest, null, _mappingSite, null, _mappingCredentialId, _mappingParamsJson, mergeExisting);
+}

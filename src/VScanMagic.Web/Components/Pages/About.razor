@@ -1,0 +1,86 @@
+@page "/about"
+@using System.Reflection
+@using VScanMagic.Core.Paths
+
+<PageTitle>About VScanMagic</PageTitle>
+
+<h1>About VScanMagic</h1>
+<p class="text-muted">
+    Cross-platform vulnerability review and report generation for ConnectSecure data.
+    This web UI is the .NET 8 rebuild; it shares settings with the legacy PowerShell tool.
+    <a href="/help">Help &amp; workflow guide</a>
+</p>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">This build</div>
+            <div class="card-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-sm-4">Version</dt>
+                    <dd class="col-sm-8"><code>@_version</code></dd>
+                    <dt class="col-sm-4">Runtime</dt>
+                    <dd class="col-sm-8"><code>@_runtime</code></dd>
+                    <dt class="col-sm-4">Config</dt>
+                    <dd class="col-sm-8"><code>@_configDir</code></dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">Typical workflow</div>
+            <div class="card-body">
+                <ol class="mb-0 ps-3">
+                    <li>Pre-call: company review, download reports, start session from All Vulnerabilities</li>
+                    <li>Export reports; copy OneDrive/SharePoint links; email client with scheduling link</li>
+                    <li>Review with client on a call; finalize deliverables and ticket notes</li>
+                    <li>Remediation via new tickets — see <a href="/help#quarterly">Help</a> for the full sequence</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Features in this UI</div>
+    <div class="card-body">
+        <ul class="mb-0">
+            <li>ConnectSecure download and ingest</li>
+            <li>Client review sessions with presenter and read-only client view</li>
+            <li>Company review (probes, subnets, external targets, offline agents)</li>
+            <li>Editable remediation rules, templates (RMIT / RMIT+ email), folder map, covered software</li>
+            <li>Exports without Microsoft Office (Open XML DOCX, QuestPDF, flat XLSX)</li>
+            <li>Deliverables tab in review for ticket instructions, email, time estimate, and Manage PSA notes</li>
+        </ul>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">Configuration files</div>
+    <div class="card-body small">
+        <p class="mb-2">Settings, credentials, templates, and review sessions live under the config directory above:</p>
+        <ul class="font-monospace mb-0">
+            <li>VScanMagic_Settings.json</li>
+            <li>ConnectSecure-Credentials.json</li>
+            <li>VScanMagic_Templates.json</li>
+            <li>VScanMagic_RemediationRules.json</li>
+            <li>VScanMagic_CompanyFolderMap.json</li>
+            <li>VScanMagic_RMITPlusSettings.json</li>
+            <li>VScanMagic_CoveredSoftware.json</li>
+            <li>sessions/ (SQLite review sessions)</li>
+        </ul>
+    </div>
+</div>
+
+<p class="small text-muted mb-0">
+    Source:
+    <a href="https://github.com/monobrau/vscanmagic" target="_blank" rel="noopener">github.com/monobrau/vscanmagic</a>
+    · Legacy PowerShell + WinForms GUI remains in the same repository.
+</p>
+
+@code {
+    private readonly string _configDir = VScanMagicPaths.GetConfigDirectory();
+    private readonly string _version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "dev";
+    private readonly string _runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+}

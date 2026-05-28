@@ -10,7 +10,7 @@
    - **Client Secret**
    - **Tenant Name**
    - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod0.myconnectsecure.com` - POD number from API Key page)
-   - **Tenant Name** (e.g., `river-run` - found on API Key page)
+   - **Tenant Name** (e.g., `example-tenant` - found on API Key page)
 
 ## 2. Start the API Server
 
@@ -31,7 +31,7 @@ Keep this terminal open - the server needs to stay running.
    ```powershell
    $config = @{
        BaseUrl = "https://pod0.myconnectsecure.com"  # Format: https://pod{number}.myconnectsecure.com
-       TenantName = "river-run"  # Found on API Key page
+       TenantName = "example-tenant"  # Found on API Key page
        TenantName = "your-tenant-name"                  # Your tenant
        ClientId = "your-client-id"                      # From API Key
        ClientSecret = "your-client-secret"              # From API Key
@@ -52,7 +52,7 @@ Keep this terminal open - the server needs to stay running.
 $body = @{
     useConnectSecure = $true
     connectSecureBaseUrl = "https://pod0.myconnectsecure.com"
-    connectSecureTenant = "river-run"
+    connectSecureTenant = "example-tenant"
     connectSecureTenant = "your-tenant-name"
     connectSecureClientId = "your-client-id"
     connectSecureClientSecret = "your-client-secret"

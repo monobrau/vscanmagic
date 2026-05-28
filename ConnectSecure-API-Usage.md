@@ -9,7 +9,7 @@
 5. Copy the following:
    - **Client ID**
    - **Client Secret**
-   - **Tenant Name** (your tenant identifier, e.g., `river-run` - found on API Key page)
+   - **Tenant Name** (your tenant identifier, e.g., `example-tenant` - found on API Key page)
    - **Base URL** (format: `https://pod{number}.myconnectsecure.com`, e.g., `https://pod0.myconnectsecure.com` - POD number found on API Key page)
 
 ## Step 2: Use the API

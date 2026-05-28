@@ -4,8 +4,8 @@
 # --- Configuration ---
 $script:Config = @{
     AppName = "VScanMagic v4"
-    Version = "4.0.10"
-    Author = "River Run MSP"
+    Version = if ($script:VScanMagicVersion) { $script:VScanMagicVersion } else { '0.0.0' }
+    Author = "River Run"
 
     # Risk Score Calculation - ConnectSecure-aligned methodology
     # Severity weights from ConnectSecure Problem Category Weightage (External Scan / Asset Risk)
@@ -71,11 +71,18 @@ $script:Config = @{
     SyntheticEPSSForNoEPSS = 0.1
 
     # Top N report: always include at least this many Network vulns regardless of score (ensures network findings are visible)
-    MinNetworkVulnsInTopN = 2
+    MinNetworkVulnsInTopN = 0
+    MinHighSeverityCveInTopN = 0
+    CveOnlyRiskScale = 1.5
 
     # AI batch: max items per API call (avoids rate limits); delay in seconds between chunks
     AIBatchChunkSize = 2
-    AIBatchChunkDelaySeconds = 20
+    AIBatchChunkDelaySeconds = 35
+    # Cap strings sent to AI (ConnectSecure Solution text and merged CVE lists can be huge; avoids input TPM spikes)
+    AIFixTextMaxChars = 4500
+    AICveListMaxChars = 1200
+    AIProductNameMaxChars = 400
+    AIHostContextMaxChars = 500
 }
 
 # --- User Settings Persistence ---
@@ -129,7 +136,7 @@ if ($oldSettingsPath -and (Test-Path $oldSettingsPath) -and -not (Test-Path $scr
     }
 }
 $script:UserSettings = @{
-    PreparedBy = "River Run MSP"
+    PreparedBy = "River Run"
     CompanyName = ""
     CompanyAddress = ""
     Email = ""
@@ -160,6 +167,41 @@ function Ensure-SettingsDirectory {
     if ([string]::IsNullOrEmpty($Path)) { return $false }
     if (Test-Path $Path) { return $false }
     try { New-Item -Path $Path -ItemType Directory -Force | Out-Null; return $true } catch { return $false }
+}
+
+function Get-VScanMagicTempDirectory {
+    <# All runtime temp/work files go under %TEMP%\VScanMagic — never the script/repo directory. #>
+    param([string]$Subfolder = '')
+    $base = Join-Path ([System.IO.Path]::GetTempPath()) 'VScanMagic'
+    if (-not [string]::IsNullOrWhiteSpace($Subfolder)) {
+        $base = Join-Path $base $Subfolder
+    }
+    if (-not (Test-Path -LiteralPath $base)) {
+        New-Item -LiteralPath $base -ItemType Directory -Force | Out-Null
+    }
+    return [System.IO.Path]::GetFullPath($base)
+}
+
+function New-VScanMagicTempFile {
+    param(
+        [string]$Prefix = 'work',
+        [string]$BaseName = 'file',
+        [string]$Subfolder = ''
+    )
+    $dir = Get-VScanMagicTempDirectory -Subfolder $Subfolder
+    $safeBase = if ([string]::IsNullOrWhiteSpace($BaseName)) { 'file' } else { [System.IO.Path]::GetFileName($BaseName) }
+    return Join-Path $dir ("${Prefix}_$([Guid]::NewGuid().ToString('N'))_$safeBase")
+}
+
+function New-VScanMagicTempDirectory {
+    param(
+        [string]$Prefix = 'work',
+        [string]$Subfolder = ''
+    )
+    $parent = Get-VScanMagicTempDirectory -Subfolder $Subfolder
+    $path = Join-Path $parent ("${Prefix}_$([Guid]::NewGuid().ToString('N').Substring(0, 8))")
+    New-Item -LiteralPath $path -ItemType Directory -Force | Out-Null
+    return $path
 }
 
 function Get-JsonFile {
@@ -255,7 +297,7 @@ function Backup-Settings {
     } elseif ([System.IO.Directory]::Exists($OutputPath)) {
         $OutputPath = Join-Path $OutputPath $defaultName
     }
-    $tempDir = Join-Path $env:TEMP "VScanMagic_Backup_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+    $tempDir = New-VScanMagicTempDirectory -Prefix 'Backup'
     try {
         New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
         $copied = 0
@@ -303,7 +345,7 @@ function Restore-Settings {
     }
     try {
         Ensure-SettingsDirectory -Path $script:SettingsDirectory | Out-Null
-        $tempDir = Join-Path $env:TEMP "VScanMagic_Restore_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+        $tempDir = New-VScanMagicTempDirectory -Prefix 'Restore'
         Expand-Archive -Path $BackupPath -DestinationPath $tempDir -Force
         $allowedFiles = switch ($Scope) {
             "Shared" { $script:BackupSharedFiles }
@@ -348,7 +390,7 @@ function Load-UserSettings {
 
     $json = Get-JsonFile -Path $script:SettingsPath
     if ($json) {
-        $script:UserSettings.PreparedBy = if ($json.PreparedBy) { $json.PreparedBy } else { "River Run MSP" }
+        $script:UserSettings.PreparedBy = if ($json.PreparedBy) { $json.PreparedBy } else { "River Run" }
         $script:UserSettings.CompanyName = if ($json.CompanyName) { $json.CompanyName } else { "" }
         $script:UserSettings.CompanyAddress = if ($json.CompanyAddress) { $json.CompanyAddress } else { "" }
         $script:UserSettings.Email = if ($json.Email) { $json.Email } else { "" }
@@ -670,18 +712,23 @@ function Resolve-QuarterFolderName {
         [string]$ScanDate
     )
     $yearQuarter = Get-QuarterFromDate -ScanDate $ScanDate
-    $outPath = Join-Path $ClientPath $yearQuarter
-    if (-not (Test-Path $outPath)) { return $yearQuarter }
+    $dateStr = $null
     try {
         $d = [DateTime]::Parse($ScanDate)
-        $q = [Math]::Ceiling($d.Month / 3)
         $dateStr = $d.ToString("yyyy-MM-dd")
-        return "$($d.Year) - Q$q $dateStr"
     } catch {
-        $d = Get-Date
-        $q = [Math]::Ceiling($d.Month / 3)
-        return "$($d.Year) - Q$q $($d.ToString('yyyy-MM-dd'))"
+        $dateStr = (Get-Date).ToString("yyyy-MM-dd")
     }
+    $candidates = @(
+        $yearQuarter,
+        "$yearQuarter $dateStr",
+        "$yearQuarter ${dateStr}_$(Get-Date -Format 'HHmmss')"
+    )
+    foreach ($name in $candidates) {
+        $outPath = Join-Path $ClientPath $name
+        if (-not (Test-Path $outPath)) { return $name }
+    }
+    return "$yearQuarter ${dateStr}_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
 }
 
 function Resolve-ClientOutputPath {
@@ -819,14 +866,14 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Windows 10*"
-            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through ConnectWise Automate."
-            TicketText = "- Windows 10 reached End of Life on October 14, 2025`r`n  - No longer supported unless you have extended support licensing`r`n  - If Windows Updates are functional and no extension licensing in place:`r`n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine`r`n  - For systems with extension licensing:`r`n    * Continue to verify Windows Update status through ConnectWise Automate"
+            WordText = "Windows 10 reached End of Life on October 14, 2025, and is no longer supported by Microsoft unless you have extended support licensing. If Windows Updates are functional and no extension licensing is in place, there is nothing further to be done other than considering an upgrade to Windows 11 or retiring the machine. For systems with extension licensing, continue to verify Windows Update status through RMM if the client has patch management deployed."
+            TicketText = "- Windows 10 reached End of Life on October 14, 2025`r`n  - No longer supported unless you have extended support licensing`r`n  - If Windows Updates are functional and no extension licensing in place:`r`n    * Nothing to be done other than considering upgrade to Windows 11 or retiring machine`r`n  - For systems with extension licensing:`r`n    * Verify Windows Update status via RMM if patch management is deployed for the client"
             IsDefault = $false
         },
         @{
             Pattern = "*Windows*"
-            WordText = "Windows patch inconsistencies should be investigated via ConnectWise Automate. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation."
-            TicketText = "- Investigate via ConnectWise Automate`r`n  - Verify Windows Update status on affected systems`r`n  - Check for any issues preventing patch installation"
+            WordText = "Windows patch inconsistencies should be investigated via RMM when the client has patch management deployed. Systems with lower vulnerability counts may indicate that patching is working correctly and awaiting the latest patch cycles. For systems with high vulnerability counts, verify Windows Update status and investigate any potential issues preventing patch installation."
+            TicketText = "- Investigate via RMM if patch management is deployed for the client`r`n  - Verify Windows Update status on affected systems`r`n  - Check for any issues preventing patch installation"
             IsDefault = $false
         },
         @{
@@ -855,8 +902,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Microsoft Teams*"
-            WordText = "Microsoft Teams can be updated via RMM script deployed through ConnectWise Automate. This can be remediated by cleaning up unused user profile installed versions using: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM."
-            TicketText = "- Update via RMM script deployed through ConnectWise Automate`r`n  - Can be remediated by cleaning up unused user profile installed versions`r`n  - Script path: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation in RMM"
+            WordText = "Microsoft Teams can be updated via RMM script when the client has patch management deployed. Unused user profile-installed versions can be cleaned up in RMM (example path in ConnectWise Automate: Select Scripts > RR - Custom > RR - Custom - R-Security Remediation > R-Security - Teams Classic Cleanup Remediation)."
+            TicketText = "- Update via RMM script if patch management is deployed for the client`r`n  - Can remediate by cleaning up unused user profile-installed versions`r`n  - Example script path (ConnectWise Automate): RR - Custom > R-Security - Teams Classic Cleanup Remediation"
             IsDefault = $false
         },
         @{
@@ -902,9 +949,27 @@ function Get-DefaultRemediationRules {
             IsDefault = $false
         },
         @{
+            Pattern = "*Microsoft Visual C++ (all versions)*"
+            WordText = "Microsoft Visual C++ Redistributables are side-by-side runtime libraries. Each year or release line (2008, 2010, 2012, 2013, 2015–2022, etc.) is normally installed by — and locked to — the application that required that specific runtime at install time. You cannot safely replace one year's redistributable with another and expect older software to keep working; multiple year revisions routinely coexist on the same machine. Remediation is to install the latest patched build within the same redistributable line (Windows Update or Microsoft's vc_redist installer for that year range), not to remove older versions or jump to a different year's runtime unless the vendor application is updated. Updating the parent application may install a newer redistributable, but other installed software may still depend on the older line."
+            TicketText = "- Visual C++ redistributables are side-by-side; each year/release line is tied to the apps that installed it`r`n  - Do NOT remove older year revisions (2008, 2010, 2012, 2013, 2015–2022, etc.) without verifying dependent applications`r`n  - Do NOT replace one year's runtime with another — they are not interchangeable`r`n  - Remediate by patching within the same line: latest vc_redist build for that year range, or Windows Update`r`n  - Updating the parent/vendor application may pull a newer redistributable; other apps may still need the older line`r`n  - Multiple Visual C++ versions on one host is normal and expected"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Visual C++*"
+            WordText = "Microsoft Visual C++ Redistributables are side-by-side runtime libraries. Each year or release line (2008, 2010, 2012, 2013, 2015–2022, etc.) is normally installed by — and locked to — the application that required that specific runtime at install time. You cannot safely replace one year's redistributable with another and expect older software to keep working; multiple year revisions routinely coexist on the same machine. Remediation is to install the latest patched build within the same redistributable line (Windows Update or Microsoft's vc_redist installer for that year range), not to remove older versions or jump to a different year's runtime unless the vendor application is updated. Updating the parent application may install a newer redistributable, but other installed software may still depend on the older line."
+            TicketText = "- Visual C++ redistributables are side-by-side; each year/release line is tied to the apps that installed it`r`n  - Do NOT remove older year revisions (2008, 2010, 2012, 2013, 2015–2022, etc.) without verifying dependent applications`r`n  - Do NOT replace one year's runtime with another — they are not interchangeable`r`n  - Remediate by patching within the same line: latest vc_redist build for that year range, or Windows Update`r`n  - Updating the parent/vendor application may pull a newer redistributable; other apps may still need the older line`r`n  - Multiple Visual C++ versions on one host is normal and expected"
+            IsDefault = $false
+        },
+        @{
+            Pattern = "*Microsoft .NET (all versions)*"
+            WordText = "Microsoft .NET has two incompatible families — the break is between .NET Framework and modern .NET, not at a single version number. Legacy .NET Framework (through 4.8) is not backward compatible with modern .NET (.NET Core 3.x and .NET 5+). .NET 5 was the rebranding of .NET Core; it continues the modern lineage with strong backward compatibility from Core 3.1 onward and between modern releases (5→6→8). Framework applications cannot move to modern .NET without a migration project. Modern .NET apps can usually retarget to a supported release (.NET 8 LTS) with minimal changes. For runtime-only findings, keep the matching branch current via Windows Update or vendor installers — installing a modern runtime does not satisfy a .NET Framework-only application."
+            TicketText = "- Two incompatible .NET families: .NET Framework vs modern .NET (Core 3.x / .NET 5+)`r`n  - The break is Framework vs modern — NOT `"before .NET 5 vs after .NET 5`" within Framework`r`n  - .NET Framework (through 4.8): migration project required; no in-place upgrade to modern .NET`r`n  - Modern .NET (.NET 5+): continues Core lineage; largely backward compatible within modern versions only`r`n  - Retarget modern apps to .NET 8 (LTS) where possible; patch runtimes via Windows Update`r`n  - Do not install modern .NET expecting it to replace .NET Framework for legacy apps"
+            IsDefault = $false
+        },
+        @{
             Pattern = "*Microsoft .NET Framework*"
-            WordText = "Legacy .NET: .NET Framework (1.0 through 4.8) cannot be upgraded in-place to modern .NET (5, 6, 7, 8, 9). There is no direct upgrade path; attempting to switch runtimes without migration will likely break the application. Modern .NET is a different runtime with different APIs—some Framework APIs do not exist or behave differently. The older the Framework version (e.g. 3.5, 4.0), the more painful the migration. Migration is a real project: retarget the application to .NET 8 (LTS) or later, update deprecated or incompatible APIs, and test thoroughly. For MSP/client conversations: the main reason to migrate is that Framework versions go out of support and stop receiving security patches—not because end users will notice any difference."
-            TicketText = "- .NET Framework cannot be upgraded to modern .NET (5, 6, 7, 8, 9) without migration`r`n  - No direct upgrade path; switching runtimes without migration will likely break the app`r`n  - Modern .NET is a different runtime; many APIs differ or are missing`r`n  - Older Framework versions (3.5, 4.0) are more painful to migrate than 4.x`r`n  - Migration is a real project: retarget to .NET 8 (LTS), update APIs, test thoroughly`r`n  - Main driver: security patches (Framework goes out of support)—not user experience"
+            WordText = "Legacy .NET: .NET Framework (1.0 through 4.8) cannot be upgraded in-place to modern .NET (5, 6, 7, 8, 9). There is no direct upgrade path; attempting to switch runtimes without migration will likely break the application. Modern .NET is a different runtime with different APIs - some Framework APIs do not exist or behave differently. The older the Framework version (e.g. 3.5, 4.0), the more painful the migration. Migration is a real project: retarget the application to .NET 8 (LTS) or later, update deprecated or incompatible APIs, and test thoroughly. For MSP/client conversations: the main reason to migrate is that Framework versions go out of support and stop receiving security patches - not because end users will notice any difference."
+            TicketText = "- .NET Framework cannot be upgraded to modern .NET (5, 6, 7, 8, 9) without migration`r`n  - No direct upgrade path; switching runtimes without migration will likely break the app`r`n  - Modern .NET is a different runtime; many APIs differ or are missing`r`n  - Older Framework versions (3.5, 4.0) are more painful to migrate than 4.x`r`n  - Migration is a real project: retarget to .NET 8 (LTS), update APIs, test thoroughly`r`n  - Main driver: security patches (Framework goes out of support) - not user experience"
             IsDefault = $false
         },
         @{
@@ -957,8 +1022,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*Microsoft .NET Runtime*"
-            WordText = "Modern .NET: .NET 5+ (Runtime) maintains strong backwards compatibility. Retargeting between versions is usually a project file edit and minimal code changes. The main reason to upgrade is support: LTS versions (6, 8, 10) get 3 years; non-LTS get 18 months. End users typically notice nothing; for MSP/client conversations, the value is security patches and lower infrastructure costs—not user-facing improvements."
-            TicketText = "- Modern .NET: largely drop-in upgradeable between versions`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches (older versions go out of support)—not user experience`r`n  - LTS versions get 3 years support; non-LTS get 18 months"
+            WordText = "Modern .NET: .NET 5+ (Runtime) maintains strong backwards compatibility. Retargeting between versions is usually a project file edit and minimal code changes. The main reason to upgrade is support: LTS versions (6, 8, 10) get 3 years; non-LTS get 18 months. End users typically notice nothing; for MSP/client conversations, the value is security patches and lower infrastructure costs - not user-facing improvements."
+            TicketText = "- Modern .NET: largely drop-in upgradeable between versions`r`n  - Retarget to .NET 8 (LTS) with minimal code changes`r`n  - Main driver: security patches (older versions go out of support) - not user experience`r`n  - LTS versions get 3 years support; non-LTS get 18 months"
             IsDefault = $false
         },
         @{
@@ -993,8 +1058,8 @@ function Get-DefaultRemediationRules {
         },
         @{
             Pattern = "*"
-            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If available via ConnectWise Automate/RMM, deploy updates via patch management or scripts; otherwise, manual updates may be required."
-            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via ConnectWise Automate/RMM if available; otherwise manual updates"
+            WordText = "Determine what the device or software is (use Product/OS and affected hosts). Review the manufacturer's security advisories and vulnerability data for patches or firmware updates. Consider configuration mitigations (e.g. network segmentation, hardening) where patching is not immediately possible. If the client has RMM or scripting available, deploy updates via patch management or scripts; otherwise, manual updates may be required."
+            TicketText = "- Determine device/software identity (Product/OS, affected hosts)`r`n  - Review manufacturer security advisories and vulnerability data`r`n  - Check for firmware updates or patches`r`n  - Consider configuration mitigations where patching not possible`r`n  - Deploy via RMM or scripting if available for the client; otherwise manual updates"
             IsDefault = $true
         }
     )
@@ -1273,9 +1338,64 @@ function Save-GeneralRecommendations {
 
 # --- Templates Persistence (Email, Ticket Notes) ---
 
+function ConvertTo-StrictBool {
+    <#
+    Converts GUI/JSON-ish values to [bool]. PowerShell's [bool]"false" is $true (non-empty string);
+    this helper treats common false/true string spellings correctly.
+    #>
+    param(
+        $InputObject,
+        [bool]$IfNullOrUnknown = $false
+    )
+    if ($null -eq $InputObject) { return $IfNullOrUnknown }
+    if ($InputObject -is [bool]) { return $InputObject }
+    if ($InputObject -is [int] -or $InputObject -is [long] -or $InputObject -is [double]) { return $InputObject -ne 0 }
+    $t = ([string]$InputObject).Trim()
+    if ([string]::IsNullOrEmpty($t)) { return $IfNullOrUnknown }
+    if ($t -match '^(?i)(true|yes|y|on|1)$') { return $true }
+    if ($t -match '^(?i)(false|no|n|off|0)$') { return $false }
+    return $IfNullOrUnknown
+}
+
 function Get-DefaultTemplates {
     return @{
         EmailTemplate = @{
+            SubjectFormat = "{Year} Q{Quarter} Vulnerability Scan Follow Up"
+            Body = @"
+Subject: {Year} Q{Quarter} Vulnerability Scan Follow Up
+
+Good {Greeting},
+
+Your quarterly vulnerability scan report has been completed and is available in your client folder.
+
+Recommended remediation priorities ({TopNLabel}):
+<link to top ten report from onedrive>
+
+Complete report package:
+<onedrive link to folder containing reports>
+
+The folder contains the following reports:
+• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
+• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
+• Executive Summary Report – A high-level overview of your security posture and network information.
+• External Scan – Detected vulnerabilities and services exposed to the internet.
+• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+
+Schedule time with me
+<scheduling link>
+
+{NoteText}
+
+We appreciate your commitment to security. Addressing these vulnerabilities is essential for maintaining the protection of your systems.
+
+Sincerely,
+
+{PreparedBy}
+"@
+        }
+        EmailTemplateRmitPlus = @{
             SubjectFormat = "{Year} Q{Quarter} Vulnerability Scan Follow Up"
             Body = @"
 Subject: {Year} Q{Quarter} Vulnerability Scan Follow Up
@@ -1340,10 +1460,16 @@ function Load-Templates {
     if (-not [string]::IsNullOrEmpty($script:TemplatesPath) -and (Test-Path $script:TemplatesPath)) {
         try {
             $json = Get-Content $script:TemplatesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $defaults = Get-DefaultTemplates
+            $rmitPlusJson = $json.EmailTemplateRmitPlus
             $script:Templates = @{
                 EmailTemplate = @{
-                    SubjectFormat = if ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { (Get-DefaultTemplates).EmailTemplate.SubjectFormat }
-                    Body = if ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { (Get-DefaultTemplates).EmailTemplate.Body }
+                    SubjectFormat = if ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { $defaults.EmailTemplate.SubjectFormat }
+                    Body = if ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { $defaults.EmailTemplate.Body }
+                }
+                EmailTemplateRmitPlus = @{
+                    SubjectFormat = if ($rmitPlusJson -and $rmitPlusJson.SubjectFormat) { $rmitPlusJson.SubjectFormat } elseif ($json.EmailTemplate.SubjectFormat) { $json.EmailTemplate.SubjectFormat } else { $defaults.EmailTemplateRmitPlus.SubjectFormat }
+                    Body = if ($rmitPlusJson -and $rmitPlusJson.Body) { $rmitPlusJson.Body } elseif ($json.EmailTemplate.Body) { $json.EmailTemplate.Body } else { $defaults.EmailTemplateRmitPlus.Body }
                 }
                 TicketNotes = @{
                     StepsBeforeTickets = if ($json.TicketNotes.StepsBeforeTickets) { $json.TicketNotes.StepsBeforeTickets } else { (Get-DefaultTemplates).TicketNotes.StepsBeforeTickets }
@@ -1581,6 +1707,83 @@ function Clear-ComObject {
     }
 }
 
+<#
+.SYNOPSIS
+Opens an Excel workbook with retries and a fresh Excel.Application per attempt.
+Fixes intermittent "Unable to get the Open property of the Workbooks class" after
+rapid COM use (e.g. auto-resize on many downloads) or OneDrive/sync latency.
+#>
+function Open-ExcelWorkbookWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [bool]$ReadOnly = $true,
+        [int]$MaxAttempts = 5
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $fullPath)) {
+        throw "File not found: $fullPath"
+    }
+
+    $lastErr = $null
+    for ($a = 1; $a -le $MaxAttempts; $a++) {
+        if ($a -gt 1) {
+            Start-Sleep -Milliseconds (500 + 450 * ($a - 1))
+        }
+
+        $excel = $null
+        $wb = $null
+        try {
+            $excel = New-Object -ComObject Excel.Application
+            $excel.Visible = $false
+            $excel.DisplayAlerts = $false
+            $excel.ScreenUpdating = $false
+
+            if ($ReadOnly) {
+                try {
+                    $wb = $excel.Workbooks.Open($fullPath, 0, $true)
+                } catch {
+                    $wb = $excel.Workbooks.Open($fullPath)
+                }
+            } else {
+                try {
+                    $wb = $excel.Workbooks.Open($fullPath)
+                } catch {
+                    $wb = $excel.Workbooks.Open($fullPath, 0, $false)
+                }
+            }
+
+            if ($null -eq $wb) {
+                throw "Workbooks.Open returned null for: $fullPath"
+            }
+
+            return [pscustomobject]@{
+                ExcelApp = $excel
+                Workbook = $wb
+            }
+        } catch {
+            $lastErr = $_
+            if ($null -ne $wb) {
+                try { $wb.Close($false) } catch { }
+                Clear-ComObject $wb
+            }
+            if ($null -ne $excel) {
+                try { $excel.Quit() } catch { }
+                Clear-ComObject $excel
+            }
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+
+            if ($a -lt $MaxAttempts) {
+                Write-Log "Excel open attempt $a/$MaxAttempts failed: $($_.Exception.Message)" -Level Warning
+            }
+        }
+    }
+
+    throw $lastErr
+}
+
 function Invoke-OperationWithRetry {
     param(
         [Parameter(Mandatory=$true)]
@@ -1683,6 +1886,23 @@ function ConvertTo-ReadableFixText {
     return $result
 }
 
+function Limit-AIPromptString {
+    <#
+    .SYNOPSIS
+    Truncates strings sent to AI APIs. ConnectSecure Solution text and merged CVE lists can be very large and exhaust org TPM limits.
+    #>
+    param(
+        [string]$Value,
+        [int]$MaxLength,
+        [string]$Suffix = ' [truncated]'
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    if ($MaxLength -lt 8) { $MaxLength = 8 }
+    if ($Value.Length -le $MaxLength) { return $Value }
+    $take = [Math]::Max(1, $MaxLength - $Suffix.Length)
+    return $Value.Substring(0, $take).TrimEnd() + $Suffix
+}
+
 function Test-AIApiKeyConfigured {
     <#
     .SYNOPSIS
@@ -1712,11 +1932,15 @@ function Invoke-AIImproveRemediationText {
     }
 
     $cleaned = ConvertTo-ReadableFixText -RawFix $Text
+    $cleaned = Limit-AIPromptString -Value $cleaned -MaxLength $script:Config.AIFixTextMaxChars
+    $cveLine = Limit-AIPromptString -Value $CveIdList -MaxLength $script:Config.AICveListMaxChars
+    $productLine = Limit-AIPromptString -Value $ProductName -MaxLength $script:Config.AIProductNameMaxChars
+    $hostLine = Limit-AIPromptString -Value $HostContext -MaxLength $script:Config.AIHostContextMaxChars
     $vulnContext = ""
     $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace($CveIdList)) { $parts += "CVE ID(s): $CveIdList" }
-    if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $parts += "Product/OS: $ProductName" }
-    if (-not [string]::IsNullOrWhiteSpace($HostContext)) { $parts += "Affected hosts: $HostContext" }
+    if (-not [string]::IsNullOrWhiteSpace($cveLine)) { $parts += "CVE ID(s): $cveLine" }
+    if (-not [string]::IsNullOrWhiteSpace($productLine)) { $parts += "Product/OS: $productLine" }
+    if (-not [string]::IsNullOrWhiteSpace($hostLine)) { $parts += "Affected hosts: $hostLine" }
     if ($parts.Count -gt 0) { $vulnContext = ($parts -join "`n") + "`n`n" }
 
     $cveOnlyHint = ""
@@ -1885,19 +2109,9 @@ function Invoke-AIImproveRemediationTextBatch {
     $chunkSize = $script:Config.AIBatchChunkSize
     $chunkDelay = $script:Config.AIBatchChunkDelaySeconds
     $rulesHeader = @"
-You are rephrasing SPECIFIC remediation steps for MULTIPLE vulnerabilities. Below are N items. For EACH item, output the improved text, then the exact delimiter '$delim' (including the delimiter line).
+Rephrase remediation text for each item below. Output improved text only (no item labels), then a line exactly: $delim
 
-RULES (apply to EACH item):
-- Rephrase ONLY the provided text. Do NOT add generic advice, best practices, or numbered lists.
-- Do NOT output things like 'Prioritize remediation', 'Patch management', 'Vulnerability scanning' - those are generic.
-- Output ONLY a clear, professional rewrite of the SPECIFIC fix. One short paragraph or a few sentences max.
-- If the input is already specific (e.g. 'Apply KB5077181'), just make it slightly more readable.
-- NEVER respond with 'I don't have specific information'. Use CVE IDs to provide CVE-specific remediation when given.
-- When investigating CVEs: determine what the device/software is (Product/OS, Affected hosts), review manufacturer security advisories and vulnerability data, check for firmware updates, consider configuration mitigations. Provide platform-appropriate remediation (Windows KB for Windows, firmware for printers/IoT/embedded, vendor patch for software).
-- CRITICAL: Remediation MUST match the Product/OS. Windows 11/Server = Windows KB numbers only, never Chrome/Firefox versions. Google Chrome = Chrome versions only. Do NOT mix product types.
-- Common: rippl20-icmp = Ripple20 Treck TCP/IP; remediate via firmware updates from manufacturer, network segmentation.
-
-OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 2', or numbering), then a line with exactly: $delim
+Rules (each item): rephrase ONLY the given fix text; no generic security advice; one short paragraph; match Product/OS (Windows=KB only, Chrome=Chrome versions only); use CVE context when present; never "no specific information".
 
 --- INPUT ITEMS ---
 "@
@@ -1913,7 +2127,7 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                 return $resp.choices[0].message.content.Trim()
             }
             if ($provider -eq 'Claude') {
-                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, $maxTokens); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
+                $reqBody = @{ model = "claude-haiku-4-5-20251001"; max_tokens = [Math]::Min(4096, [Math]::Max(256, $maxTokens)); messages = @( @{ role = "user"; content = $prompt } ) } | ConvertTo-Json -Depth 5
                 $headers = @{ "x-api-key" = $key; "anthropic-version" = "2023-06-01"; "Content-Type" = "application/json" }
                 $resp = Invoke-RestMethod -Uri "https://api.anthropic.com/v1/messages" -Method Post -Headers $headers -Body $reqBody -TimeoutSec 90
                 $content = @($resp.content)
@@ -1955,15 +2169,20 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                 if (-not [string]::IsNullOrWhiteSpace($fallback)) { $textToUse = $fallback }
             }
             $cleaned = ConvertTo-ReadableFixText -RawFix $textToUse
+            $cleaned = Limit-AIPromptString -Value $cleaned -MaxLength $script:Config.AIFixTextMaxChars
+            $cveLine = Limit-AIPromptString -Value $i.CveIdList -MaxLength $script:Config.AICveListMaxChars
+            $productLine = Limit-AIPromptString -Value $i.ProductName -MaxLength $script:Config.AIProductNameMaxChars
+            $hostLine = Limit-AIPromptString -Value $i.HostContext -MaxLength $script:Config.AIHostContextMaxChars
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("--- ITEM $($idx + 1) ---")
-            if (-not [string]::IsNullOrWhiteSpace($i.CveIdList)) { [void]$sb.AppendLine("CVE ID(s): $($i.CveIdList)") }
-            if (-not [string]::IsNullOrWhiteSpace($i.ProductName)) { [void]$sb.AppendLine("Product/OS: $($i.ProductName)") }
-            if (-not [string]::IsNullOrWhiteSpace($i.HostContext)) { [void]$sb.AppendLine("Affected hosts: $($i.HostContext)") }
+            if (-not [string]::IsNullOrWhiteSpace($cveLine)) { [void]$sb.AppendLine("CVE ID(s): $cveLine") }
+            if (-not [string]::IsNullOrWhiteSpace($productLine)) { [void]$sb.AppendLine("Product/OS: $productLine") }
+            if (-not [string]::IsNullOrWhiteSpace($hostLine)) { [void]$sb.AppendLine("Affected hosts: $hostLine") }
             [void]$sb.AppendLine("Text to rephrase: $cleaned")
         }
         $chunkPrompt = $sb.ToString()
-        $chunkMaxTokens = [Math]::Min(8192, 1024 + ($chunk.Count * 400))
+        # Short outputs only; keeps requests lean vs reserving large completion budgets
+        $chunkMaxTokens = [Math]::Min(4096, 384 + ($chunk.Count * 220))
 
         $raw = $null
         $claudeRetries = 1
@@ -1994,8 +2213,8 @@ OUTPUT FORMAT: For each item, output ONLY the improved text (no 'ITEM 1', 'ITEM 
                     if ($is429) {
                         $script:AIBatch429Count++
                         if ($attempt -lt $claudeRetries) {
-                            $waitSec = 30
-                            Write-Log "Claude batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
+                            $waitSec = 60
+                            Write-Log "$provider batch rate limited (429). Waiting ${waitSec}s before retry ($($script:AIBatch429Count)/3 total)..." -Level Warning
                             for ($w = 0; $w -lt $waitSec; $w++) {
                                 Start-Sleep -Seconds 1
                                 try { [System.Windows.Forms.Application]::DoEvents() } catch { }

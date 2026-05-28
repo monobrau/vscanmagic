@@ -465,26 +465,20 @@ function Get-VulnerabilityData {
         # Excel COM can fail with "Unable to get the Open property" on cloud-synced paths
         $pathToOpen = $ExcelPath
         if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($ExcelPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-            $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
             $pathToOpen = $tempPath
             Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
         }
 
-        $excel = New-Object -ComObject Excel.Application
-        $excel.Visible = $false
-        $excel.DisplayAlerts = $false
-
         # Check for file lock before opening (proactive temp copy if locked)
         if (Test-FileLocked $pathToOpen) {
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($ExcelPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
                 $pathToOpen = $tempPath
                 Write-Log "File is in use - copied to temp: $tempPath" -Level Info
@@ -493,19 +487,25 @@ function Get-VulnerabilityData {
             }
         }
 
-        # UpdateLinks:=0, ReadOnly:=true - helps avoid lock issues
+        if ($tempPath) {
+            Start-Sleep -Milliseconds 350
+        }
+
         try {
-            $workbook = $excel.Workbooks.Open($pathToOpen, 0, $true)
+            $opened = Open-ExcelWorkbookWithRetry -Path $pathToOpen -ReadOnly $true -MaxAttempts 5
+            $excel = $opened.ExcelApp
+            $workbook = $opened.Workbook
         } catch {
-            # Fallback: if open fails (e.g. sync lock), copy to temp and retry
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($ExcelPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelRead' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $ExcelPath -Destination $tempPath -Force
                 Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
-                $workbook = $excel.Workbooks.Open($tempPath, 0, $true)
+                Start-Sleep -Milliseconds 450
+                $opened = Open-ExcelWorkbookWithRetry -Path $tempPath -ReadOnly $true -MaxAttempts 5
+                $excel = $opened.ExcelApp
+                $workbook = $opened.Workbook
             } else {
                 throw
             }
@@ -555,7 +555,7 @@ function Get-VulnerabilityData {
             Write-Log "All Vulnerabilities headers: $($headers.Keys -join ', ')"
             $columnMappings = @{
                 'Source' = @('Source', 'Section', 'Vulnerability Source')
-                'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Device')
+                'HostName' = @('Asset Name', 'Host Name', 'Hostname', 'Computer', 'Computer Name', 'Device', 'Device Name', 'System', 'System Name', 'Machine', 'Asset', 'Host', 'Endpoint', 'Target')
                 'IP' = @('IP Address', 'IP', 'Address')
                 'Product' = @('Product Name', 'Application Name', 'Software Name', 'Product', 'App Name', 'OS Name', 'OS Full Name', 'Name', 'Problem Name')
                 'Severity' = @('Severity')
@@ -1052,6 +1052,7 @@ function Get-ProductTypeSuffix {
         [bool]$IsRMITPlus = $false
     )
     if ([string]::IsNullOrWhiteSpace($ProductName)) { return " - Update Required" }
+    if (Test-IsCveOnlyProduct -ProductName $ProductName) { return " - Investigate and Resolve" }
     if ($ProductName -like "*Windows Server 2012*" -or $ProductName -like "*end-of-life*" -or $ProductName -like "*out of support*") {
         return " - End of Support Migration Required"
     }
@@ -1104,6 +1105,23 @@ function Test-IsEOLProduct {
     return $false
 }
 
+function Test-IsCveOnlyProduct {
+    param([string]$ProductName)
+
+    if ([string]::IsNullOrWhiteSpace($ProductName)) { return $false }
+    return ($ProductName.Trim() -match '^CVE-\d{4}-\d+$')
+}
+
+function Test-IsHighSeverityCveOnlyProduct {
+    param(
+        [string]$ProductName,
+        [int]$Critical = 0,
+        [int]$High = 0
+    )
+
+    return (Test-IsCveOnlyProduct -ProductName $ProductName) -and (($Critical -gt 0) -or ($High -gt 0))
+}
+
 function Get-CompositeRiskScore {
     param(
         [int]$Critical,
@@ -1129,6 +1147,15 @@ function Get-CompositeRiskScore {
         $severityWeightedSum += ($VulnCount * 1.0)
     }
 
+    if (Test-IsCveOnlyProduct -ProductName $ProductName) {
+        $avgCVSS = Get-AverageCVSS -Critical $Critical -High $High -Medium $Medium -Low $Low
+        if ($avgCVSS -gt 0) {
+            $scale = if ($null -ne $script:Config.CveOnlyRiskScale) { [double]$script:Config.CveOnlyRiskScale } else { 1.5 }
+            $cveFloor = $avgCVSS * $scale
+            if ($cveFloor -gt $severityWeightedSum) { $severityWeightedSum = $cveFloor }
+        }
+    }
+
     # EPSS boost: (1 + EPSS) ranges from 1.0 to 2.0
     # Items without EPSS (e.g. Network vulns) get synthetic EPSS so they're not buried
     $effectiveEPSS = $EPSSScore
@@ -1139,6 +1166,46 @@ function Get-CompositeRiskScore {
     $riskScore = $severityWeightedSum * $epssFactor
 
     return [Math]::Round($riskScore, 2)
+}
+
+function Get-AffectedSystemIdentifier {
+    param($System)
+    if ($null -eq $System) { return $null }
+    foreach ($prop in @('HostName', 'IP')) {
+        $val = $System.$prop
+        if (-not [string]::IsNullOrWhiteSpace($val)) { return [string]$val.Trim() }
+    }
+    return $null
+}
+
+function Add-AffectedSystemToTop10Item {
+    param(
+        $Item,
+        [string]$HostName,
+        [string]$IP,
+        [string]$Username,
+        [int]$VulnCount
+    )
+    $hn = if ($HostName) { [string]$HostName.Trim() } else { '' }
+    $ipVal = if ($IP) { [string]$IP.Trim() } else { '' }
+    $userVal = if ($Username) { [string]$Username.Trim() } else { '' }
+    $hostKey = "$hn`t$ipVal"
+    $systems = @($Item.AffectedSystems)
+    $existing = $systems | Where-Object { "$($_.HostName)`t$($_.IP)" -eq $hostKey } | Select-Object -First 1
+    if ($existing) {
+        $existing.VulnCount = [int]$existing.VulnCount + $VulnCount
+        if ([string]::IsNullOrWhiteSpace($existing.Username) -and -not [string]::IsNullOrWhiteSpace($userVal)) {
+            $existing.Username = $userVal
+        }
+        return
+    }
+    $newSys = [PSCustomObject]@{
+        HostName = $hn
+        IP       = $ipVal
+        Username = $userVal
+        VulnCount = $VulnCount
+    }
+    $Item.AffectedSystems = if ($systems.Count -eq 0) { @($newSys) } else { $systems + @($newSys) }
 }
 
 function Get-Top10Vulnerabilities {
@@ -1217,18 +1284,13 @@ function Get-Top10Vulnerabilities {
                 }
             }
 
-            # Add affected systems (store objects with hostname, IP, username, and vulnerability count)
-            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
+            # Add affected systems (array-safe append; PowerShell unwraps single-element arrays on +=)
             $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
             foreach ($hostGroup in $hostKeyGroups) {
                 $hostItem = $hostGroup.Group[0]
                 $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
-                $existing.AffectedSystems += [PSCustomObject]@{
-                    HostName = $hostItem.'Host Name'
-                    IP = $hostItem.'IP'
-                    Username = $hostItem.'Username'
-                    VulnCount = $hostVulnCount
-                }
+                Add-AffectedSystemToTop10Item -Item $existing `
+                    -HostName $hostItem.'Host Name' -IP $hostItem.IP -Username $hostItem.Username -VulnCount $hostVulnCount
             }
         } else {
             # Create new entry
@@ -1249,22 +1311,7 @@ function Get-Top10Vulnerabilities {
             $avgCVSS = Get-AverageCVSS -Critical $critical -High $high -Medium $medium -Low $low
             $riskScore = Get-CompositeRiskScore -Critical $critical -High $high -Medium $medium -Low $low -EPSSScore $epssScore -ProductName $consolidatedProduct -VulnCount $vulnCount
 
-            # Create affected systems array with hostname, IP, username, and vulnerability count
-            # Group by Host+IP composite so we capture ALL unique systems (hostname or IP fallback)
-            $affectedSystems = @()
-            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
-            foreach ($hostGroup in $hostKeyGroups) {
-                $hostItem = $hostGroup.Group[0]
-                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
-                $affectedSystems += [PSCustomObject]@{
-                    HostName = $hostItem.'Host Name'
-                    IP = $hostItem.'IP'
-                    Username = $hostItem.'Username'
-                    VulnCount = $hostVulnCount
-                }
-            }
-
-            $aggregated += [PSCustomObject]@{
+            $newEntry = [PSCustomObject]@{
                 Source = $sourceVal
                 Product = $consolidatedProduct
                 Critical = $critical
@@ -1275,10 +1322,18 @@ function Get-Top10Vulnerabilities {
                 EPSSScore = $epssScore
                 AvgCVSS = $avgCVSS
                 RiskScore = $riskScore
-                AffectedSystems = $affectedSystems
+                AffectedSystems = @()
                 Fix = $fixVal
                 CveIds = $cveIds
             }
+            $hostKeyGroups = $group.Group | Group-Object -Property { "$($_.'Host Name')`t$($_.IP)" }
+            foreach ($hostGroup in $hostKeyGroups) {
+                $hostItem = $hostGroup.Group[0]
+                $hostVulnCount = ($hostGroup.Group | Measure-Object -Property 'Vulnerability Count' -Sum).Sum
+                Add-AffectedSystemToTop10Item -Item $newEntry `
+                    -HostName $hostItem.'Host Name' -IP $hostItem.IP -Username $hostItem.Username -VulnCount $hostVulnCount
+            }
+            $aggregated += $newEntry
         }
     }
 
@@ -1368,7 +1423,36 @@ function Get-Top10Vulnerabilities {
         }
     }
 
+    # Ensure at least MinHighSeverityCveInTopN critical/high CVE-only findings are included
+    $minCve = if ($null -ne $script:Config.MinHighSeverityCveInTopN) { $script:Config.MinHighSeverityCveInTopN } else { 2 }
+    if ($minCve -gt 0) {
+        $cveInTop = @($topVulns | Where-Object { Test-IsHighSeverityCveOnlyProduct -ProductName $_.Product -Critical $_.Critical -High $_.High })
+        if ($cveInTop.Count -lt $minCve) {
+            $cvePool = $filtered | Where-Object { Test-IsHighSeverityCveOnlyProduct -ProductName $_.Product -Critical $_.Critical -High $_.High } | Sort-Object -Property RiskScore -Descending
+            $topVulnKeys = $topVulns | ForEach-Object { "$($_.Source)|$($_.Product)" }
+            $needed = $minCve - $cveInTop.Count
+            $added = 0
+            foreach ($cve in $cvePool) {
+                if ($added -ge $needed) { break }
+                $key = "$($cve.Source)|$($cve.Product)"
+                if ($key -notin $topVulnKeys) {
+                    $topVulns += $cve
+                    $topVulnKeys += $key
+                    $added++
+                }
+            }
+            if ($added -gt 0) {
+                $topVulns = $topVulns | Sort-Object -Property RiskScore -Descending
+                Write-Log "Added $added critical/high CVE-only finding(s) to meet minimum of $minCve (total now $($topVulns.Count))" -Level Info
+            }
+        }
+    }
+
     Write-Log "Identified $($topVulns.Count) vulnerabilities ($countMsg)" -Level Success
+
+    foreach ($item in $topVulns) {
+        $item.AffectedSystems = if ($null -eq $item.AffectedSystems) { @() } else { @($item.AffectedSystems) }
+    }
 
     return $topVulns
 }
@@ -1415,8 +1499,8 @@ function Get-RemediationGuidance {
 
     # Fallback if no rules exist
     if ($OutputType -eq 'Word') {
-        return "This application should be updated to the latest version. If available via ConnectWise Automate/RMM or scripting, deploy updates using the patch management system or scripts. Otherwise, manual updates may be required on affected systems."
+        return "This application should be updated to the latest version. If the client has RMM or scripting available, deploy updates using patch management or scripts. Otherwise, manual updates may be required on affected systems."
     } else {
-        return "- Update to latest version`r`n  - Deploy via ConnectWise Automate/RMM or scripting if available`r`n  - Otherwise, manual updates required on affected systems"
+        return "- Update to latest version`r`n  - Deploy via RMM or scripting if available for the client`r`n  - Otherwise, manual updates required on affected systems"
     }
 }

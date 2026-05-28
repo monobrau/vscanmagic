@@ -1,0 +1,71 @@
+@rendermode InteractiveServer
+@using VScanMagic.Web.Services
+@inject AppRestartService RestartSvc
+@inject IJSRuntime Js
+
+@if (_restartAllowed)
+{
+<div class="nav-restart">
+    @if (_confirmRestart)
+    {
+        <div class="nav-restart-confirm">
+            <span>Restart VScanMagic?</span>
+            <div class="nav-restart-actions">
+                <button type="button" class="btn btn-sm btn-warning" disabled="@_restarting" @onclick="RestartAppAsync">
+                    @(_restarting ? "Restarting…" : "Yes")
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-light" disabled="@_restarting" @onclick="CancelRestart">
+                    Cancel
+                </button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="nav-restart-error">@_error</div>
+        }
+    }
+    else
+    {
+        <button type="button" class="nav-restart-button" @onclick="BeginRestart">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+            <span>Restart application</span>
+        </button>
+    }
+</div>
+}
+
+@code {
+    private readonly bool _restartAllowed = AppRestartService.IsRestartPermitted();
+    private bool _confirmRestart;
+    private bool _restarting;
+    private string? _error;
+
+    private void BeginRestart()
+    {
+        _error = null;
+        _confirmRestart = true;
+    }
+
+    private void CancelRestart()
+    {
+        _confirmRestart = false;
+        _error = null;
+    }
+
+    private async Task RestartAppAsync()
+    {
+        _error = null;
+        _restarting = true;
+
+        try
+        {
+            await RestartSvc.ScheduleRestartAsync();
+            await Js.InvokeVoidAsync("eval", "setTimeout(() => { location.reload(); }, 5000)");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _restarting = false;
+        }
+    }
+}

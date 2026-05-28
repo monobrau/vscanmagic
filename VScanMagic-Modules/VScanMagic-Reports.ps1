@@ -646,9 +646,10 @@ function New-WordReport {
             $selection.ParagraphFormat.LeftIndent = 36
             $uniqueSystems = $item.AffectedSystems | Select-Object HostName, IP, Username, LastPingTime -Unique
             $systemsList = ($uniqueSystems | ForEach-Object {
-                $systemLine = if ($_.HostName) { $_.HostName } else { $_.IP }
+                $systemLine = Get-AffectedSystemIdentifier -System $_
+                if ([string]::IsNullOrWhiteSpace($systemLine)) { return $null }
                 if (-not [string]::IsNullOrWhiteSpace($_.Username)) { $systemLine += " ($($_.Username))" }
-                if (-not [string]::IsNullOrWhiteSpace($_.IP)) { $systemLine += " - $($_.IP)" }
+                if (-not [string]::IsNullOrWhiteSpace($_.IP) -and $systemLine -ne $_.IP.Trim()) { $systemLine += " - $($_.IP)" }
                 if (-not [string]::IsNullOrWhiteSpace($_.LastPingTime)) { $systemLine += " (last seen $($_.LastPingTime))" }
                 $systemLine
             } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ", "
@@ -715,10 +716,9 @@ function New-WordReport {
         $pathToSave = $OutputPath
         $wordSaveTempPath = $null
         if ($OutputPath.Length -gt 255 -or $OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($OutputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_Word_Report.docx" }
-            $wordSaveTempPath = Join-Path $tempDir ("VScanMagic_Word_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $wordSaveTempPath = New-VScanMagicTempFile -Prefix 'WordSave' -BaseName $baseName -Subfolder 'word'
             $pathToSave = [System.IO.Path]::GetFullPath($wordSaveTempPath)
             Write-Log "Saving to temp first (path length or cloud sync workaround): $pathToSave" -Level Info
         }
@@ -766,6 +766,29 @@ function New-WordReport {
     }
 }
 
+# Auto-resize downloaded XLSX reports: process smaller workbooks first, All Vulnerabilities last (largest / OneDrive-sensitive).
+function Invoke-AutoResizeDownloadedXlsx {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [array]$Succeeded,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$OutputPathResolver
+    )
+    if (-not $Succeeded) { return }
+    $ordered = @(
+        $Succeeded |
+            Where-Object { $_.Ext -eq 'xlsx' } |
+            Sort-Object { if ($_.Type -eq 'all-vulnerabilities') { 1 } else { 0 } }
+    )
+    foreach ($r in $ordered) {
+        $p = & $OutputPathResolver $r
+        if (Test-Path -LiteralPath $p) {
+            Invoke-AutoResizeExcelColumns -ExcelPath $p
+        }
+    }
+}
+
 # Auto-resize columns on Excel workbook. Excludes Company and Proposed Remediations (all) sheets.
 function Invoke-AutoResizeExcelColumns {
     param([string]$ExcelPath)
@@ -777,17 +800,15 @@ function Invoke-AutoResizeExcelColumns {
     try {
         # Workaround: copy to temp when path is in OneDrive/sync folder (Excel COM can fail to open)
         if ($ExcelPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($ExcelPath)
-            $tempCopyPath = Join-Path $tempDir ("VScanMagic_Resize_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempCopyPath = New-VScanMagicTempFile -Prefix 'Resize' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $ExcelPath -Destination $tempCopyPath -Force
             $pathToOpen = [System.IO.Path]::GetFullPath($tempCopyPath)
+            Start-Sleep -Milliseconds 450
         }
-        $excel = New-Object -ComObject Excel.Application
-        $excel.Visible = $false
-        $excel.DisplayAlerts = $false
-        $excel.ScreenUpdating = $false
-        $workbook = $excel.Workbooks.Open($pathToOpen)
+        $opened = Open-ExcelWorkbookWithRetry -Path $pathToOpen -ReadOnly $false -MaxAttempts 5
+        $excel = $opened.ExcelApp
+        $workbook = $opened.Workbook
         $excludeSheets = @('Company', 'Proposed Remediations (all)')
         foreach ($ws in $workbook.Worksheets) {
             $name = [string]$ws.Name
@@ -814,6 +835,7 @@ function Invoke-AutoResizeExcelColumns {
         if ($tempCopyPath -and (Test-Path -LiteralPath $tempCopyPath)) { Remove-Item -LiteralPath $tempCopyPath -Force -ErrorAction SilentlyContinue }
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 350
     }
 }
 
@@ -879,10 +901,9 @@ function New-ExcelReport {
         $tempPath = $null  # Used by OneDrive workaround (input) and finally cleanup
         $saveTempPath = $null  # Used by OneDrive workaround (output save) and finally cleanup
         if ($InputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($InputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-            $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $tempPath = New-VScanMagicTempFile -Prefix 'ExcelWrite' -BaseName $baseName -Subfolder 'excel'
             Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
             $pathToOpen = $tempPath
             Write-Log "Copied to temp (OneDrive workaround): $tempPath" -Level Info
@@ -903,10 +924,9 @@ function New-ExcelReport {
             $workbook = $excel.Workbooks.Open($pathToOpen)
         } catch {
             if (-not $tempPath) {
-                $tempDir = [System.IO.Path]::GetTempPath()
                 $baseName = [System.IO.Path]::GetFileName($InputPath)
                 if ([string]::IsNullOrEmpty($baseName)) { $baseName = "vuln_report.xlsx" }
-                $tempPath = Join-Path $tempDir ("VScanMagic_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+                $tempPath = New-VScanMagicTempFile -Prefix 'ExcelWrite' -BaseName $baseName -Subfolder 'excel'
                 Copy-Item -LiteralPath $InputPath -Destination $tempPath -Force
                 $pathToOpen = [System.IO.Path]::GetFullPath($tempPath)
                 Write-Log "Open failed, retrying from temp copy: $($_.Exception.Message)" -Level Warning
@@ -1430,10 +1450,9 @@ function New-ExcelReport {
         # Save to temp first, then copy to final destination.
         $pathToSave = $OutputPath
         if ($OutputPath -match 'OneDrive|iCloud|Dropbox|Google Drive|Box\.com') {
-            $tempDir = [System.IO.Path]::GetTempPath()
             $baseName = [System.IO.Path]::GetFileName($OutputPath)
             if ([string]::IsNullOrEmpty($baseName)) { $baseName = "VScanMagic_report.xlsx" }
-            $saveTempPath = Join-Path $tempDir ("VScanMagic_Save_" + [Guid]::NewGuid().ToString("N") + "_" + $baseName)
+            $saveTempPath = New-VScanMagicTempFile -Prefix 'ExcelSave' -BaseName $baseName -Subfolder 'excel'
             $pathToSave = [System.IO.Path]::GetFullPath($saveTempPath)
             Write-Log "Saving to temp first (OneDrive workaround): $pathToSave" -Level Info
         }
@@ -1558,23 +1577,87 @@ function Open-EmailDraftInOutlook {
     }
 }
 
+function Expand-EmailTemplateInlineBullets {
+    <# Older Format-EmailTemplateSpacing joined list lines onto one row; restore one bullet per line. #>
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
+    $bulletClass = '[\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·]'
+    # Intro ending with colon then first inline bullet -> newline before bullet
+    $Text = [regex]::Replace($Text, ":(\s*)($bulletClass)\s*", ":$1`r`n`$2 ")
+    # Additional inline bullets mid-line -> newline before each bullet
+    $Text = [regex]::Replace($Text, "(\S)\s+($bulletClass)\s*", "`$1`r`n`$2 ")
+    return $Text
+}
+
+function Normalize-EmailTemplateListLine {
+    param([string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $Line }
+    $trimmed = $Line.Trim()
+    if ($trimmed -match '^([\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·])\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    if ($trimmed -match '^([-*–—])\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    if ($trimmed -match '^(\d+\.)\s*(.+)$') {
+        return "$($matches[1]) $($matches[2].Trim())"
+    }
+    return $trimmed
+}
+
+function Format-EmailTemplateParagraphPreserveLists {
+    <# Within one double-newline paragraph: join prose lines with spaces; keep bullet / numbered lines on their own row. #>
+    param([string]$Paragraph)
+    if ([string]::IsNullOrWhiteSpace($Paragraph)) { return '' }
+    $lines = @($Paragraph -split "`r?`n")
+    [System.Collections.ArrayList]$outLines = @()
+    [System.Collections.ArrayList]$proseBuf = @()
+    foreach ($raw in $lines) {
+        $line = $raw.TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            if ($proseBuf.Count -gt 0) {
+                $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+                [void]$outLines.Add([string]$joined.Trim())
+                $proseBuf.Clear()
+            }
+            continue
+        }
+        $trimmed = $line.Trim()
+        $isListLine = ($trimmed -match '^[\u2022\u2023\u00B7\u2043\u25AA\u25E6\u2219\u25CF•·]\s*') -or
+            ($trimmed -match '^[-*–—]\s+') -or ($trimmed -match '^\d+\.\s')
+        if ($isListLine) {
+            if ($proseBuf.Count -gt 0) {
+                $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+                [void]$outLines.Add([string]$joined.Trim())
+                $proseBuf.Clear()
+            }
+            [void]$outLines.Add((Normalize-EmailTemplateListLine $trimmed))
+        } else {
+            [void]$proseBuf.Add($trimmed)
+        }
+    }
+    if ($proseBuf.Count -gt 0) {
+        $joined = ($proseBuf.ToArray() -join ' ') -replace '[ \t]+', ' '
+        [void]$outLines.Add([string]$joined.Trim())
+    }
+    return ($outLines -join "`r`n")
+}
+
 function Format-EmailTemplateSpacing {
-    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks; preserve paragraph breaks (double newline). #>
+    <# Collapse multiple spaces to single; collapse mid-paragraph line breaks in prose; preserve list lines (bullets, numbered); preserve paragraph breaks (double newline). #>
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
     $paragraphs = $Text -split "`r?`n`r?`n"
-    $result = ($paragraphs | ForEach-Object {
-        $para = ($_ -split "`r?`n") -join " "
-        $para = $para -replace '[ \t]+', ' '
-        $para.Trim()
-    }) -join "`r`n`r`n"
-    return $result.Trim()
+    $result = @($paragraphs | ForEach-Object {
+        (Format-EmailTemplateParagraphPreserveLists $_).Trim()
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    return ($result -join "`r`n`r`n").Trim()
 }
 
 function New-EmailTemplate {
     param(
         [string]$OutputPath,
-        [bool]$IsRMITPlus = $false,
+        [object]$IsRMITPlus = $false,
         [switch]$PassThru,
         [string]$FilterTopN = $null
     )
@@ -1584,6 +1667,8 @@ function New-EmailTemplate {
 
         if ($null -eq $script:Templates) { Load-Templates }
 
+        $IsRMITPlus = ConvertTo-StrictBool $IsRMITPlus -IfNullOrUnknown:$false
+
         $year = (Get-Date).Year
         $quarter = Get-CurrentQuarter
         $greeting = Get-TimeOfDayGreeting
@@ -1592,15 +1677,21 @@ function New-EmailTemplate {
         if ($IsRMITPlus) {
             $noteText = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
         } else {
-            $noteText = "Note: We will not generate remediation tickets without your approval. To schedule a discussion of these findings, please use the scheduling link above."
+            $noteText = "Note: No remediation will begin without your approval. To schedule a discussion, please use the scheduling link above."
         }
+
+        $bakedInRmitNote = "Note: Remediation tickets have been generated for items covered under your RMIT+ agreement. Third-party items not covered under the agreement will not be remediated unless we discuss them and a quote has been generated. To schedule a discussion, please use the scheduling link above."
 
         $topNLabel = if ([string]::IsNullOrWhiteSpace($FilterTopN)) { $script:FilterTopN } else { $FilterTopN }
         if ([string]::IsNullOrWhiteSpace($topNLabel)) { $topNLabel = "10" }
         $topNLabel = if ($topNLabel -eq "All") { "Top" } elseif ($topNLabel -eq "10") { "Top Ten" } elseif (-not [string]::IsNullOrWhiteSpace($topNLabel)) { "Top $topNLabel" } else { "Top Ten" }
-        $bodyTemplate = $script:Templates.EmailTemplate.Body
+        $bodyTemplate = if ($IsRMITPlus) { $script:Templates.EmailTemplateRmitPlus.Body } else { $script:Templates.EmailTemplate.Body }
         $emailContent = $bodyTemplate -replace '\{Year\}', $year -replace '\{Quarter\}', $quarter -replace '\{Greeting\}', $greeting -replace '\{NoteText\}', $noteText -replace '\{PreparedBy\}', $script:UserSettings.PreparedBy -replace '\{TopNLabel\}', $topNLabel
+        $emailContent = Expand-EmailTemplateInlineBullets -Text $emailContent
         $emailContent = Format-EmailTemplateSpacing -Text $emailContent
+        if (-not $IsRMITPlus -and $emailContent.Contains($bakedInRmitNote)) {
+            $emailContent = $emailContent.Replace($bakedInRmitNote, $noteText)
+        }
 
         if ($OutputPath) {
             $emailContent | Out-File -FilePath $OutputPath -Encoding UTF8

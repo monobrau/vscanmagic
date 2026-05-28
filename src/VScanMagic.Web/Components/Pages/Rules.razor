@@ -1,0 +1,157 @@
+@page "/rules"
+@rendermode InteractiveServer
+@using VScanMagic.Core.Models
+@inject RemediationRuleService RuleService
+
+<PageTitle>Remediation Rules</PageTitle>
+
+<h1>Remediation Rules</h1>
+<p class="text-muted">Pattern-based remediation guidance for Word reports and ticket-format exports. Changes save to your config directory.</p>
+
+@if (!string.IsNullOrEmpty(_message))
+{
+    <div class="alert alert-success">@_message</div>
+}
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<div class="mb-3">
+    <button class="btn btn-outline-primary btn-sm me-2" @onclick="AddRule">Add rule</button>
+    <button class="btn btn-outline-secondary btn-sm me-2" @onclick="Reload">Reload</button>
+    <button class="btn btn-primary btn-sm" @onclick="Save">Save rules</button>
+</div>
+
+<div class="accordion" id="rulesAccordion">
+    @for (var i = 0; i < _rules.Count; i++)
+    {
+        var index = i;
+        var rule = _rules[index];
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button @(!IsExpanded(index) ? "collapsed" : "")" type="button" @onclick="() => ToggleRule(index)">
+                    <code class="me-2">@rule.Pattern</code>
+                    @if (rule.IsDefault) { <span class="badge bg-secondary ms-2">Default</span> }
+                    @if (rule.GuidanceStyle != RemediationGuidanceStyle.Standard)
+                    {
+                        <span class="badge bg-info text-dark ms-2">@rule.GuidanceStyle</span>
+                    }
+                </button>
+            </h2>
+            <div class="accordion-collapse collapse @(IsExpanded(index) ? "show" : "")">
+                <div class="accordion-body">
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Pattern</label>
+                            <input class="form-control form-control-sm" @bind="_rules[index].Pattern" />
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check mt-4">
+                                <input class="form-check-input" type="checkbox" @bind="_rules[index].IsDefault" id="@($"def-{index}")" />
+                                <label class="form-check-label" for="@($"def-{index}")">Default rule (* fallback)</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Guidance style</label>
+                            <select class="form-select form-select-sm" @bind="_rules[index].GuidanceStyle">
+                                @foreach (var style in Enum.GetValues<RemediationGuidanceStyle>())
+                                {
+                                    <option value="@style">@style</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-4 text-md-end">
+                            <button class="btn btn-outline-danger btn-sm mt-4" @onclick="() => RemoveRule(index)">Remove</button>
+                        </div>
+                    </div>
+                    <p class="small text-muted mb-2">
+                        <strong>AutoUpdate</strong> uses rule text in review/Word even when ConnectSecure supplies a version fix; target version stays in ConnectSecure Solution on tickets.
+                    </p>
+                    <div class="mb-2">
+                        <label class="form-label">Word text (DOCX / client reports)</label>
+                        <textarea class="form-control form-control-sm" rows="4" @bind="_rules[index].WordText"></textarea>
+                    </div>
+                    <div>
+                        <label class="form-label">Ticket text (bulleted ticket instructions / time estimate)</label>
+                        <textarea class="form-control form-control-sm" rows="4" @bind="_rules[index].TicketText"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<RemediationRule> _rules = [];
+    private HashSet<int> _expandedIndices = [0];
+    private string? _message;
+    private string? _error;
+
+    protected override void OnInitialized() => Reload();
+
+    private bool IsExpanded(int index) => _expandedIndices.Contains(index);
+
+    private void ToggleRule(int index)
+    {
+        if (!_expandedIndices.Remove(index))
+            _expandedIndices.Add(index);
+    }
+
+    private void Reload()
+    {
+        _rules = RuleService.LoadRules().Select(r => new RemediationRule
+        {
+            Pattern = r.Pattern,
+            WordText = r.WordText,
+            TicketText = r.TicketText,
+            IsDefault = r.IsDefault,
+            GuidanceStyle = r.GuidanceStyle
+        }).ToList();
+        _expandedIndices = _rules.Count > 0 ? [0] : [];
+        _message = null;
+        _error = null;
+    }
+
+    private void AddRule()
+    {
+        _rules.Insert(0, new RemediationRule
+        {
+            Pattern = "*Product Name*",
+            WordText = "",
+            TicketText = "- ",
+            IsDefault = false
+        });
+        _expandedIndices = _expandedIndices.Select(i => i + 1).ToHashSet();
+        _expandedIndices.Add(0);
+    }
+
+    private void RemoveRule(int index)
+    {
+        if (index < 0 || index >= _rules.Count)
+            return;
+
+        _rules.RemoveAt(index);
+        _expandedIndices = _expandedIndices
+            .Where(i => i != index)
+            .Select(i => i > index ? i - 1 : i)
+            .ToHashSet();
+    }
+
+    private void Save()
+    {
+        _message = null;
+        _error = null;
+        try
+        {
+            RuleService.SaveRules(_rules);
+            _message = "Remediation rules saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+}

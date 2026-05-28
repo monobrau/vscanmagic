@@ -17,14 +17,29 @@ $script:GeneralRecommendationsFileName = "vscanmagic-general-recommendations.jso
 .SYNOPSIS
     Gets the memberberry config.json path by checking common locations
 .DESCRIPTION
-    Searches for memberberry's config.json in common installation locations:
-    - c:\git\memberberry
-    - $env:USERPROFILE\Documents\memberberry
-    - Current directory (if running from memberberry folder)
+    Searches for memberberry's config.json in this order:
+    - $env:MEMBERBERRY_CONFIG — full path to config.json
+    - $env:MEMBERBERRY_HOME\config.json
+    - c:\git\memberberry\config.json
+    - $env:USERPROFILE\Documents\memberberry\config.json
+    - Relative to module (memberberry repo next to vscanmagic)
 #>
 function Get-MemberberryConfigPath {
     if ($script:MemberberryConfigPath) {
         return $script:MemberberryConfigPath
+    }
+
+    # Explicit override (portable installs / CI)
+    if ($env:MEMBERBERRY_CONFIG -and (Test-Path -LiteralPath $env:MEMBERBERRY_CONFIG)) {
+        $script:MemberberryConfigPath = $env:MEMBERBERRY_CONFIG
+        return $script:MemberberryConfigPath
+    }
+    if ($env:MEMBERBERRY_HOME) {
+        $p = Join-Path $env:MEMBERBERRY_HOME.TrimEnd('\', '/') 'config.json'
+        if (Test-Path -LiteralPath $p) {
+            $script:MemberberryConfigPath = $p
+            return $script:MemberberryConfigPath
+        }
     }
     
     $possiblePaths = @(

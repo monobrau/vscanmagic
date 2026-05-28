@@ -8,7 +8,7 @@
 .PARAMETER ExcelPath
     Path to All Vulnerabilities XLSX (from ConnectSecure download or VScanMagic). Use this OR ConnectSecure params.
 .PARAMETER OutputPath
-    Path for the output CSV. Default: .\VulnerabilitiesExport_<timestamp>.csv
+    Path for the output CSV. Default: %TEMP%\VScanMagic\exports\VulnerabilitiesExport_<timestamp>.csv
 .PARAMETER UniqueProductsOnly
     Output one row per unique Product/Application (aggregated). Ideal for building a remediation steps database.
 .PARAMETER CompanyId
@@ -34,7 +34,7 @@
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -OutputPath ".\applications-baseline.csv"
 .EXAMPLE
-    .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Accurate Metal" -UseSavedCredentials -UniqueProductsOnly
+    .\Export-VulnerabilitiesToCsv.ps1 -CompanyId 123 -ClientName "Example Client" -UseSavedCredentials -UniqueProductsOnly
 .EXAMPLE
     .\Export-VulnerabilitiesToCsv.ps1 -ExcelPath ".\All Vulnerabilities.xlsx" -UniqueProductsOnly -SeedRemediation -NvdApiKey $env:NVD_API_KEY -OutputPath ".\baseline.csv"
 #>
@@ -133,7 +133,7 @@ if ($CompanyId -gt 0) {
         exit 1
     }
 
-    $tempExcelPath = Join-Path $env:TEMP ("VScanMagic_Export_$([Guid]::NewGuid().ToString('N'))_AllVulnerabilities.xlsx")
+    $tempExcelPath = New-VScanMagicTempFile -Prefix 'Export' -BaseName 'AllVulnerabilities.xlsx' -Subfolder 'excel'
     Write-Host "Downloading All Vulnerabilities for Company $CompanyId ($ClientName)..." -ForegroundColor Cyan
     try {
         New-AllVulnerabilitiesReportFromConnectSecure -OutputPath $tempExcelPath -CompanyId $CompanyId -ClientName $ClientName
@@ -257,7 +257,8 @@ if ($UniqueProductsOnly) {
 # Output path
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
-    $OutputPath = Join-Path $script:ScriptDirectory "VulnerabilitiesExport_$timestamp.csv"
+    $exportDir = Get-VScanMagicTempDirectory -Subfolder 'exports'
+    $OutputPath = Join-Path $exportDir "VulnerabilitiesExport_$timestamp.csv"
 }
 
 # Export to CSV

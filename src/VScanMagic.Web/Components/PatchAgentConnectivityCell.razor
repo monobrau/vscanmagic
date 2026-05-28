@@ -1,0 +1,16 @@
+@using VScanMagic.ConnectSecure
+
+@if (Detail.OnlineStatus)
+{
+    <span class="badge text-bg-success">Online</span>
+}
+else
+{
+    <span class="badge text-bg-warning text-dark">Offline</span>
+}
+<span class="text-muted small d-block">@AgentConnectivityHelper.FormatLastPingSummary(Detail.LastPingTime)</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public PatchAssetDetail Detail { get; set; } = null!;
+}
