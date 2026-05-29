@@ -71,6 +71,16 @@ public sealed class ReportFolderHistoryService(SettingsService settingsService)
             JsonOptions));
     }
 
+    public string? GetLatestOutputPath(string companyName)
+    {
+        if (string.IsNullOrWhiteSpace(companyName))
+            return null;
+
+        return GetEntries()
+            .FirstOrDefault(e => string.Equals(e.CompanyName, companyName.Trim(), StringComparison.OrdinalIgnoreCase))
+            ?.OutputPath;
+    }
+
     private sealed class ReportFolderHistoryDocument
     {
         public List<ReportFolderHistoryEntry> Entries { get; set; } = [];

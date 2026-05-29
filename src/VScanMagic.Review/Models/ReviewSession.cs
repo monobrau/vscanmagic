@@ -79,6 +79,8 @@ public sealed class ReviewSession
     public string? CompanyId { get; set; }
     public string Presenter { get; set; } = "";
     public bool IsRmitPlus { get; set; }
+    /// <summary>Quarter folder where ConnectSecure downloads and Top N Word report are stored.</summary>
+    public string OutputDirectory { get; set; } = "";
     public string? SourceFilePath { get; set; }
     public int ExportTopN { get; set; } = 10;
     /// <summary>SharePoint/OneDrive link to the Top N report for this quarterly deliverable.</summary>

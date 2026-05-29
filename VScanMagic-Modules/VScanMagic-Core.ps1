@@ -711,24 +711,7 @@ function Resolve-QuarterFolderName {
         [string]$ClientPath,
         [string]$ScanDate
     )
-    $yearQuarter = Get-QuarterFromDate -ScanDate $ScanDate
-    $dateStr = $null
-    try {
-        $d = [DateTime]::Parse($ScanDate)
-        $dateStr = $d.ToString("yyyy-MM-dd")
-    } catch {
-        $dateStr = (Get-Date).ToString("yyyy-MM-dd")
-    }
-    $candidates = @(
-        $yearQuarter,
-        "$yearQuarter $dateStr",
-        "$yearQuarter ${dateStr}_$(Get-Date -Format 'HHmmss')"
-    )
-    foreach ($name in $candidates) {
-        $outPath = Join-Path $ClientPath $name
-        if (-not (Test-Path $outPath)) { return $name }
-    }
-    return "$yearQuarter ${dateStr}_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    return Get-QuarterFromDate -ScanDate $ScanDate
 }
 
 function Resolve-ClientOutputPath {
@@ -1375,15 +1358,15 @@ Complete report package:
 <onedrive link to folder containing reports>
 
 The folder contains the following reports:
-• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
-• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
-• Executive Summary Report – A high-level overview of your security posture and network information.
-• External Scan – Detected vulnerabilities and services exposed to the internet.
-• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+• Pending Remediation EPSS Score Report – classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
+
+• All Vulnerabilities Report – a comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
+• Executive Summary Report – a high-level overview of your security posture and network information.
+• External Scan – detected vulnerabilities and services exposed to the internet.
+• Suppressed Vulnerabilities Report – vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
 
 Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
 
-Schedule time with me
 <scheduling link>
 
 {NoteText}
@@ -1411,15 +1394,15 @@ Complete report package:
 <onedrive link to folder containing reports>
 
 The folder contains the following reports:
-• Pending Remediation EPSS Score Report – Classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
-• All Vulnerabilities Report – A comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
-• Executive Summary Report – A high-level overview of your security posture and network information.
-• External Scan – Detected vulnerabilities and services exposed to the internet.
-• Suppressed Vulnerabilities Report – Vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
+• Pending Remediation EPSS Score Report – classifies vulnerabilities by Exploit Prediction Scoring System (EPSS), which measures the likelihood of exploitation within 30 days (scale 0–1.0, with 1.0 being most critical).
+
+• All Vulnerabilities Report – a comprehensive list of all detected vulnerabilities (internal and external), from critical to low severity.
+• Executive Summary Report – a high-level overview of your security posture and network information.
+• External Scan – detected vulnerabilities and services exposed to the internet.
+• Suppressed Vulnerabilities Report – vulnerabilities that have been suppressed (e.g., false positives or accepted risk) and will not appear on future remediation lists.
 
 Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
 
-Schedule time with me
 <scheduling link>
 
 {NoteText}

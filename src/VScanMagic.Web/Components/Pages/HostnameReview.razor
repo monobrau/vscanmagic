@@ -4,7 +4,7 @@
 @using VScanMagic.Core.Paths
 @using VScanMagic.Core.Services
 @using VScanMagic.Data
-@using VScanMagic.Reports
+@using VScanMagic.Review.Models
 @inject VulnerabilityPipeline Pipeline
 @inject IReviewSessionRepository SessionRepo
 @inject HostVulnerabilityReportExporter HostExporter
@@ -181,6 +181,7 @@
     private string? _clientName;
     private string? _exportPathHint;
     private int _companyId;
+    private ReviewSession? _linkedSession;
     private UserSettings _userSettings = new();
 
     private int _highCountHosts => _hosts.Count(h => h.TotalVulnCount >= _highCountThreshold);
@@ -245,6 +246,7 @@
         var session = await SessionRepo.GetAsync(SessionId);
         if (!string.IsNullOrWhiteSpace(session?.SourceFilePath) && File.Exists(session.SourceFilePath))
         {
+            _linkedSession = session;
             _sourcePath = session.SourceFilePath;
             _loadedFrom = $"review session {session.ClientName}";
             _clientName = session.ClientName;
@@ -260,11 +262,16 @@
         if (string.IsNullOrWhiteSpace(clientName))
             clientName = Path.GetFileNameWithoutExtension(_sourcePath) ?? "Client";
 
-        var layout = PathResolver.Resolve(
+        var scanDate = _linkedSession?.ScanDate ?? DateTime.Today.ToString("yyyy-MM-dd");
+        var layout = SessionOutputLayoutResolver.ResolveForSession(
+            PathResolver,
             _userSettings,
-            _companyId,
             clientName,
-            DateTime.Today.ToString("yyyy-MM-dd"),
+            scanDate,
+            _companyId,
+            _linkedSession?.OutputDirectory,
+            _sourcePath,
+            FolderHistory,
             _exportDir);
 
         if (layout.UsesStructuredPaths)
@@ -388,11 +395,16 @@
             if (string.IsNullOrWhiteSpace(clientName))
                 clientName = Path.GetFileNameWithoutExtension(_sourcePath) ?? "Client";
 
-            var layout = PathResolver.Resolve(
+            var scanDate = _linkedSession?.ScanDate ?? DateTime.Today.ToString("yyyy-MM-dd");
+            var layout = SessionOutputLayoutResolver.ResolveForSession(
+                PathResolver,
                 _userSettings,
-                _companyId,
                 clientName,
-                DateTime.Today.ToString("yyyy-MM-dd"),
+                scanDate,
+                _companyId,
+                _linkedSession?.OutputDirectory,
+                _sourcePath,
+                FolderHistory,
                 _exportDir);
             _exportDir = layout.OutputDirectory;
 
@@ -404,7 +416,14 @@
 
             var stamp = ReportPathResolver.GetReportTimestamp();
             var result = await Task.Run(() =>
-                HostExporter.Export(request, layout.OutputDirectory, clientName, stamp, _exportPdf, _exportXlsx, _exportCsv));
+                HostExporter.Export(
+                    request,
+                    ReportPathResolver.GetSupplementalExportDirectory(layout),
+                    clientName,
+                    stamp,
+                    _exportPdf,
+                    _exportXlsx,
+                    _exportCsv));
 
             FolderHistory.Add(clientName, layout.OutputDirectory);
             ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(_userSettings, layout.OutputDirectory);

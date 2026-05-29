@@ -269,10 +269,8 @@
         _presenter = userSettings.PreparedBy;
         if (!string.IsNullOrWhiteSpace(userSettings.ReportsBasePath))
             _outputDirectory = userSettings.ReportsBasePath.Trim();
-        else if (!string.IsNullOrWhiteSpace(userSettings.LastOutputDirectory))
-            _outputDirectory = userSettings.LastOutputDirectory;
         else
-            _outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Downloads");
+            _outputDirectory = ReportPathResolver.GetDefaultManualOutputDirectory(userSettings);
 
         ApplyAllVulnsFromQuery();
 
@@ -368,7 +366,7 @@
                 companyId,
                 clientName,
                 _scanDate.ToString("yyyy-MM-dd"),
-                fallbackPath: null);
+                fallbackPath: _outputDirectory);
             var outputDir = layout.OutputDirectory;
             _outputDirectory = outputDir;
 
@@ -376,8 +374,7 @@
             var result = await ReportService.DownloadStandardReportsAsync(
                 companyId,
                 clientName,
-                _scanDate.ToString("yyyy-MM-dd"),
-                outputDir,
+                layout,
                 reports,
                 new Progress<string>(m =>
                 {
@@ -479,6 +476,7 @@
                 _selectedCompanyId,
                 exportTopN,
                 _isRmitPlus);
+            session.OutputDirectory = ResolveSessionOutputDirectory(path) ?? "";
             HostOsThresholdApplier.Apply(session, settings);
             DeliverableLinksResolver.ApplyDefaultsToSession(session, settings);
             RmitPlusSettings.Set(clientName, _isRmitPlus);
@@ -517,4 +515,26 @@
     }
 
     private sealed record DownloadUiResult(string OutputDirectory, List<DownloadedReport> Succeeded, List<FailedReport> Failed);
+
+    private string? ResolveSessionOutputDirectory(string sourceFilePath)
+    {
+        if (_downloadResult is not null && !string.IsNullOrWhiteSpace(_downloadResult.OutputDirectory))
+            return Path.GetFullPath(_downloadResult.OutputDirectory.Trim());
+
+        var fromFile = SessionOutputLayoutResolver.InferQuarterDirectoryFromSourceFile(sourceFilePath);
+        if (!string.IsNullOrWhiteSpace(fromFile))
+            return fromFile;
+
+        if (string.IsNullOrWhiteSpace(SelectedCompanyName))
+            return null;
+
+        var companyId = int.TryParse(_selectedCompanyId, out var id) ? id : 0;
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            SelectedCompanyName.Trim(),
+            _scanDate.ToString("yyyy-MM-dd"),
+            _outputDirectory);
+        return layout.OutputDirectory;
+    }
 }

@@ -339,7 +339,7 @@
     {
         if (string.IsNullOrWhiteSpace(_swaggerToken))
             ShowSwaggerToken();
-        await Js.InvokeVoidAsync("navigator.clipboard.writeText", _swaggerToken);
+        await Js.InvokeAsync<bool>("vscanmagic.copyText", _swaggerToken);
         _message = "Client-Auth-Token copied. Paste it into Swagger POST /w/authorize.";
     }
 }

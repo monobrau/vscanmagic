@@ -102,7 +102,7 @@ else
     {
         _session = await SessionRepo.GetAsync(SessionId);
         _userSettings = Settings.LoadUserSettings();
-        _outputDir = _userSettings.LastOutputDirectory;
+        _outputDir = ReportPathResolver.GetDefaultManualOutputDirectory(_userSettings);
         if (string.IsNullOrWhiteSpace(_outputDir))
             _outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Exports");
 
@@ -117,31 +117,25 @@ else
         if (_session is null)
             return;
 
-        var companyId = int.TryParse(_session.CompanyId, out var id) ? id : 0;
-        var layout = PathResolver.Resolve(
-            _userSettings,
-            companyId,
-            _session.ClientName,
-            _session.ScanDate,
-            _outputDir);
-
-        if (layout.UsesStructuredPaths)
-        {
-            _outputDir = layout.OutputDirectory;
-            _pathHint = layout.ReportsPathPartial is not null
-                ? $"Resolved: ...\\{layout.ReportsPathPartial}. Client reports (DOCX, PDF, XLSX) export to this quarter folder."
-                : $"Resolved under Reports Base Path: {layout.OutputDirectory}.";
-        }
+        var layout = BuildLayout();
+        _outputDir = layout.OutputDirectory;
+        _pathHint = layout.ReportsPathPartial is not null
+            ? $"Resolved: ...\\{layout.ReportsPathPartial}. Quarter folder holds ConnectSecure downloads and the Top N Word report; PDF, data XLSX, host counts, and EPSS go in Misc."
+            : $"Resolved: {layout.OutputDirectory}. Quarter folder holds ConnectSecure downloads and Top N Word; supplemental exports go in Misc.";
     }
 
     private ReportOutputLayout BuildLayout()
     {
         var companyId = _session is not null && int.TryParse(_session.CompanyId, out var id) ? id : 0;
-        return PathResolver.Resolve(
+        return SessionOutputLayoutResolver.ResolveForSession(
+            PathResolver,
             _userSettings,
-            companyId,
             _session!.ClientName,
             _session.ScanDate,
+            companyId,
+            _session.OutputDirectory,
+            _session.SourceFilePath,
+            FolderHistory,
             _outputDir);
     }
 
@@ -163,6 +157,8 @@ else
             }
 
             _result = Exporter.ExportAll(_session, layout, options);
+            _session.OutputDirectory = layout.OutputDirectory;
+            await SessionRepo.SaveAsync(_session);
             FolderHistory.Add(_session.ClientName, layout.OutputDirectory);
 
             ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(_userSettings, layout.OutputDirectory);

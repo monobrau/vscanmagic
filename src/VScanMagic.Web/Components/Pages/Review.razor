@@ -281,10 +281,10 @@ else
     {
     <div class="row">
         <div class="col-md-4">
-            @if (_selectedFindingRanks.Count > 1)
+            @if (!_readOnly && _selectedFindingRanks.Count > 0)
             {
                 <div class="alert alert-light py-2 small mb-2">
-                    <strong>@_selectedFindingRanks.Count</strong> findings selected
+                    <strong>@_selectedFindingRanks.Count</strong> @(_selectedFindingRanks.Count == 1 ? "finding" : "findings") selected
                     <div class="btn-group btn-group-sm ms-2">
                         <button type="button" class="btn btn-outline-secondary" @onclick="() => BulkSetFindingExport(true)">Include in export</button>
                         <button type="button" class="btn btn-outline-secondary" @onclick="() => BulkSetFindingExport(false)">Exclude from export</button>
@@ -937,7 +937,14 @@ else
     private void SetFindingExport(bool include)
     {
         if (_selected is null || _session is null) return;
-        ReviewSessionRanker.SetExportIncluded(_session, _selected, include);
+
+        if (include &&
+            (VulnerabilitySourceHelper.IsManualCandidateSource(_selected.Source) ||
+             ReviewCandidatePool.IsApplicationReserve(_selected)))
+            ReviewSessionRanker.PromoteToExport(_session, _selected);
+        else
+            ReviewSessionRanker.SetExportIncluded(_session, _selected, include);
+
         ScheduleSave();
     }
 

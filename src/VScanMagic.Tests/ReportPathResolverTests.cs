@@ -57,10 +57,11 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-03-15", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.False(layout.UsesMiscSubfolder);
+        Assert.True(layout.UsesMiscSubfolder);
         Assert.EndsWith(Path.Combine("2026 - Q1"), layout.OutputDirectory);
-        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
+        Assert.EndsWith(Path.Combine("2026 - Q1", "Misc"), layout.TextOutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
+        Assert.True(Directory.Exists(layout.TextOutputDirectory));
     }
 
     [Fact]
@@ -80,17 +81,17 @@ public sealed class ReportPathResolverTests : IDisposable
     }
 
     [Fact]
-    public void ResolveQuarterFolderName_AddsDateWhenQuarterExists()
+    public void ResolveQuarterFolderName_AlwaysUsesYearQuarterFromScanDate()
     {
         var clientPath = Path.Combine(_root, "Client", "Network Documentation", "Vulnerability Scans");
         Directory.CreateDirectory(Path.Combine(clientPath, "2026 - Q1"));
 
-        var folder = ReportPathResolver.ResolveQuarterFolderName(clientPath, "2026-02-10");
-        Assert.Equal("2026 - Q1 2026-02-10", folder);
+        Assert.Equal("2026 - Q1", ReportPathResolver.ResolveQuarterFolderName(clientPath, "2026-02-10"));
+        Assert.Equal("2026 - Q1", ReportPathResolver.ResolveQuarterFolderName(clientPath, "2026-03-31"));
     }
 
     [Fact]
-    public void ResolveQuarterFolderName_AddsTimestampWhenQuarterAndDateExist()
+    public void ResolveQuarterFolderName_IgnoresLegacyDatedQuarterFolders()
     {
         var clientPath = Path.Combine(_root, "Client", "Network Documentation", "Vulnerability Scans");
         Directory.CreateDirectory(Path.Combine(clientPath, "2026 - Q2"));
@@ -98,12 +99,11 @@ public sealed class ReportPathResolverTests : IDisposable
 
         var folder = ReportPathResolver.ResolveQuarterFolderName(clientPath, "2026-05-25");
 
-        Assert.StartsWith("2026 - Q2 2026-05-25_", folder);
-        Assert.NotEqual("2026 - Q2 2026-05-25", folder);
+        Assert.Equal("2026 - Q2", folder);
     }
 
     [Fact]
-    public void Resolve_WithBasePath_UsesTimestampedQuarterWhenQuarterAndDateExist()
+    public void Resolve_WithBasePath_UsesBareQuarterWhenLegacyDatedFoldersExist()
     {
         var basePath = Path.Combine(_root, "ReportsBase");
         var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
@@ -114,7 +114,7 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 0, "Fabrikam Industries Inc", "2026-05-25", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.Contains("2026 - Q2 2026-05-25_", layout.OutputDirectory);
+        Assert.EndsWith(Path.Combine("2026 - Q2"), layout.OutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
     }
 
@@ -164,7 +164,7 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 0, "Unknown Client", "2026-01-01", fallback);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.False(layout.UsesMiscSubfolder);
+        Assert.True(layout.UsesMiscSubfolder);
         Assert.StartsWith(configuredBase, layout.OutputDirectory);
         Assert.EndsWith(Path.Combine("Unknown Client", "2026 - Q1"), layout.OutputDirectory);
         Assert.DoesNotContain("flat", layout.OutputDirectory);
@@ -227,9 +227,9 @@ public sealed class ReportPathResolverTests : IDisposable
         var layout = _resolver.Resolve(settings, 0, "Brand New Client LLC", "2026-05-23", _root);
 
         Assert.True(layout.UsesStructuredPaths);
-        Assert.False(layout.UsesMiscSubfolder);
+        Assert.True(layout.UsesMiscSubfolder);
         Assert.EndsWith(Path.Combine("Brand New Client LLC", "2026 - Q2"), layout.OutputDirectory);
-        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
+        Assert.EndsWith(Path.Combine("Brand New Client LLC", "2026 - Q2", "Misc"), layout.TextOutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
     }
 
@@ -289,6 +289,115 @@ public sealed class ReportPathResolverTests : IDisposable
         Assert.Contains("Vulnerability Scans", layout.OutputDirectory);
         Assert.EndsWith(Path.Combine("2026 - Q2"), layout.OutputDirectory);
         Assert.True(Directory.Exists(layout.OutputDirectory));
-        Assert.Equal(layout.OutputDirectory, layout.TextOutputDirectory);
+        Assert.EndsWith(Path.Combine("2026 - Q2", "Misc"), layout.TextOutputDirectory);
+    }
+
+    [Fact]
+    public void LayoutForExistingDirectory_ReusesMiscSubfolder()
+    {
+        var quarter = Path.Combine(_root, "Client", "2026 - Q2");
+        var misc = Path.Combine(quarter, "Misc");
+        Directory.CreateDirectory(misc);
+
+        var layout = ReportPathResolver.LayoutForExistingDirectory(quarter, "Client");
+
+        Assert.Equal(quarter, layout.OutputDirectory);
+        Assert.Equal(misc, layout.TextOutputDirectory);
+        Assert.True(layout.UsesMiscSubfolder);
+    }
+
+    [Fact]
+    public void GetDownloadDirectory_RoutesPendingEpssToMiscWhenStructured()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
+        Directory.CreateDirectory(clientFolder);
+
+        var settings = new UserSettings { ReportsBasePath = basePath };
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-03-15", _root);
+
+        Assert.Equal(layout.TextOutputDirectory, ReportPathResolver.GetDownloadDirectory(layout, "pending-epss"));
+        Assert.Equal(layout.OutputDirectory, ReportPathResolver.GetDownloadDirectory(layout, "all-vulnerabilities"));
+    }
+
+    [Fact]
+    public void GetDefaultManualOutputDirectory_UsesExportsWhenNoLastOutput()
+    {
+        var settings = new UserSettings();
+        var path = ReportPathResolver.GetDefaultManualOutputDirectory(settings);
+
+        Assert.EndsWith(Path.Combine("VScanMagic", "Exports"), path);
+    }
+
+    [Fact]
+    public void GetSupplementalExportDirectory_UsesMiscWhenStructured()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        var clientFolder = Path.Combine(basePath, "Fabrikam Industries", "Network Documentation", "Vulnerability Scans");
+        Directory.CreateDirectory(clientFolder);
+
+        var settings = new UserSettings { ReportsBasePath = basePath };
+        var layout = _resolver.Resolve(settings, 12345, "Fabrikam Industries Inc", "2026-03-15", _root);
+
+        Assert.Equal(layout.OutputDirectory, ReportPathResolver.GetTopNReportDirectory(layout));
+        Assert.Equal(layout.TextOutputDirectory, ReportPathResolver.GetSupplementalExportDirectory(layout));
+        Assert.EndsWith("Misc", ReportPathResolver.GetSupplementalExportDirectory(layout));
+    }
+
+    [Fact]
+    public void InferQuarterDirectoryFromSourceFile_UsesParentWhenFileInMisc()
+    {
+        var quarter = Path.Combine(_root, "Client", "2026 - Q2");
+        var misc = Path.Combine(quarter, ReportPathResolver.MiscSubfolderName);
+        Directory.CreateDirectory(misc);
+        var file = Path.Combine(misc, "Pending EPSS.xlsx");
+        File.WriteAllText(file, "x");
+
+        var inferred = SessionOutputLayoutResolver.InferQuarterDirectoryFromSourceFile(file);
+
+        Assert.Equal(quarter, inferred);
+    }
+
+    [Fact]
+    public void ResolveForSession_PrefersDownloadFolderOverScanDateResolve()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        var downloadQuarter = Path.Combine(basePath, "Acme Corp", "2026 - Q2");
+        Directory.CreateDirectory(Path.Combine(downloadQuarter, ReportPathResolver.MiscSubfolderName));
+        var sourceFile = Path.Combine(downloadQuarter, "All Vulnerabilities.xlsx");
+        File.WriteAllText(sourceFile, "x");
+
+        var settings = new UserSettings { ReportsBasePath = basePath };
+        var layout = SessionOutputLayoutResolver.ResolveForSession(
+            _resolver,
+            settings,
+            "Acme Corp",
+            "2026-01-15",
+            0,
+            sessionOutputDirectory: null,
+            sourceFilePath: sourceFile);
+
+        Assert.Equal(downloadQuarter, layout.OutputDirectory);
+    }
+
+    [Fact]
+    public void ResolveForSession_UsesSessionOutputDirectoryWhenSet()
+    {
+        var basePath = Path.Combine(_root, "ReportsBase");
+        var pinned = Path.Combine(basePath, "Acme Corp", "2026 - Q2");
+        Directory.CreateDirectory(Path.Combine(pinned, ReportPathResolver.MiscSubfolderName));
+
+        var settings = new UserSettings { ReportsBasePath = basePath };
+        var layout = SessionOutputLayoutResolver.ResolveForSession(
+            _resolver,
+            settings,
+            "Acme Corp",
+            "2026-01-15",
+            0,
+            sessionOutputDirectory: pinned,
+            sourceFilePath: null);
+
+        Assert.Equal(pinned, layout.OutputDirectory);
+        Assert.EndsWith("Misc", layout.TextOutputDirectory);
     }
 }

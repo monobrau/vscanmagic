@@ -275,10 +275,8 @@ else
         _userSettings = Settings.LoadUserSettings();
         if (!string.IsNullOrWhiteSpace(_userSettings.ReportsBasePath))
             _outputDirectory = _userSettings.ReportsBasePath.Trim();
-        else if (!string.IsNullOrWhiteSpace(_userSettings.LastOutputDirectory))
-            _outputDirectory = _userSettings.LastOutputDirectory;
         else
-            _outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VScanMagic", "Downloads");
+            _outputDirectory = ReportPathResolver.GetDefaultManualOutputDirectory(_userSettings);
 
         var creds = Settings.LoadConnectSecureCredentials();
         if (!string.IsNullOrWhiteSpace(creds.BaseUrl))
@@ -341,22 +339,27 @@ else
         _resolvedPathHint = null;
     }
 
-    private string ResolveDownloadOutputDirectory(int companyId, string clientName)
+    private ReportOutputLayout ResolveDownloadLayout(int companyId, string clientName)
     {
         if (_outputDirectoryOverridden && !string.IsNullOrWhiteSpace(_outputDirectory))
         {
             var manual = Path.GetFullPath(_outputDirectory.Trim());
             Directory.CreateDirectory(manual);
-            return manual;
+            return new ReportOutputLayout
+            {
+                OutputDirectory = manual,
+                TextOutputDirectory = manual,
+                UsesStructuredPaths = false,
+                UsesMiscSubfolder = false
+            };
         }
 
-        var layout = PathResolver.Resolve(
+        return PathResolver.Resolve(
             _userSettings,
             companyId,
             clientName,
             _scanDate.ToString("yyyy-MM-dd"),
-            fallbackPath: _outputDirectoryOverridden ? _outputDirectory : null);
-        return layout.OutputDirectory;
+            fallbackPath: _outputDirectory);
     }
 
     private void RefreshResolvedOutputPath()
@@ -400,7 +403,7 @@ else
 
         _resolvedPathHint = companyLayout.UsesStructuredPaths
             ? companyLayout.ReportsPathPartial is not null
-                ? $"Resolved: ...\\{companyLayout.ReportsPathPartial}"
+                ? $"Resolved: ...\\{companyLayout.ReportsPathPartial} — downloads in quarter folder; EPSS in Misc."
                 : companyLayout.OutputDirectory
             : null;
     }
@@ -557,7 +560,8 @@ else
         _busy = true;
         try
         {
-            var outputDir = ResolveDownloadOutputDirectory(companyId, clientName);
+            var layout = ResolveDownloadLayout(companyId, clientName);
+            var outputDir = layout.OutputDirectory;
             if (!_outputDirectoryOverridden)
                 _outputDirectory = outputDir;
 
@@ -568,7 +572,7 @@ else
                 bundleResult = await ReportService.DownloadStandardReportsAsync(
                     companyId,
                     clientName,
-                    outputDir,
+                    layout,
                     bundle,
                     new Progress<string>(m =>
                     {
@@ -584,7 +588,7 @@ else
                 catalogResult = await ReportService.DownloadCatalogReportsAsync(
                     companyId,
                     clientName,
-                    outputDir,
+                    layout,
                     catalogItems,
                     new Progress<string>(m =>
                     {

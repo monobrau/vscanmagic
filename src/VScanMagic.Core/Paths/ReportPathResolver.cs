@@ -7,6 +7,8 @@ namespace VScanMagic.Core.Paths;
 public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapService)
 {
     private const int MaxPathLength = 250;
+    public const string MiscSubfolderName = "Misc";
+    private const string PendingEpssReportType = "pending-epss";
     private const string VulnerabilityScansSegment = "Network Documentation/Vulnerability Scans";
     private static readonly Regex QuarterFolderPattern = new(
         @"^\d{4}\s*-\s*Q[1-4](\b|\s)",
@@ -30,33 +32,61 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
             }
 
             EnsureDirectory(fallback);
-            return new ReportOutputLayout
-            {
-                OutputDirectory = fallback,
-                TextOutputDirectory = fallback,
-                UsesStructuredPaths = false,
-                UsesMiscSubfolder = false,
-                ReportsPathPartial = null
-            };
+            return BuildFlatLayout(fallback);
         }
 
         basePath = Path.GetFullPath(basePath);
 
         if (TryResolveStructuredPath(basePath, companyId, displayName, scanDate, out var structuredPath))
         {
-            EnsureDirectory(structuredPath);
-
-            return new ReportOutputLayout
-            {
-                OutputDirectory = structuredPath,
-                TextOutputDirectory = structuredPath,
-                UsesStructuredPaths = true,
-                UsesMiscSubfolder = false,
-                ReportsPathPartial = GetReportsPathPartial(structuredPath, displayName)
-            };
+            return BuildStructuredLayout(structuredPath, displayName);
         }
 
         return BuildClientQuarterLayout(basePath, displayName, scanDate);
+    }
+
+    public static string GetDefaultManualOutputDirectory(UserSettings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.LastOutputDirectory))
+            return settings.LastOutputDirectory.Trim();
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "VScanMagic",
+            "Exports");
+    }
+
+    public static string GetDownloadDirectory(ReportOutputLayout layout, string? reportType = null)
+    {
+        if (layout.UsesMiscSubfolder &&
+            string.Equals(reportType, PendingEpssReportType, StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureDirectory(layout.TextOutputDirectory);
+            return layout.TextOutputDirectory;
+        }
+
+        EnsureDirectory(layout.OutputDirectory);
+        return layout.OutputDirectory;
+    }
+
+    /// <summary>Quarter folder for Top N Word report and ConnectSecure downloads.</summary>
+    public static string GetTopNReportDirectory(ReportOutputLayout layout)
+    {
+        EnsureDirectory(layout.OutputDirectory);
+        return layout.OutputDirectory;
+    }
+
+    /// <summary>Misc folder for supplemental exports (PDF review, data XLSX, host counts) when structured paths are enabled.</summary>
+    public static string GetSupplementalExportDirectory(ReportOutputLayout layout)
+    {
+        if (layout.UsesMiscSubfolder)
+        {
+            EnsureDirectory(layout.TextOutputDirectory);
+            return layout.TextOutputDirectory;
+        }
+
+        EnsureDirectory(layout.OutputDirectory);
+        return layout.OutputDirectory;
     }
 
     public static string SanitizeClientFolderName(string companyName)
@@ -74,15 +104,55 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
     {
         var clientPath = Path.Combine(root, SanitizeClientFolderName(companyName));
         var outputPath = BuildQuarterOutputPath(clientPath, scanDate);
+        return BuildStructuredLayout(outputPath, companyName);
+    }
+
+    private static ReportOutputLayout BuildStructuredLayout(string outputPath, string companyName)
+    {
         EnsureDirectory(outputPath);
+        var miscPath = Path.Combine(outputPath, MiscSubfolderName);
+        EnsureDirectory(miscPath);
 
         return new ReportOutputLayout
         {
             OutputDirectory = outputPath,
-            TextOutputDirectory = outputPath,
+            TextOutputDirectory = miscPath,
             UsesStructuredPaths = true,
-            UsesMiscSubfolder = false,
+            UsesMiscSubfolder = true,
             ReportsPathPartial = GetReportsPathPartial(outputPath, companyName)
+        };
+    }
+
+    private static ReportOutputLayout BuildFlatLayout(string outputPath)
+    {
+        EnsureDirectory(outputPath);
+        return new ReportOutputLayout
+        {
+            OutputDirectory = outputPath,
+            TextOutputDirectory = outputPath,
+            UsesStructuredPaths = false,
+            UsesMiscSubfolder = false,
+            ReportsPathPartial = null
+        };
+    }
+
+    /// <summary>Rebuild layout metadata for an existing on-disk quarter folder (e.g. reuse after ConnectSecure downloads).</summary>
+    public static ReportOutputLayout LayoutForExistingDirectory(string outputDirectory, string companyName)
+    {
+        var full = Path.GetFullPath(outputDirectory.Trim());
+        var misc = Path.Combine(full, MiscSubfolderName);
+        var usesMisc = Directory.Exists(misc);
+        if (usesMisc)
+            EnsureDirectory(misc);
+
+        EnsureDirectory(full);
+        return new ReportOutputLayout
+        {
+            OutputDirectory = full,
+            TextOutputDirectory = usesMisc ? misc : full,
+            UsesStructuredPaths = true,
+            UsesMiscSubfolder = usesMisc,
+            ReportsPathPartial = GetReportsPathPartial(full, companyName)
         };
     }
 
@@ -148,38 +218,11 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
     }
 
     /// <summary>
-    /// Picks a quarter folder under the client vulnerability-scans path.
-    /// Uses the bare quarter (e.g. 2026 - Q2) when free; otherwise adds scan date, then a time suffix
-    /// so multiple reviews in the same quarter/day do not overwrite the same folder.
+    /// Single quarter folder per client (e.g. 2026 - Q2). ConnectSecure downloads and Top N Word go here;
+    /// supplemental VScanMagic exports use the Misc subfolder.
     /// </summary>
-    public static string ResolveQuarterFolderName(string clientPath, string scanDate)
-    {
-        var baseQuarter = GetQuarterFromDate(scanDate);
-        var dateStr = TryGetScanDateString(scanDate, out var parsed)
-            ? parsed.ToString("yyyy-MM-dd")
-            : DateTime.Now.ToString("yyyy-MM-dd");
-
-        var barePath = Path.Combine(clientPath, baseQuarter);
-        var datedName = $"{baseQuarter} {dateStr}";
-        var datedPath = Path.Combine(clientPath, datedName);
-
-        if (!Directory.Exists(barePath))
-            return baseQuarter;
-
-        if (!Directory.Exists(datedPath))
-            return datedName;
-
-        return $"{baseQuarter} {dateStr}_{DateTime.Now:yyyyMMdd_HHmmss}";
-    }
-
-    private static bool TryGetScanDateString(string scanDate, out DateTime parsed)
-    {
-        parsed = default;
-        if (string.IsNullOrWhiteSpace(scanDate))
-            return false;
-
-        return DateTime.TryParse(scanDate, out parsed);
-    }
+    public static string ResolveQuarterFolderName(string clientPath, string scanDate) =>
+        GetQuarterFromDate(scanDate);
 
     public static string GetQuarterFromDate(string scanDate)
     {

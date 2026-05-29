@@ -18,7 +18,8 @@ public sealed class ReviewSessionFactory(RemediationRuleService remediationRules
         int exportTopN = 10,
         bool isRmitPlus = false)
     {
-        var autoExportKeys = scored.AutoExportApplication
+        var autoExportKeys = ScoredVulnerabilityResult
+            .SelectAutoExportApplication(scored.AllFiltered, exportTopN)
             .Select(v => VulnerabilitySourceHelper.ExportKey(v.Source, v.Product))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 

@@ -10,7 +10,7 @@
 @inject RemediationRuleService RemediationRules
 @inject SettingsService Settings
 @inject ReportPathResolver PathResolver
-@inject IJSRuntime Js
+@inject ReportFolderHistoryService FolderHistory
 
 <PageTitle>Deliverables</PageTitle>
 
@@ -34,10 +34,18 @@ else
         </div>
     </div>
 
-    @if (!string.IsNullOrEmpty(_copyMessage))
-    {
-        <div class="alert alert-success py-2">@_copyMessage</div>
-    }
+    <div id="deliverable-copy-sources" hidden aria-hidden="true">
+        <pre id="deliverable-time-estimate">@_timeEstimate</pre>
+        <pre id="deliverable-ticket-notes">@_ticketNotes</pre>
+        <pre id="deliverable-email-subject">@_emailSubject</pre>
+        <pre id="deliverable-email-body">@_emailBodyForCopy</pre>
+        @foreach (var section in _sections)
+        {
+            <pre id="deliverable-ticket-subject-@(section.SectionId)">@(section.Subject)</pre>
+            <pre id="deliverable-ticket-body-@(section.SectionId)">@(section.BodyText)</pre>
+        }
+    </div>
+    <div id="deliverable-email-body-html" hidden aria-hidden="true">@((MarkupString)_emailBodyHtml)</div>
 
     <ul class="nav nav-tabs mb-3">
         <li class="nav-item">
@@ -87,10 +95,10 @@ else
                             <span class="text-muted ms-2">@(expanded ? "▾" : "▸")</span>
                         </button>
                         <div class="d-flex flex-wrap gap-2">
-                            <button type="button" class="btn btn-primary btn-sm" @onclick="() => CopyTextAsync(section.Subject)">
+                            <button type="button" class="btn btn-primary btn-sm" data-vscan-copy-target="deliverable-ticket-subject-@sectionId">
                                 Copy subject
                             </button>
-                            <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => CopyTextAsync(section.BodyText)">
+                            <button type="button" class="btn btn-outline-primary btn-sm" data-vscan-copy-target="deliverable-ticket-body-@sectionId">
                                 Copy section
                             </button>
                         </div>
@@ -136,14 +144,18 @@ else
         <div class="card">
             <div class="card-body">
                 <div class="d-flex flex-wrap gap-2 mb-3">
-                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => CopyTextAsync(_emailSubject)">
+                    <button type="button" class="btn btn-primary btn-sm" data-vscan-copy-target="deliverable-email-subject">
                         Copy subject
                     </button>
-                    <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => CopyTextAsync(_emailBodyForCopy)">
+                    <button type="button" class="btn btn-outline-primary btn-sm"
+                            data-vscan-copy-target="deliverable-email-body"
+                            data-vscan-copy-html-target="deliverable-email-body-html">
                         Copy body
                     </button>
                 </div>
-                <pre class="deliverable-text mb-0">@_emailContent</pre>
+                <p class="form-text mb-2">Copy body places clickable links on the clipboard for New Outlook and ConnectWise Manage. The preview below matches what is copied.</p>
+                <div id="deliverable-email-preview" class="deliverable-email-preview border rounded p-3 mb-3 bg-white">@((MarkupString)_emailBodyHtml)</div>
+                <pre class="deliverable-text mb-0">@_emailBodyForCopy</pre>
             </div>
         </div>
     }
@@ -151,7 +163,7 @@ else
     {
         <div class="card">
             <div class="card-body">
-                <button type="button" class="btn btn-primary btn-sm mb-3" @onclick="() => CopyTextAsync(_timeEstimate)">
+                <button type="button" class="btn btn-primary btn-sm mb-3" data-vscan-copy-target="deliverable-time-estimate">
                     Copy time estimate
                 </button>
                 <pre class="deliverable-text mb-0">@_timeEstimate</pre>
@@ -162,7 +174,7 @@ else
     {
         <div class="card">
             <div class="card-body">
-                <button type="button" class="btn btn-primary btn-sm mb-3" @onclick="() => CopyTextAsync(_ticketNotes)">
+                <button type="button" class="btn btn-primary btn-sm mb-3" data-vscan-copy-target="deliverable-ticket-notes">
                     Copy ticket notes
                 </button>
                 <pre class="deliverable-text mb-0">@_ticketNotes</pre>
@@ -180,9 +192,9 @@ else
     private string _emailContent = "";
     private string _emailSubject = "";
     private string _emailBodyForCopy = "";
+    private string _emailBodyHtml = "";
     private string _ticketNotes = "";
     private string _timeEstimate = "";
-    private string? _copyMessage;
     private string? _linksStatus;
     private UserSettings _userSettings = new();
     private readonly HashSet<string> _expandedSections = new(StringComparer.Ordinal);
@@ -211,11 +223,15 @@ else
             return;
 
         var companyId = int.TryParse(_session.CompanyId, out var id) ? id : 0;
-        var layout = PathResolver.Resolve(
+        var layout = SessionOutputLayoutResolver.ResolveForSession(
+            PathResolver,
             _userSettings,
-            companyId,
             _session.ClientName,
             _session.ScanDate,
+            companyId,
+            _session.OutputDirectory,
+            _session.SourceFilePath,
+            FolderHistory,
             _userSettings.LastOutputDirectory);
 
         var templates = TemplatesSvc.Load();
@@ -223,7 +239,8 @@ else
         _sections = TicketInstructionBuilder.BuildSections(_session, RemediationRules, layout.ReportsPathPartial);
         _emailContent = EmailTemplateBuilder.Build(_session, templates, links);
         (_emailSubject, var emailBody) = EmailTemplateBuilder.SplitSubjectAndBody(_emailContent);
-        _emailBodyForCopy = emailBody.Replace("\n", "\r\n");
+        var topNLabel = EmailTemplateBuilder.GetTopNLabel(_session);
+        (_emailBodyForCopy, _emailBodyHtml) = EmailTemplateBuilder.PrepareDeliverableCopy(emailBody, links, topNLabel);
         _ticketNotes = TicketNotesBuilder.Build(_session, templates.TicketNotes, _session.IsRmitPlus);
         _timeEstimate = TimeEstimateBuilder.Build(_session, RemediationRules);
     }
@@ -237,7 +254,8 @@ else
         var links = DeliverableLinksResolver.Resolve(_session, _userSettings);
         _emailContent = EmailTemplateBuilder.Build(_session, templates, links);
         (_emailSubject, var emailBody) = EmailTemplateBuilder.SplitSubjectAndBody(_emailContent);
-        _emailBodyForCopy = emailBody.Replace("\n", "\r\n");
+        var topNLabel = EmailTemplateBuilder.GetTopNLabel(_session);
+        (_emailBodyForCopy, _emailBodyHtml) = EmailTemplateBuilder.PrepareDeliverableCopy(emailBody, links, topNLabel);
         _linksStatus = null;
     }
 
@@ -267,22 +285,6 @@ else
         return manual > 0
             ? $"{exportCount} in export (Top {_session.ExportTopN} suggested + {manual} added)"
             : $"{exportCount} in export (Top {_session.ExportTopN})";
-    }
-
-    private async Task CopyTextAsync(string? text)
-    {
-        if (string.IsNullOrEmpty(text))
-            return;
-
-        try
-        {
-            await Js.InvokeVoidAsync("navigator.clipboard.writeText", text);
-            _copyMessage = "Copied to clipboard.";
-        }
-        catch
-        {
-            _copyMessage = "Copy failed — select the text manually.";
-        }
     }
 
     private void ToggleSection(string sectionId)

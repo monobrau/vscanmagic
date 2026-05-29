@@ -1,4 +1,5 @@
 using VScanMagic.Core.IO;
+using VScanMagic.Core.Paths;
 
 namespace VScanMagic.ConnectSecure;
 
@@ -15,12 +16,12 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         IEnumerable<StandardReportRequest>? reports = null,
         IProgress<string>? progress = null,
         CancellationToken ct = default) =>
-        DownloadStandardReportsAsync(companyId, clientName, outputDirectory, reports, progress, ct);
+        DownloadStandardReportsAsync(companyId, clientName, FlatLayout(outputDirectory), reports, progress, ct);
 
     public async Task<StandardReportDownloadResult> DownloadStandardReportsAsync(
         int companyId,
         string clientName,
-        string outputDirectory,
+        ReportOutputLayout layout,
         IEnumerable<StandardReportRequest>? reports = null,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
@@ -40,7 +41,7 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
                     throw new InvalidOperationException($"No standard report match for {report.Type} ({report.Extension}).");
 
                 var displayName = StandardReportCatalog.DisplayNames.GetValueOrDefault(report.Type, report.Name);
-                items.Add(new CatalogReportDownloadRequest(reportId, displayName, report.Extension));
+                items.Add(new CatalogReportDownloadRequest(reportId, displayName, report.Extension, report.Type));
             }
             catch (Exception ex)
             {
@@ -52,7 +53,7 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
             return new StandardReportDownloadResult([], resolveFailed);
 
         var result = await DownloadCatalogReportsAsync(
-            companyId, clientName, outputDirectory, items, progress, ct).ConfigureAwait(false);
+            companyId, clientName, layout, items, progress, ct).ConfigureAwait(false);
 
         if (resolveFailed.Count == 0)
             return result;
@@ -70,17 +71,16 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         IEnumerable<CatalogReportDownloadRequest> requests,
         IProgress<string>? progress = null,
         CancellationToken ct = default) =>
-        DownloadCatalogReportsAsync(companyId, clientName, outputDirectory, requests, progress, ct);
+        DownloadCatalogReportsAsync(companyId, clientName, FlatLayout(outputDirectory), requests, progress, ct);
 
     public async Task<StandardReportDownloadResult> DownloadCatalogReportsAsync(
         int companyId,
         string clientName,
-        string outputDirectory,
+        ReportOutputLayout layout,
         IEnumerable<CatalogReportDownloadRequest> requests,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
-        Directory.CreateDirectory(outputDirectory);
         var reportList = requests.ToList();
         if (reportList.Count == 0)
             return new StandardReportDownloadResult([], []);
@@ -94,7 +94,8 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
 
         foreach (var report in reportList)
         {
-            var path = BuildOutputPath(outputDirectory, clientName, report.Name, report.Extension, timestamp);
+            var downloadDir = ReportPathResolver.GetDownloadDirectory(layout, report.ReportType);
+            var path = BuildOutputPath(downloadDir, clientName, report.Name, report.Extension, timestamp);
             try
             {
                 var jobId = await client.CreateReportJobAsync(
@@ -182,5 +183,18 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         foreach (var c in Path.GetInvalidFileNameChars())
             name = name.Replace(c, '_');
         return string.IsNullOrWhiteSpace(name) ? "Client" : name.Trim();
+    }
+
+    private static ReportOutputLayout FlatLayout(string outputDirectory)
+    {
+        var dir = Path.GetFullPath(outputDirectory.Trim());
+        Directory.CreateDirectory(dir);
+        return new ReportOutputLayout
+        {
+            OutputDirectory = dir,
+            TextOutputDirectory = dir,
+            UsesStructuredPaths = false,
+            UsesMiscSubfolder = false
+        };
     }
 }

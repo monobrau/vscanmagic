@@ -49,3 +49,12 @@ h1:focus {
 .darker-border-checkbox.form-check-input {
     border-color: #929292;
 }
+
+.deliverable-email-preview a {
+    color: #006bb7;
+    text-decoration: underline;
+}
+
+.deliverable-text {
+    white-space: pre-wrap;
+}

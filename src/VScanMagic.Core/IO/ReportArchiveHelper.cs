@@ -5,6 +5,8 @@ namespace VScanMagic.Core.IO;
 
 public static class ReportArchiveHelper
 {
+    private static readonly string[] SidecarSuffixes = [".extracting", ".extracted"];
+
     /// <summary>
     /// ConnectSecure sometimes returns a zip archive containing the real report file,
     /// saved with an .xlsx/.docx extension. Real Office files also use zip — detect wrappers
@@ -16,16 +18,11 @@ public static class ReportArchiveHelper
             return path;
 
         using var archive = ZipFile.OpenRead(path);
-        if (archive.Entries.Any(e =>
-                e.FullName.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase)))
+        if (IsRealOfficeOpenXml(archive))
             return path;
 
         var expectedExt = Path.GetExtension(path);
-        var inner = archive.Entries
-            .Where(e => !string.IsNullOrEmpty(e.Name))
-            .FirstOrDefault(e => e.Name.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
-            ?? archive.Entries.FirstOrDefault(e => !string.IsNullOrEmpty(e.Name));
-
+        var inner = FindInnerReportEntry(archive, expectedExt);
         if (inner is null)
             return path;
 
@@ -40,30 +37,68 @@ public static class ReportArchiveHelper
     public static void NormalizeDownloadedReportFile(string path)
     {
         if (!File.Exists(path) || !LooksLikeZip(path))
+        {
+            CleanupSidecarFiles(path);
             return;
-
-        using var archive = ZipFile.OpenRead(path);
-        if (archive.Entries.Any(e =>
-                e.FullName.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase)))
-            return;
-
-        var expectedExt = Path.GetExtension(path);
-        var inner = archive.Entries
-            .Where(e => !string.IsNullOrEmpty(e.Name))
-            .FirstOrDefault(e => e.Name.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
-            ?? archive.Entries.FirstOrDefault(e => !string.IsNullOrEmpty(e.Name));
-
-        if (inner is null)
-            return;
+        }
 
         var temp = path + ".extracting";
-        if (File.Exists(temp))
-            File.Delete(temp);
+        using (var archive = ZipFile.OpenRead(path))
+        {
+            if (IsRealOfficeOpenXml(archive))
+            {
+                CleanupSidecarFiles(path);
+                return;
+            }
 
-        inner.ExtractToFile(temp, overwrite: true);
-        File.Delete(path);
-        File.Move(temp, path);
+            var inner = FindInnerReportEntry(archive, Path.GetExtension(path));
+            if (inner is null)
+            {
+                CleanupSidecarFiles(path);
+                return;
+            }
+
+            if (File.Exists(temp))
+                File.Delete(temp);
+
+            inner.ExtractToFile(temp, overwrite: true);
+        }
+
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+
+            File.Move(temp, path);
+        }
+        finally
+        {
+            CleanupSidecarFiles(path);
+        }
     }
+
+    public static void CleanupSidecarFiles(string path)
+    {
+        foreach (var suffix in SidecarSuffixes)
+        {
+            var sidecar = path + suffix;
+            if (File.Exists(sidecar))
+            {
+                try { File.Delete(sidecar); }
+                catch { /* best effort */ }
+            }
+        }
+    }
+
+    private static bool IsRealOfficeOpenXml(ZipArchive archive) =>
+        archive.Entries.Any(e =>
+            e.FullName.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase));
+
+    private static ZipArchiveEntry? FindInnerReportEntry(ZipArchive archive, string expectedExt) =>
+        archive.Entries
+            .Where(e => !string.IsNullOrEmpty(e.Name))
+            .FirstOrDefault(e => e.Name.EndsWith(expectedExt, StringComparison.OrdinalIgnoreCase))
+        ?? archive.Entries.FirstOrDefault(e => !string.IsNullOrEmpty(e.Name));
 
     private static bool LooksLikeZip(string path)
     {

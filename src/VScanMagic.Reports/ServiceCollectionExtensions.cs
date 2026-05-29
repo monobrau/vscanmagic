@@ -34,18 +34,19 @@ public sealed class ExportOrchestrator(
         SessionExportOptions? options = null)
     {
         options ??= new SessionExportOptions();
-        Directory.CreateDirectory(layout.OutputDirectory);
+        var topNDir = ReportPathResolver.GetTopNReportDirectory(layout);
+        var supplementalDir = ReportPathResolver.GetSupplementalExportDirectory(layout);
 
         var stamp = ReportPathResolver.GetReportTimestamp();
         var companyName = string.IsNullOrWhiteSpace(session.ClientName) ? "Client" : session.ClientName.Trim();
         var reportTitle = GetReportTitle(session);
 
         var docxPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.OutputDirectory, companyName, $" {reportTitle}_{stamp}", "docx");
+            topNDir, companyName, $" {reportTitle}_{stamp}", "docx");
         var pdfPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.OutputDirectory, companyName, $" Top Ten Review (Client)_{stamp}", "pdf");
+            supplementalDir, companyName, $" Top Ten Review (Client)_{stamp}", "pdf");
         var xlsxPath = ReportPathResolver.GetSafeReportOutputPath(
-            layout.OutputDirectory, companyName, $" Top Ten Data_{stamp}", "xlsx");
+            supplementalDir, companyName, $" Top Ten Data_{stamp}", "xlsx");
 
         docx.Export(session, docxPath);
         pdf.Export(session, pdfPath);
@@ -60,7 +61,7 @@ public sealed class ExportOrchestrator(
                 options.HostCounts,
                 session.ScanDate,
                 string.IsNullOrWhiteSpace(session.SourceFilePath) ? null : Path.GetFileName(session.SourceFilePath));
-            var hostResult = hostCountsExporter.Export(hostRequest, layout.OutputDirectory, companyName, stamp, includePdf: true, includeXlsx: true);
+            var hostResult = hostCountsExporter.Export(hostRequest, supplementalDir, companyName, stamp, includePdf: true, includeXlsx: true);
             hostCountsPdf = hostResult.PdfPath;
             hostCountsXlsx = hostResult.XlsxPath;
         }

@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using Microsoft.Extensions.DependencyInjection;
+using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components.Web;
 using VScanMagic.ConnectSecure;
@@ -115,6 +116,33 @@ public class TopVulnerabilityScorerTests
         Assert.Equal(2, top.Count);
         Assert.Equal("CVE-2021-33558", top[0].Product);
         Assert.Equal("Google Chrome", top[1].Product);
+    }
+
+    [Fact]
+    public void CreateFromScoredResult_HonorsExportTopN_WhenScoredWithUnlimitedPool()
+    {
+        var factory = new ReviewSessionFactory(new RemediationRuleService(), new VScanMagicOptions());
+        var applications = Enumerable.Range(1, 15)
+            .Select(i => new TopVulnerability
+            {
+                Source = "Application",
+                Product = $"App{i}",
+                High = 16 - i,
+                RiskScore = 16 - i,
+                VulnCount = 1
+            })
+            .ToList();
+
+        var scored = new ScoredVulnerabilityResult
+        {
+            AllFiltered = applications,
+            AutoExportApplication = applications
+        };
+
+        var session = factory.CreateFromScoredResult("Acme", "2026-05-23", scored, "Tech", exportTopN: 10);
+
+        Assert.Equal(10, ReviewSessionRanker.GetExportFindings(session).Count);
+        Assert.Equal(15, session.Findings.Count);
     }
 
     [Fact]
@@ -1288,6 +1316,182 @@ public class EmailTemplateBuilderTests
         Assert.Contains("https://sharepoint/folder", email);
         Assert.Contains("https://timezest/meet", email);
     }
+
+    [Fact]
+    public void BuildHtmlBody_EmbedsAnchorsForDeliverableLinks()
+    {
+        var session = new ReviewSession
+        {
+            ClientName = "Acme",
+            Presenter = "Tech",
+            ExportTopN = 10,
+            Findings = Enumerable.Range(1, 10)
+                .Select(i => new ReviewFinding
+                {
+                    Source = "Application",
+                    Product = $"App {i}",
+                    IncludeInExport = true,
+                    OriginalRank = i,
+                    Rank = i
+                })
+                .ToList()
+        };
+        var links = new DeliverableLinks
+        {
+            TopNReportUrl = "https://sharepoint/topn",
+            ReportsFolderUrl = "https://sharepoint/folder",
+            SchedulingLinkUrl = "https://timezest/meet"
+        };
+        var body = """
+Recommended remediation priorities (Top Ten):
+https://sharepoint/topn
+Complete report package:
+https://sharepoint/folder
+Schedule time with me
+https://timezest/meet
+""";
+
+        var (plain, html) = EmailTemplateBuilder.PrepareDeliverableCopy(body, links, "Top Ten");
+
+        Assert.Contains("Open Top Ten report", plain);
+        Assert.Contains("Open complete report package", plain);
+        Assert.Contains("Schedule Time With Me", plain);
+        Assert.DoesNotContain("https://sharepoint/topn", plain);
+        Assert.Contains("<a href=\"https://sharepoint/topn\">Open Top Ten report</a>", html);
+        Assert.Contains("<a href=\"https://sharepoint/folder\">Open complete report package</a>", html);
+        Assert.Contains("<a href=\"https://timezest/meet\">Schedule Time With Me</a>", html);
+        Assert.Contains("<p style=\"margin:0 0 12px 0;\"><a href=\"https://sharepoint/topn\">Open Top Ten report</a></p>", html);
+        Assert.Contains("<p style=\"margin:0 0 12px 0;\">Complete report package:</p>", html);
+    }
+
+    [Fact]
+    public void NormalizeDeliverableBodySpacing_MatchesExpectedLayout()
+    {
+        var body = """
+Good morning,
+
+Your quarterly vulnerability scan report has been completed and is available in your client folder.
+
+Recommended remediation priorities (Top Ten):
+https://sharepoint/topn
+Complete report package:
+https://sharepoint/folder
+The folder contains the following reports:
+• Pending Remediation EPSS Score Report – classifies vulnerabilities.
+• All Vulnerabilities Report – a comprehensive list.
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+
+Schedule time with me
+https://timezest/meet
+Note: No remediation will begin without your approval.
+""";
+
+        var normalized = EmailTemplateBuilder.NormalizeDeliverableBodySpacing(body);
+
+        Assert.Contains("https://sharepoint/topn\n\nComplete report package:", normalized);
+        Assert.Contains("https://sharepoint/folder\n\nThe folder contains", normalized);
+        Assert.Contains("• Pending Remediation EPSS Score Report – classifies vulnerabilities.\n• All Vulnerabilities", normalized);
+        Assert.DoesNotContain("• Pending Remediation EPSS Score Report – classifies vulnerabilities.\n\n• All Vulnerabilities", normalized);
+        Assert.Contains("https://timezest/meet\n\nNote:", normalized);
+        Assert.DoesNotContain("Schedule time with me\nhttps://timezest/meet", normalized);
+    }
+
+    [Fact]
+    public void NormalizeDeliverableBodySpacing_CollapsesBlanksBetweenLaterBullets()
+    {
+        var body = """
+The folder contains the following reports:
+• Pending Remediation EPSS Score Report – classifies vulnerabilities.
+
+• All Vulnerabilities Report – a comprehensive list.
+
+• Executive Summary Report – a high-level overview.
+
+• External Scan – detected vulnerabilities.
+""";
+
+        var normalized = EmailTemplateBuilder.NormalizeDeliverableBodySpacing(body);
+
+        Assert.Contains("• Pending Remediation EPSS Score Report – classifies vulnerabilities.\n• All Vulnerabilities Report", normalized);
+        Assert.DoesNotContain("• All Vulnerabilities Report – a comprehensive list.\n\n• Executive Summary Report", normalized);
+        Assert.Contains("• Executive Summary Report – a high-level overview.\n• External Scan", normalized);
+    }
+
+    [Fact]
+    public void BuildHtmlBody_DoesNotCorruptAnchorsWhenFolderUrlIsPrefixOfTopNUrl()
+    {
+        var links = new DeliverableLinks
+        {
+            TopNReportUrl = "https://sharepoint/sites/client/Reports/Top13.docx",
+            ReportsFolderUrl = "https://sharepoint/sites/client/Reports",
+            SchedulingLinkUrl = "https://timezest/meet"
+        };
+        var body = """
+Recommended remediation priorities (Top 13):
+https://sharepoint/sites/client/Reports/Top13.docx
+Complete report package:
+https://sharepoint/sites/client/Reports
+Schedule time with me
+https://timezest/meet
+Note: No remediation will begin without your approval.
+""";
+
+        var html = EmailTemplateBuilder.BuildHtmlBody(body, links, "Top 13");
+
+        Assert.Contains("<a href=\"https://sharepoint/sites/client/Reports/Top13.docx\">Open Top 13 report</a>", html);
+        Assert.Contains("<a href=\"https://sharepoint/sites/client/Reports\">Open complete report package</a>", html);
+        Assert.Contains("<a href=\"https://timezest/meet\">Schedule Time With Me</a>", html);
+        Assert.DoesNotContain("Schedule time with me\">Open Top 13 report", html);
+        Assert.Contains("Open Top 13 report</a></p>", html);
+        Assert.Contains("&nbsp;</p>", html);
+    }
+
+    [Fact]
+    public void PrepareDeliverableCopy_UsesSchedulingLabelWhenTopNAndSchedulingUrlsMatch()
+    {
+        var sharedUrl = "https://sharepoint/sites/client/Reports/Top13.docx";
+        var links = new DeliverableLinks
+        {
+            TopNReportUrl = sharedUrl,
+            ReportsFolderUrl = "https://sharepoint/sites/client/Reports",
+            SchedulingLinkUrl = sharedUrl
+        };
+        var body = """
+Recommended remediation priorities (Top 13):
+https://sharepoint/sites/client/Reports/Top13.docx
+Complete report package:
+https://sharepoint/sites/client/Reports
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+https://sharepoint/sites/client/Reports/Top13.docx
+Note: No remediation will begin without your approval.
+""";
+
+        var (plain, html) = EmailTemplateBuilder.PrepareDeliverableCopy(body, links, "Top 13");
+
+        Assert.Contains("Open Top 13 report", plain);
+        Assert.Contains("Schedule Time With Me", plain);
+        Assert.Contains("<a href=\"https://sharepoint/sites/client/Reports/Top13.docx\">Open Top 13 report</a>", html);
+        Assert.Contains("<a href=\"https://sharepoint/sites/client/Reports/Top13.docx\">Schedule Time With Me</a>", html);
+    }
+
+    [Fact]
+    public void NormalizeDeliverableBodySpacing_RemovesDuplicateSchedulingHeader()
+    {
+        var body = """
+Not all vulnerabilities may be feasible to remediate depending on business or technical constraints.
+
+Schedule time with me
+
+https://timezest/meet
+
+Note: No remediation will begin without your approval.
+""";
+
+        var normalized = EmailTemplateBuilder.NormalizeDeliverableBodySpacing(body);
+
+        Assert.Contains("constraints.\n\nhttps://timezest/meet\n\nNote:", normalized);
+        Assert.DoesNotContain("Schedule time with me\n\nhttps://timezest/meet", normalized);
+    }
 }
 
 public class CveReferenceHelperTests
@@ -1806,6 +2010,58 @@ public class ReportArchiveHelperTests
             if (extracted != wrapper && File.Exists(extracted))
                 File.Delete(extracted);
         }
+    }
+
+    [Fact]
+    public void NormalizeDownloadedReportFile_ReplacesWrapperZipAndRemovesSidecars()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var target = Path.Combine(dir, "Client - Executive Summary Report_2026-05-28_12-00-00.docx");
+        var innerDocx = CreateMinimalDocx(Path.Combine(dir, "inner.docx"));
+
+        try
+        {
+            CreateWrapperZip(target, innerDocx, "Executive Summary Report.docx");
+            Assert.True(File.Exists(target));
+
+            Core.IO.ReportArchiveHelper.NormalizeDownloadedReportFile(target);
+
+            Assert.True(File.Exists(target));
+            Assert.False(File.Exists(target + ".extracting"));
+            Assert.False(File.Exists(target + ".extracted"));
+            using var archive = System.IO.Compression.ZipFile.OpenRead(target);
+            Assert.Contains(archive.Entries, e =>
+                e.FullName.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                    Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for temp test dirs.
+            }
+        }
+    }
+
+    private static string CreateMinimalDocx(string path)
+    {
+        using var archive = System.IO.Compression.ZipFile.Open(path, System.IO.Compression.ZipArchiveMode.Create);
+        archive.CreateEntry("[Content_Types].xml");
+        return path;
+    }
+
+    private static void CreateWrapperZip(string wrapperPath, string innerFilePath, string innerEntryName)
+    {
+        if (File.Exists(wrapperPath))
+            File.Delete(wrapperPath);
+
+        using var archive = System.IO.Compression.ZipFile.Open(wrapperPath, System.IO.Compression.ZipArchiveMode.Create);
+        archive.CreateEntryFromFile(innerFilePath, innerEntryName, System.IO.Compression.CompressionLevel.Optimal);
     }
 }
 

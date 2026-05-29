@@ -6,7 +6,7 @@ public enum ReportCatalogScope
     Global
 }
 
-public sealed record CatalogReportDownloadRequest(string ReportId, string Name, string Extension);
+public sealed record CatalogReportDownloadRequest(string ReportId, string Name, string Extension, string? ReportType = null);
 
 /// <summary>One report category from ConnectSecure with available export formats.</summary>
 public sealed class ReportCatalogGroup
