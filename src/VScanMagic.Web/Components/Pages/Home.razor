@@ -111,6 +111,12 @@
                     Download selected reports
                 </button>
 
+                <QuarterFolderReplacePrompt Visible="@_showQuarterReplacePrompt"
+                                            QuarterFolderLabel="@_quarterReplaceLabel"
+                                            FileCount="@_quarterReplaceFileCount"
+                                            Busy="@_busy"
+                                            OnChoice="OnQuarterReplaceChoice" />
+
                 @if (_downloadResult is not null)
                 {
                     <div class="alert alert-success mt-3 mb-0 py-2">
@@ -190,6 +196,9 @@
     [SupplyParameterFromQuery(Name = "allVulns")]
     public string? AllVulnsFromQuery { get; set; }
 
+    [SupplyParameterFromQuery(Name = "stableExport")]
+    public int? StableExportFromQuery { get; set; }
+
     private DateTime _scanDate = DateTime.Today;
     private string _presenter = "";
     private string _filePath = "";
@@ -208,6 +217,11 @@
     private UserSettings _userSettings = new();
     private bool _isRmitPlus;
     private readonly CheckboxRangeColumn _reportSelectRange = new();
+    private bool _showQuarterReplacePrompt;
+    private string _quarterReplaceLabel = "";
+    private int _quarterReplaceFileCount;
+    private ReportOutputLayout? _pendingDownloadLayout;
+    private bool _useStableExportNames;
 
     private string SelectedCompanyName =>
         _companies.FirstOrDefault(c => c.Id == _selectedCompanyId)?.Name ?? "";
@@ -298,6 +312,8 @@
         _filePath = path;
         _downloadedAllVulnsPath = path;
         _status = "All Vulnerabilities file loaded from Report downloader.";
+        if (StableExportFromQuery == 1)
+            _useStableExportNames = true;
     }
 
     private bool GetReportSelected(string type) => _selectedReportTypes.Contains(type);
@@ -338,6 +354,7 @@
         _status = null;
         _downloadResult = null;
         _downloadedAllVulnsPath = null;
+        _showQuarterReplacePrompt = false;
 
         if (string.IsNullOrEmpty(_selectedCompanyId))
         {
@@ -358,24 +375,62 @@
             return;
         }
 
+        var layout = PathResolver.Resolve(
+            _userSettings,
+            companyId,
+            clientName,
+            _scanDate.ToString("yyyy-MM-dd"),
+            fallbackPath: _outputDirectory);
+        _outputDirectory = layout.OutputDirectory;
+
+        if (QuarterFolderContentsHelper.HasContent(layout.OutputDirectory))
+        {
+            _pendingDownloadLayout = layout;
+            _quarterReplaceLabel = Path.GetFileName(layout.OutputDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            _quarterReplaceFileCount = QuarterFolderContentsHelper.CountFiles(layout.OutputDirectory);
+            _showQuarterReplacePrompt = true;
+            return;
+        }
+
+        await ExecuteDownloadAsync(layout, replaceMode: false);
+    }
+
+    private async Task OnQuarterReplaceChoice(QuarterFolderReplaceChoice choice)
+    {
+        _showQuarterReplacePrompt = false;
+        if (choice == QuarterFolderReplaceChoice.Cancel || _pendingDownloadLayout is null)
+        {
+            _pendingDownloadLayout = null;
+            return;
+        }
+
+        var layout = _pendingDownloadLayout;
+        _pendingDownloadLayout = null;
+        await ExecuteDownloadAsync(layout, choice == QuarterFolderReplaceChoice.Replace);
+    }
+
+    private async Task ExecuteDownloadAsync(ReportOutputLayout layout, bool replaceMode)
+    {
+        if (!int.TryParse(_selectedCompanyId, out var companyId))
+            return;
+
+        var clientName = SelectedCompanyName.Trim();
+        _useStableExportNames = replaceMode;
         _busy = true;
         try
         {
-            var layout = PathResolver.Resolve(
-                _userSettings,
-                companyId,
-                clientName,
-                _scanDate.ToString("yyyy-MM-dd"),
-                fallbackPath: _outputDirectory);
-            var outputDir = layout.OutputDirectory;
-            _outputDirectory = outputDir;
+            if (replaceMode)
+                QuarterFolderContentsHelper.ClearContents(layout.OutputDirectory);
 
+            var outputDir = layout.OutputDirectory;
             var reports = _standardReports.Where(r => _selectedReportTypes.Contains(r.Type)).ToList();
+            var downloadOptions = new ReportDownloadOptions(UseStableFilenames: replaceMode);
             var result = await ReportService.DownloadStandardReportsAsync(
                 companyId,
                 clientName,
                 layout,
                 reports,
+                downloadOptions,
                 new Progress<string>(m =>
                 {
                     _status = m;
@@ -394,7 +449,9 @@
             if (!string.IsNullOrEmpty(_downloadedAllVulnsPath))
             {
                 _filePath = _downloadedAllVulnsPath;
-                _status = "All Vulnerabilities ready — start the review session below.";
+                _status = replaceMode
+                    ? "All Vulnerabilities ready — quarter folder replaced with stable filenames."
+                    : "All Vulnerabilities ready — start the review session below.";
             }
             else
             {
@@ -477,6 +534,7 @@
                 exportTopN,
                 _isRmitPlus);
             session.OutputDirectory = ResolveSessionOutputDirectory(path) ?? "";
+            session.UseStableExportNames = _useStableExportNames;
             HostOsThresholdApplier.Apply(session, settings);
             DeliverableLinksResolver.ApplyDefaultsToSession(session, settings);
             RmitPlusSettings.Set(clientName, _isRmitPlus);

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\VScanMagic.Core\VScanMagic.Core.csproj" />
+    <ProjectReference Include="..\VScanMagic.Review\VScanMagic.Review.csproj" />
   </ItemGroup>
 
   <ItemGroup>

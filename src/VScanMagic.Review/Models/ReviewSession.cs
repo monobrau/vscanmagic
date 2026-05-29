@@ -81,6 +81,8 @@ public sealed class ReviewSession
     public bool IsRmitPlus { get; set; }
     /// <summary>Quarter folder where ConnectSecure downloads and Top N Word report are stored.</summary>
     public string OutputDirectory { get; set; } = "";
+    /// <summary>When true, exports use canonical filenames (no timestamp) to preserve OneDrive file links on replace reruns.</summary>
+    public bool UseStableExportNames { get; set; }
     public string? SourceFilePath { get; set; }
     public int ExportTopN { get; set; } = 10;
     /// <summary>SharePoint/OneDrive link to the Top N report for this quarterly deliverable.</summary>
@@ -89,6 +91,8 @@ public sealed class ReviewSession
     public string ReportsFolderUrl { get; set; } = "";
     /// <summary>TimeZest or other scheduling link for this deliverable (overrides Settings default).</summary>
     public string SchedulingLinkUrl { get; set; } = "";
+    /// <summary>Primary client recipient for the quarterly deliverable email (To field).</summary>
+    public string ClientDeliverableEmail { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
     /// <summary>When set, the review is hidden from the default list but kept for reference.</summary>

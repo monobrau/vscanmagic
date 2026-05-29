@@ -284,8 +284,9 @@ else
                 </div>
                 <div class="card-body">
                     <p class="form-text">
+                        Same formats as the ConnectSecure portal: individual IP, IP range (203.0.113.10-203.0.113.20 or 203.0.113.10-20), or CIDR.
                         CIDR subnets expand to usable addresses only: skip network (1st), ISP gateway (2nd), and broadcast (last).
-                        All saved targets are queued for external scanning.
+                        Ranges and single IPs scan exactly what you enter. All saved targets are queued for external scanning.
                     </p>
                     @if (_data.ExternalAssets.Count == 0 && _editingExternalId is null)
                     {
@@ -343,7 +344,7 @@ else
                                                     }
                                                 }
                                             </td>
-                                            <td class="text-end">@asset.ScanIpCount</td>
+                                            <td class="text-end">@(editing ? GetExternalIpCountPreview(_editExternalAddress) : asset.ScanIpCount)</td>
                                             <td class="text-end text-nowrap">
                                                 @if (editing)
                                                 {
@@ -896,6 +897,12 @@ else
 
     private static List<string> ValidateExternalInput(string input, bool strict = true) =>
         ExternalSubnetHelper.ValidateScanInputForUi(input, strict).ToList();
+
+    private static int GetExternalIpCountPreview(string input)
+    {
+        var validation = ExternalSubnetHelper.ParseAndValidateScanInput(input);
+        return validation.IsValid ? validation.ScanIps.Count : 0;
+    }
 
     private void RefreshEditInternalAddressValidation(bool strict = false)
     {

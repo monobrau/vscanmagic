@@ -158,6 +158,10 @@ public sealed class ReportPathResolver(CompanyFolderMapService companyFolderMapS
 
     public static string GetReportTimestamp() => DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
 
+    /// <summary>Builds report filename suffix; omit timestamp for stable OneDrive overwrite paths.</summary>
+    public static string FormatExportSuffix(string baseSuffix, string? timestamp) =>
+        string.IsNullOrWhiteSpace(timestamp) ? baseSuffix : $"{baseSuffix}_{timestamp}";
+
     public static string GetSafeReportOutputPath(string targetDir, string companyName, string reportSuffix, string ext)
     {
         var name = string.IsNullOrWhiteSpace(companyName) ? "Client" : companyName.Trim();

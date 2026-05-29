@@ -23,6 +23,7 @@ public sealed class PdfReviewExporter(RemediationRuleService remediationRules)
 
         var findings = ReviewSessionRanker.GetExportFindings(session);
         var maxRisk = findings.Count > 0 ? findings.Max(f => f.RiskScore) : 10;
+        var topLabel = ReviewExportLabels.GetTopNLabel(session);
 
         Document.Create(container =>
         {
@@ -30,7 +31,7 @@ public sealed class PdfReviewExporter(RemediationRuleService remediationRules)
             {
                 page.Margin(40);
                 page.DefaultTextStyle(x => x.FontSize(10));
-                page.Header().Text($"Top Ten Report - {session.ClientName}").SemiBold().FontSize(16);
+                page.Header().Text($"{topLabel} Report - {session.ClientName}").SemiBold().FontSize(16);
                 page.Content().Column(col =>
                 {
                     col.Item().Text($"Scan Date: {session.ScanDate}");
@@ -48,7 +49,7 @@ public sealed class PdfReviewExporter(RemediationRuleService remediationRules)
                         col.Item().Background($"#{bg}").Padding(6).Column(inner =>
                         {
                             inner.Item().Text($"{i + 1}. {f.Product} — {name} ({f.Status})").Bold();
-                            inner.Item().Text($"Risk: {f.RiskScore:N2} | EPSS: {f.Epss:N4} | Vulns: {f.VulnCount}");
+                            inner.Item().Text($"Risk: {f.RiskScore:N2} | EPSS: {f.Epss:N4} | Vulns: {FindingExportDetails.GetIncludedVulnCount(f)}");
                         });
 
                         var systems = FindingExportDetails.IncludedSystems(f);

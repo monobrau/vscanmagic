@@ -17,6 +17,7 @@ using VScanMagic.Review;
 using VScanMagic.Review.Services;
 using VScanMagic.Review.Models;
 using VScanMagic.Reports;
+using VScanMagic.Web.Services;
 
 namespace VScanMagic.Tests;
 
@@ -438,6 +439,41 @@ public class ReviewSessionRepositoryTests
         Assert.Single(visible);
         Assert.Equal("Active", visible[0].ClientName);
         Assert.Equal(2, all.Count);
+    }
+}
+
+public class ReviewExportLabelsTests
+{
+    [Fact]
+    public void GetReportTitle_UsesActualExportCountWhenBelowTopN()
+    {
+        var session = new ReviewSession
+        {
+            ExportTopN = 10,
+            Findings =
+            [
+                new ReviewFinding { IncludeInExport = true, OriginalRank = 1, Product = "A" },
+                new ReviewFinding { IncludeInExport = true, OriginalRank = 2, Product = "B" }
+            ]
+        };
+
+        Assert.Equal("Top 2 Vulnerabilities Report", ReviewExportLabels.GetReportTitle(session));
+        Assert.Equal("Top 2", ReviewExportLabels.GetTopNLabel(session));
+    }
+
+    [Fact]
+    public void GetReportTitle_UsesTopTenWhenExportCountIsTen()
+    {
+        var session = new ReviewSession
+        {
+            ExportTopN = 10,
+            Findings = Enumerable.Range(1, 10)
+                .Select(i => new ReviewFinding { IncludeInExport = true, OriginalRank = i, Product = $"P{i}" })
+                .ToList()
+        };
+
+        Assert.Equal("Top Ten Vulnerabilities Report", ReviewExportLabels.GetReportTitle(session));
+        Assert.Equal("Top Ten", ReviewExportLabels.GetTopNLabel(session));
     }
 }
 
@@ -1095,6 +1131,40 @@ public class CveReferenceHelperTopNTests
     }
 }
 
+public class CveOnlyFindingDisplayTests
+{
+    [Fact]
+    public void ParseNvdEnrichment_SplitsUrlsAndDescription()
+    {
+        var parsed = CveOnlyFindingDisplay.ParseNvdEnrichment(
+            "https://example.com/advisory | https://vendor.example/patch | Buffer overflow in legacy service.");
+
+        Assert.Equal(2, parsed.ReferenceUrls.Count);
+        Assert.Contains("https://example.com/advisory", parsed.ReferenceUrls);
+        Assert.Equal("Buffer overflow in legacy service.", parsed.Description);
+    }
+
+    [Fact]
+    public void GetListSubtitle_UsesNvdDescriptionWhenPresent()
+    {
+        var finding = new ReviewFinding
+        {
+            Product = "CVE-2021-33558",
+            NvdEnrichment = "https://nvd.nist.gov/x | Remote code execution in example component."
+        };
+
+        var subtitle = CveOnlyFindingDisplay.GetListSubtitle(finding);
+        Assert.Contains("Remote code execution", subtitle);
+    }
+
+    [Fact]
+    public void GetListSubtitle_PromptsWhenNvdMissing()
+    {
+        var finding = new ReviewFinding { Product = "CVE-2021-33558" };
+        Assert.Contains("select to load", CveOnlyFindingDisplay.GetListSubtitle(finding), StringComparison.OrdinalIgnoreCase);
+    }
+}
+
 public class ReviewSessionRankerCveTests
 {
     [Fact]
@@ -1494,6 +1564,75 @@ Note: No remediation will begin without your approval.
     }
 }
 
+public class ReviewUsernameRefreshServiceTests
+{
+    [Fact]
+    public void CollectHostnamesNeedingUsernames_OnlyExportFindingsWhenRequested()
+    {
+        var session = new ReviewSession
+        {
+            ExportTopN = 1,
+            Findings =
+            [
+                new ReviewFinding
+                {
+                    Product = "Chrome",
+                    Source = "Application",
+                    IncludeInExport = true,
+                    OriginalRank = 1,
+                    AffectedSystems =
+                    [
+                        new ReviewAffectedSystem { HostName = "PC1", Username = "" }
+                    ]
+                },
+                new ReviewFinding
+                {
+                    Product = "Reserve App",
+                    Source = "Application",
+                    IncludeInExport = false,
+                    OriginalRank = 2,
+                    AffectedSystems =
+                    [
+                        new ReviewAffectedSystem { HostName = "PC2", Username = "" }
+                    ]
+                }
+            ]
+        };
+
+        var exportOnly = ReviewUsernameRefreshService.CollectHostnamesNeedingUsernames(session, exportFindingsOnly: true);
+        var all = ReviewUsernameRefreshService.CollectHostnamesNeedingUsernames(session, exportFindingsOnly: false);
+
+        Assert.Equal(["PC1"], exportOnly);
+        Assert.Equal(["PC1", "PC2"], all);
+    }
+
+    [Fact]
+    public void CollectHostnamesNeedingUsernames_SkipsHostsThatAlreadyHaveUsernames()
+    {
+        var session = new ReviewSession
+        {
+            Findings =
+            [
+                new ReviewFinding
+                {
+                    Product = "Chrome",
+                    Source = "Application",
+                    IncludeInExport = true,
+                    AffectedSystems =
+                    [
+                        new ReviewAffectedSystem { HostName = "PC1", Username = "jsmith" },
+                        new ReviewAffectedSystem { HostName = "PC2", Username = "" }
+                    ]
+                }
+            ]
+        };
+
+        var hostnames = ReviewUsernameRefreshService.CollectHostnamesNeedingUsernames(session);
+
+        Assert.Equal(["PC2"], hostnames);
+    }
+}
+
 public class CveReferenceHelperTests
 {
     [Fact]
@@ -1740,6 +1879,23 @@ public class FindingExportDetailsTests
         var included = FindingExportDetails.IncludedSystems(finding);
         Assert.Single(included);
         Assert.Equal("PC1", included[0].HostName);
+    }
+
+    [Fact]
+    public void GetIncludedVulnCount_SumsIncludedHostsOnly()
+    {
+        var finding = new ReviewFinding
+        {
+            VulnCount = 100,
+            AffectedSystems =
+            [
+                new ReviewAffectedSystem { HostName = "PC1", Ip = "10.0.0.1", VulnCount = 5 },
+                new ReviewAffectedSystem { HostName = "PC2", Ip = "10.0.0.2", VulnCount = 3, ExcludedFromExport = true },
+                new ReviewAffectedSystem { HostName = "PC3", Ip = "10.0.0.3", VulnCount = 7 }
+            ]
+        };
+
+        Assert.Equal(12, FindingExportDetails.GetIncludedVulnCount(finding));
     }
 
     [Fact]
@@ -2257,6 +2413,34 @@ public class ReportCatalogBuilderTests
         Assert.Equal(2, groups.Count);
         Assert.Equal(2, groups.First(g => g.Name == "All Vulnerabilities Report").Formats.Count);
         Assert.True(groups.First(g => g.Name == "All Vulnerabilities Report").Formats.ContainsKey("xlsx"));
+    }
+}
+
+public class OutlookDeliverableDraftServiceTests
+{
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-an-email")]
+    public void TryValidateClientEmail_RejectsInvalid(string address)
+    {
+        var ok = OutlookDeliverableDraftService.TryValidateClientEmail(address, out var normalized, out var error);
+        Assert.False(ok);
+        Assert.Equal("", normalized);
+        Assert.False(string.IsNullOrWhiteSpace(error));
+    }
+
+    [Fact]
+    public void TryValidateClientEmail_AcceptsValidAddress()
+    {
+        var ok = OutlookDeliverableDraftService.TryValidateClientEmail(
+            "  client@example.com  ",
+            out var normalized,
+            out var error);
+
+        Assert.True(ok);
+        Assert.Equal("client@example.com", normalized);
+        Assert.Equal("", error);
     }
 }
 

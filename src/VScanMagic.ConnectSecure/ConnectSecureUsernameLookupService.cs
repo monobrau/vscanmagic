@@ -6,6 +6,8 @@ public sealed class ConnectSecureUsernameLookupService(ConnectSecureClient clien
 {
     private const int PageSize = 500;
 
+    public bool IsConfigured => client.IsConfigured;
+
     /// <summary>
     /// Returns a map from requested hostname to logged_in_user from ConnectSecure asset_view.
     /// Only hostnames with a match are included; values may be empty when not found.

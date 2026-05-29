@@ -4,12 +4,14 @@
 @using VScanMagic.Core.Services
 @using VScanMagic.Data
 @using VScanMagic.Review.Models
+@using VScanMagic.ConnectSecure
 @inject IReviewSessionRepository SessionRepo
 @inject ExportOrchestrator Exporter
 @inject VulnerabilityPipeline Pipeline
 @inject SettingsService Settings
 @inject ReportPathResolver PathResolver
 @inject ReportFolderHistoryService FolderHistory
+@inject ReviewUsernameRefreshService UsernameRefresh
 
 <PageTitle>Export</PageTitle>
 
@@ -149,11 +151,21 @@ else
             var layout = BuildLayout();
             _outputDir = layout.OutputDirectory;
 
+            var companyId = int.TryParse(_session.CompanyId, out var cid) ? cid : 0;
+            var usernameRefresh = await UsernameRefresh.RefreshSessionAsync(
+                _session, companyId, exportFindingsOnly: true);
+            if (usernameRefresh.UsernamesFilled > 0)
+                await SessionRepo.SaveAsync(_session);
+
             SessionExportOptions? options = null;
             if (_includeHostCounts && CanExportHostCounts)
             {
                 var summary = await Task.Run(() => Pipeline.SummarizeHosts(_session.SourceFilePath!));
-                options = new SessionExportOptions(true, summary.Hosts);
+                options = new SessionExportOptions(true, summary.Hosts, _session.UseStableExportNames);
+            }
+            else if (_session.UseStableExportNames)
+            {
+                options = new SessionExportOptions(UseStableFilenames: true);
             }
 
             _result = Exporter.ExportAll(_session, layout, options);

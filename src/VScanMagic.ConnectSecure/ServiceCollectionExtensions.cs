@@ -37,6 +37,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ConnectSecureReviewSuppressService>();
         services.AddSingleton<ConnectSecureScanService>();
         services.AddSingleton<ConnectSecureUsernameLookupService>();
+        services.AddSingleton<ReviewUsernameRefreshService>();
         return services;
     }
 }

@@ -186,15 +186,15 @@ public sealed class ConnectSecureCompanyReviewService(
             var name = ConnectSecureJsonReader.GetString(ds, "discovery_settings_name", "name");
             var address = ConnectSecureJsonReader.GetString(ds, "address");
             var targetIp = ConnectSecureJsonReader.GetString(ds, "target_ip", "targetIp", "target_ips");
-            var addr = FirstNonEmpty(address, targetIp);
-            if (string.IsNullOrWhiteSpace(addr))
+            var editableAddress = ExternalSubnetHelper.GetEditableAddress(address, targetIp);
+            if (string.IsNullOrWhiteSpace(editableAddress))
                 continue;
 
             var scanIps = ResolveExternalScanIps(address, targetIp);
             result.ExternalAssets.Add(new ExternalAssetEntry(
                 dsId,
                 string.IsNullOrWhiteSpace(name) ? "(unnamed)" : name,
-                addr,
+                editableAddress,
                 targetIp,
                 scanIps.Count));
 
@@ -576,6 +576,11 @@ public sealed class ConnectSecureCompanyReviewService(
 
         if (!string.IsNullOrWhiteSpace(address) && ExternalSubnetHelper.GetSubnetBounds(address) is not null)
             return ExternalSubnetHelper.ExpandCidrToUsableIps(address).ToList();
+
+        if (!string.IsNullOrWhiteSpace(address) &&
+            ExternalSubnetHelper.TryParseIpRange(address, out _, out var rangeIps, out _) &&
+            rangeIps.Count > 0)
+            return rangeIps.ToList();
 
         if (!string.IsNullOrWhiteSpace(address))
         {

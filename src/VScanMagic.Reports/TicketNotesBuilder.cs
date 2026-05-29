@@ -10,10 +10,7 @@ public static class TicketNotesBuilder
     public static string Build(ReviewSession session, TicketNotesTemplateSettings template, bool isRmitPlus = false)
     {
         isRmitPlus = session.IsRmitPlus || isRmitPlus;
-        var exportCount = ReviewSessionRanker.GetExportFindings(session).Count;
-        var topLabel = session.ExportTopN <= 0 ? "Top"
-            : session.ExportTopN == 10 && exportCount == 10 ? "Top Ten"
-            : $"Top {exportCount}";
+        var topLabel = ReviewExportLabels.GetTopNLabel(session);
 
         var reportStepLine = $"Produced {topLabel} vulnerabilities docx report";
         var stepsBefore = template.StepsBeforeTickets.Replace("{ReportStepLine}", reportStepLine, StringComparison.Ordinal);

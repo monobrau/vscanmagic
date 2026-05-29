@@ -185,6 +185,53 @@ public sealed class ExternalSubnetHelperTests
     }
 
     [Fact]
+    public void ParseAndValidateScanInput_ExpandsFullIpRange()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("162.211.0.42-162.211.0.46");
+        Assert.True(result.IsValid);
+        Assert.Equal("162.211.0.42-162.211.0.46", result.Address);
+        Assert.Equal(
+            ["162.211.0.42", "162.211.0.43", "162.211.0.44", "162.211.0.45", "162.211.0.46"],
+            result.ScanIps);
+        Assert.Equal("162.211.0.42, 162.211.0.43, 162.211.0.44, 162.211.0.45, 162.211.0.46", result.TargetIp);
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_ExpandsShorthandIpRange()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("203.0.113.10-20");
+        Assert.True(result.IsValid);
+        Assert.Equal("203.0.113.10-203.0.113.20", result.Address);
+        Assert.Equal(11, result.ScanIps.Count);
+    }
+
+    [Fact]
+    public void ParseAndValidateScanInput_RejectsInvalidIpRange()
+    {
+        var result = ExternalSubnetHelper.ParseAndValidateScanInput("203.0.113.20-203.0.113.10");
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("start must be less than or equal to end", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void GetEditableAddress_PrefersPortalAddressField()
+    {
+        var editable = ExternalSubnetHelper.GetEditableAddress(
+            "162.211.0.43-162.211.0.47",
+            "162.211.0.43, 162.211.0.44, 162.211.0.45, 162.211.0.46, 162.211.0.47");
+        Assert.Equal("162.211.0.43-162.211.0.47", editable);
+    }
+
+    [Fact]
+    public void GetEditableAddress_CollapsesConsecutiveTargetIpsToRange()
+    {
+        var editable = ExternalSubnetHelper.GetEditableAddress(
+            null,
+            "162.211.0.42, 162.211.0.43, 162.211.0.44, 162.211.0.45, 162.211.0.46");
+        Assert.Equal("162.211.0.42-162.211.0.46", editable);
+    }
+
+    [Fact]
     public void ParseAndValidateScanInput_AcceptsDottedMaskWithPipeSeparator()
     {
         var result = ExternalSubnetHelper.ParseAndValidateScanInput("192.168.54.0 | 255.255.255.0");

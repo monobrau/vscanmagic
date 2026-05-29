@@ -14,6 +14,12 @@ public static partial class ExternalSubnetHelper
     [GeneratedRegex(@"^\d+\.\d+\.\d+\.\d+/$")]
     private static partial Regex IncompleteCidrRegex();
 
+    [GeneratedRegex(@"^(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+)$")]
+    private static partial Regex FullIpRangeRegex();
+
+    [GeneratedRegex(@"^(\d+\.\d+\.\d+\.)(\d{1,3})\s*-\s*(\d{1,3})$")]
+    private static partial Regex ShorthandIpRangeRegex();
+
     [GeneratedRegex(@"^\d+\.\d+\.\d+\.\d+$")]
     private static partial Regex IpRegex();
 
@@ -66,17 +72,32 @@ public static partial class ExternalSubnetHelper
         {
             return new ExternalScanTargetValidationResult(
                 false,
-                ["Enter a CIDR subnet (e.g. 10.0.0.0/24) or IP with subnet mask (e.g. 10.0.0.0 255.255.255.0)."],
+                ["Enter a CIDR subnet (e.g. 10.0.0.0/24), IP range (e.g. 203.0.113.10-203.0.113.20), or IP with subnet mask (e.g. 10.0.0.0 255.255.255.0)."],
                 [],
                 "",
                 "");
         }
 
         var tokens = new List<string>();
+        var rangeAddresses = new List<string>();
         var errors = new List<string>();
+        var rangeIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var segment in segments)
         {
+            if (TryParseIpRange(segment, out var normalizedRange, out var expandedRangeIps, out var rangeErrors))
+            {
+                errors.AddRange(rangeErrors);
+                if (expandedRangeIps.Count > 0)
+                {
+                    rangeAddresses.Add(normalizedRange);
+                    foreach (var ip in expandedRangeIps)
+                        rangeIps.Add(ip);
+                }
+
+                continue;
+            }
+
             foreach (var expanded in ExpandSegment(segment))
             {
                 errors.AddRange(expanded.Errors);
@@ -85,7 +106,7 @@ public static partial class ExternalSubnetHelper
             }
         }
 
-        if (tokens.Count == 0 && errors.Count == 0)
+        if (tokens.Count == 0 && rangeIps.Count == 0 && errors.Count == 0)
             errors.Add("No scannable targets were resolved from the input.");
 
         var cidrTokens = tokens.Where(IsCidr).ToList();
@@ -123,13 +144,14 @@ public static partial class ExternalSubnetHelper
             }
         }
 
+        foreach (var ip in rangeIps)
+            scanIps.Add(ip);
+
         if (scanIps.Count == 0 && errors.Count == 0)
             errors.Add("No scannable IP addresses were resolved from the input.");
 
         var ordered = scanIps.OrderBy(IpSortKey).Select(IpSortKeyToString).ToList();
-        var address = cidrTokens.Count == 1 && ipTokens.Count == 0
-            ? cidrTokens[0]
-            : string.Join(", ", tokens);
+        var address = ResolveAddressField(segments, cidrTokens, ipTokens, rangeAddresses, tokens);
 
         return new ExternalScanTargetValidationResult(
             errors.Count == 0 && ordered.Count > 0,
@@ -202,6 +224,63 @@ public static partial class ExternalSubnetHelper
             return $"Scans 1 address: {validation.ScanIps[0]}";
 
         return $"Scans {validation.ScanIps.Count} addresses: {validation.ScanIps[0]} – {validation.ScanIps[^1]}";
+    }
+
+    /// <summary>
+    /// Prefer ConnectSecure <c>address</c> (individual, range, or CIDR). When only <c>target_ip</c> exists,
+    /// collapse consecutive IPs back to a range for editing.
+    /// </summary>
+    public static string GetEditableAddress(string? address, string? targetIp)
+    {
+        if (!string.IsNullOrWhiteSpace(address))
+            return NormalizeScanInput(address);
+
+        if (string.IsNullOrWhiteSpace(targetIp))
+            return "";
+
+        var ips = targetIp
+            .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => IsIp(p) && !p.Contains('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(IpSortKey)
+            .Select(IpSortKeyToString)
+            .ToList();
+
+        if (ips.Count == 0)
+            return targetIp.Trim();
+
+        if (ips.Count == 1)
+            return ips[0];
+
+        if (TryCollapseConsecutiveIps(ips, out var range))
+            return range;
+
+        return string.Join(", ", ips);
+    }
+
+    internal static bool TryCollapseConsecutiveIps(IReadOnlyList<string> ips, out string range)
+    {
+        range = "";
+        if (ips.Count < 2)
+            return false;
+
+        var values = new List<uint>();
+        foreach (var ip in ips)
+        {
+            if (!TryParseIpToUInt(ip, out var value))
+                return false;
+            values.Add(value);
+        }
+
+        values.Sort();
+        for (var i = 1; i < values.Count; i++)
+        {
+            if (values[i] != values[i - 1] + 1)
+                return false;
+        }
+
+        range = $"{UIntToIp(values[0])}-{UIntToIp(values[^1])}";
+        return true;
     }
 
     public static bool IsIncompleteScanInput(string input)
@@ -294,6 +373,90 @@ public static partial class ExternalSubnetHelper
         var broadcastLong = GetBroadcastLong(networkLong, prefix);
         var value = IpToUInt(ipAddress);
         return value >= networkLong && value <= broadcastLong;
+    }
+
+    public static bool TryParseIpRange(
+        string segment,
+        out string normalizedRange,
+        out IReadOnlyList<string> ips,
+        out List<string> errors)
+    {
+        normalizedRange = "";
+        ips = [];
+        errors = [];
+        segment = segment.Trim();
+        if (string.IsNullOrWhiteSpace(segment))
+            return false;
+
+        var full = FullIpRangeRegex().Match(segment);
+        if (full.Success)
+            return TryExpandIpRangeEndpoints(full.Groups[1].Value, full.Groups[2].Value, out normalizedRange, out ips, out errors);
+
+        var shorthand = ShorthandIpRangeRegex().Match(segment);
+        if (shorthand.Success)
+        {
+            var prefix = shorthand.Groups[1].Value;
+            var startOctet = shorthand.Groups[2].Value;
+            var endOctet = shorthand.Groups[3].Value;
+            return TryExpandIpRangeEndpoints($"{prefix}{startOctet}", $"{prefix}{endOctet}", out normalizedRange, out ips, out errors);
+        }
+
+        return false;
+    }
+
+    private static bool TryExpandIpRangeEndpoints(
+        string startIp,
+        string endIp,
+        out string normalizedRange,
+        out IReadOnlyList<string> ips,
+        out List<string> errors)
+    {
+        normalizedRange = "";
+        ips = [];
+        errors = [];
+
+        if (!IPAddress.TryParse(startIp, out var startAddress) ||
+            !IPAddress.TryParse(endIp, out var endAddress))
+        {
+            errors.Add($"Invalid IP range: {startIp}-{endIp}");
+            return true;
+        }
+
+        var start = IpToUInt(startAddress);
+        var end = IpToUInt(endAddress);
+        if (start > end)
+        {
+            errors.Add($"Invalid IP range: {startIp}-{endIp} (start must be less than or equal to end).");
+            return true;
+        }
+
+        var results = new List<string>();
+        for (var value = start; value <= end; value++)
+            results.Add(UIntToIp(value));
+
+        normalizedRange = $"{UIntToIp(start)}-{UIntToIp(end)}";
+        ips = results;
+        return true;
+    }
+
+    private static string ResolveAddressField(
+        IReadOnlyList<string> segments,
+        IReadOnlyList<string> cidrTokens,
+        IReadOnlyList<string> ipTokens,
+        IReadOnlyList<string> rangeAddresses,
+        IReadOnlyList<string> tokens)
+    {
+        if (segments.Count == 1 && rangeAddresses.Count == 1 && cidrTokens.Count == 0 && ipTokens.Count == 0)
+            return rangeAddresses[0];
+
+        if (cidrTokens.Count == 1 && ipTokens.Count == 0 && rangeAddresses.Count == 0)
+            return cidrTokens[0];
+
+        var parts = new List<string>();
+        parts.AddRange(rangeAddresses);
+        parts.AddRange(cidrTokens);
+        parts.AddRange(ipTokens.Where(ip => !parts.Contains(ip, StringComparer.OrdinalIgnoreCase)));
+        return parts.Count > 0 ? string.Join(", ", parts) : string.Join(", ", tokens);
     }
 
     private static List<string> SplitSegments(string input) =>

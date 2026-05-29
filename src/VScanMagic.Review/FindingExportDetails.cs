@@ -60,6 +60,10 @@ public static class FindingExportDetails
             .OrderByDescending(s => s.VulnCount)
             .ToList();
 
+    /// <summary>Total vulnerabilities for export after review host exclusions.</summary>
+    public static int GetIncludedVulnCount(ReviewFinding finding) =>
+        IncludedSystems(finding).Sum(s => s.VulnCount);
+
     public static IReadOnlyList<string> GetCveIds(ReviewFinding finding) =>
         CveReferenceHelper.SplitCveIds(CveReferenceHelper.NormalizeFindingCveIds(finding.CveIds, finding.Product));
 

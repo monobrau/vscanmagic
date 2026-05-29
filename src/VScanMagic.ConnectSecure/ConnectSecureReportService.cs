@@ -24,6 +24,17 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         ReportOutputLayout layout,
         IEnumerable<StandardReportRequest>? reports = null,
         IProgress<string>? progress = null,
+        CancellationToken ct = default) =>
+        await DownloadStandardReportsAsync(
+            companyId, clientName, layout, reports, new ReportDownloadOptions(), progress, ct).ConfigureAwait(false);
+
+    public async Task<StandardReportDownloadResult> DownloadStandardReportsAsync(
+        int companyId,
+        string clientName,
+        ReportOutputLayout layout,
+        IEnumerable<StandardReportRequest>? reports,
+        ReportDownloadOptions downloadOptions,
+        IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         var reportList = (reports ?? StandardReportCatalog.DefaultCompanyReports).ToList();
@@ -53,7 +64,7 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
             return new StandardReportDownloadResult([], resolveFailed);
 
         var result = await DownloadCatalogReportsAsync(
-            companyId, clientName, layout, items, progress, ct).ConfigureAwait(false);
+            companyId, clientName, layout, items, downloadOptions, progress, ct).ConfigureAwait(false);
 
         if (resolveFailed.Count == 0)
             return result;
@@ -79,6 +90,17 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         ReportOutputLayout layout,
         IEnumerable<CatalogReportDownloadRequest> requests,
         IProgress<string>? progress = null,
+        CancellationToken ct = default) =>
+        await DownloadCatalogReportsAsync(
+            companyId, clientName, layout, requests, new ReportDownloadOptions(), progress, ct).ConfigureAwait(false);
+
+    public async Task<StandardReportDownloadResult> DownloadCatalogReportsAsync(
+        int companyId,
+        string clientName,
+        ReportOutputLayout layout,
+        IEnumerable<CatalogReportDownloadRequest> requests,
+        ReportDownloadOptions downloadOptions,
+        IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         var reportList = requests.ToList();
@@ -95,7 +117,12 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         foreach (var report in reportList)
         {
             var downloadDir = ReportPathResolver.GetDownloadDirectory(layout, report.ReportType);
-            var path = BuildOutputPath(downloadDir, clientName, report.Name, report.Extension, timestamp);
+            var path = BuildOutputPath(
+                downloadDir,
+                clientName,
+                report.Name,
+                report.Extension,
+                downloadOptions.UseStableFilenames ? null : timestamp);
             try
             {
                 var jobId = await client.CreateReportJobAsync(
@@ -171,11 +198,17 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         return new StandardReportDownloadResult(succeeded, failed);
     }
 
-    private static string BuildOutputPath(string dir, string clientName, string reportName, string extension, string timestamp)
+    private static string BuildOutputPath(
+        string dir,
+        string clientName,
+        string reportName,
+        string extension,
+        string? timestamp)
     {
         var safeClient = SanitizeFileName(clientName);
         var safeReport = SanitizeFileName(reportName);
-        return Path.Combine(dir, $"{safeClient} - {safeReport}_{timestamp}.{extension}");
+        var suffix = string.IsNullOrWhiteSpace(timestamp) ? "" : $"_{timestamp}";
+        return Path.Combine(dir, $"{safeClient} - {safeReport}{suffix}.{extension}");
     }
 
     private static string SanitizeFileName(string name)

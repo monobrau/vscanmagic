@@ -85,13 +85,8 @@ public static class EmailTemplateBuilder
         return ("", normalized);
     }
 
-    public static string GetTopNLabel(ReviewSession session)
-    {
-        var exportCount = ReviewSessionRanker.GetExportFindings(session).Count;
-        return session.ExportTopN <= 0 ? "Top"
-            : session.ExportTopN == 10 && exportCount == 10 ? "Top Ten"
-            : $"Top {exportCount}";
-    }
+    public static string GetTopNLabel(ReviewSession session) =>
+        ReviewExportLabels.GetTopNLabel(session);
 
     public static string NormalizeDeliverableBodySpacing(string body)
     {

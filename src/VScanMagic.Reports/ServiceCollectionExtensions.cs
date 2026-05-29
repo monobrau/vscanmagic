@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VScanMagic.Core.Paths;
 using VScanMagic.Core.Services;
+using VScanMagic.Review;
 
 namespace VScanMagic.Reports;
 
@@ -20,7 +21,8 @@ public static class ServiceCollectionExtensions
 
 public sealed record SessionExportOptions(
     bool IncludeHostVulnerabilityCounts = false,
-    IReadOnlyList<Core.Models.HostVulnerabilitySummary>? HostCounts = null);
+    IReadOnlyList<Core.Models.HostVulnerabilitySummary>? HostCounts = null,
+    bool UseStableFilenames = false);
 
 public sealed class ExportOrchestrator(
     DocxReviewExporter docx,
@@ -37,16 +39,18 @@ public sealed class ExportOrchestrator(
         var topNDir = ReportPathResolver.GetTopNReportDirectory(layout);
         var supplementalDir = ReportPathResolver.GetSupplementalExportDirectory(layout);
 
-        var stamp = ReportPathResolver.GetReportTimestamp();
+        var useStable = options.UseStableFilenames || session.UseStableExportNames;
+        var stamp = useStable ? null : ReportPathResolver.GetReportTimestamp();
         var companyName = string.IsNullOrWhiteSpace(session.ClientName) ? "Client" : session.ClientName.Trim();
-        var reportTitle = GetReportTitle(session);
+        var reportTitle = ReviewExportLabels.GetReportTitle(session);
+        var topLabel = ReviewExportLabels.GetTopNLabel(session);
 
         var docxPath = ReportPathResolver.GetSafeReportOutputPath(
-            topNDir, companyName, $" {reportTitle}_{stamp}", "docx");
+            topNDir, companyName, ReportPathResolver.FormatExportSuffix($" {reportTitle}", stamp), "docx");
         var pdfPath = ReportPathResolver.GetSafeReportOutputPath(
-            supplementalDir, companyName, $" Top Ten Review (Client)_{stamp}", "pdf");
+            supplementalDir, companyName, ReportPathResolver.FormatExportSuffix($" {topLabel} Review (Client)", stamp), "pdf");
         var xlsxPath = ReportPathResolver.GetSafeReportOutputPath(
-            supplementalDir, companyName, $" Top Ten Data_{stamp}", "xlsx");
+            supplementalDir, companyName, ReportPathResolver.FormatExportSuffix($" {topLabel} Data", stamp), "xlsx");
 
         docx.Export(session, docxPath);
         pdf.Export(session, pdfPath);
@@ -73,16 +77,6 @@ public sealed class ExportOrchestrator(
             xlsxPath,
             hostCountsPdf,
             hostCountsXlsx);
-    }
-
-    private static string GetReportTitle(VScanMagic.Review.Models.ReviewSession session)
-    {
-        if (session.ExportTopN <= 0)
-            return "Top Vulnerabilities Report";
-
-        return session.ExportTopN == 10
-            ? "Top Ten Vulnerabilities Report"
-            : $"Top {session.ExportTopN} Vulnerabilities Report";
     }
 }
 

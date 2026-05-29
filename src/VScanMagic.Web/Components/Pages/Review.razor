@@ -1,11 +1,11 @@
 @page "/review/{SessionId}"
 @rendermode InteractiveServer
 @using VScanMagic.Review
+@using VScanMagic.Review.Services
 @using VScanMagic.Core.Configuration
 @using VScanMagic.Core.Models
 @using VScanMagic.Core.Risk
 @using VScanMagic.Core.Services
-@using VScanMagic.Review.Services
 @using VScanMagic.ConnectSecure
 @inject IReviewSessionRepository SessionRepo
 @inject NavigationManager Nav
@@ -16,7 +16,7 @@
 @inject ConnectSecureClient ConnectSecure
 @inject ConnectSecurePatchService PatchService
 @inject ConnectSecureReviewSuppressService ReviewSuppress
-@inject ConnectSecureUsernameLookupService UsernameLookup
+@inject ReviewUsernameRefreshService UsernameRefresh
 
 <PageTitle>Review Session</PageTitle>
 
@@ -260,7 +260,13 @@ else
                         {
                             <tr>
                                 <td><span class="badge bg-secondary">@candidate.Source</span></td>
-                                <td class="text-break">@candidate.Product</td>
+                                <td class="text-break">
+                                    @candidate.Product
+                                    @if (CveOnlyFindingDisplay.IsCveOnlyFinding(candidate))
+                                    {
+                                        <span class="badge bg-info text-dark ms-1">CVE-only</span>
+                                    }
+                                </td>
                                 <td>@ReviewCandidatePool.SeverityLabel(candidate)</td>
                                 <td class="text-end">@candidate.RiskScore.ToString("N2")</td>
                                 <td class="text-end">@candidate.Epss.ToString("N4")</td>
@@ -301,6 +307,10 @@ else
                                 @if (ReviewSessionRanker.GetExportRank(_session!, f) is int exportRank)
                                 {
                                     <strong>@exportRank.</strong>@(" ")@f.Product
+                                    @if (CveOnlyFindingDisplay.IsCveOnlyFinding(f))
+                                    {
+                                        <span class="badge bg-info text-dark ms-1">CVE-only</span>
+                                    }
                                     @if (f.ManuallyPromoted)
                                     {
                                         <span class="badge bg-primary ms-1">Added</span>
@@ -332,6 +342,10 @@ else
                             <span class="badge bg-dark flex-shrink-0">@f.RiskScore.ToString("N2")</span>
                         </div>
                         <small class="d-block mt-1">@FormatFindingRiskSummary(f)</small>
+                        @if (CveOnlyFindingDisplay.IsCveOnlyFinding(f))
+                        {
+                            <small class="d-block text-info-emphasis">@CveOnlyFindingDisplay.GetListSubtitle(f)</small>
+                        }
                         <small class="d-block">@f.Status · @IncludedHostCount(f) host(s)@FormatFindingBadges(f)</small>
                     </button>
                 </Virtualize>
@@ -376,6 +390,64 @@ else
                     </div>
                     <div class="card-body">
                         <p>@FormatFindingRiskSummary(_selected)</p>
+                        @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) || GetSelectedCveIds().Count > 0)
+                        {
+                            var cveContext = CveOnlyFindingDisplay.ParseNvdEnrichment(_selected.NvdEnrichment);
+                            <div class="mb-3 border rounded p-3 bg-light">
+                                @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
+                                {
+                                    <div class="alert alert-info py-2 small mb-3">@CveOnlyFindingDisplay.Explanation</div>
+                                }
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                                    <label class="form-label mb-0">
+                                        @(CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) ? "What this CVE is about" : "CVE context")
+                                    </label>
+                                    @if (!_readOnly)
+                                    {
+                                        <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
+                                            @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
+                                        </button>
+                                    }
+                                </div>
+                                @if (GetSelectedCveIds().Count > 0)
+                                {
+                                    <div class="d-flex flex-wrap gap-2 mb-2">
+                                        @foreach (var cve in GetSelectedCveIds())
+                                        {
+                                            <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
+                                        }
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(cveContext.Description))
+                                {
+                                    <p class="small mb-2">@cveContext.Description</p>
+                                }
+                                else if (_nvdBusy && string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
+                                {
+                                    <p class="small text-muted mb-2">Loading NVD description…</p>
+                                }
+                                else if (string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
+                                {
+                                    <p class="small text-muted mb-2">No NVD summary yet. Use Load NVD details or open a CVE link above.</p>
+                                }
+                                @if (cveContext.ReferenceUrls.Count > 0)
+                                {
+                                    <div class="small">
+                                        <strong>Advisories:</strong>
+                                        <ul class="mb-0 ps-3">
+                                            @foreach (var url in cveContext.ReferenceUrls)
+                                            {
+                                                <li><a href="@url" target="_blank" rel="noopener">@url</a></li>
+                                            }
+                                        </ul>
+                                    </div>
+                                }
+                                @if (!_readOnly && !string.IsNullOrWhiteSpace(_nvdStatus))
+                                {
+                                    <div class="form-text mt-2">@_nvdStatus</div>
+                                }
+                            </div>
+                        }
 
                         @if (!_readOnly)
                         {
@@ -698,7 +770,7 @@ else
                                 <label class="form-label">Revised Remediation</label>
                                 <textarea class="form-control" rows="6" @bind="_selected.RevisedRemediation" @bind:after="ScheduleSave"></textarea>
                             </div>
-                            @if (GetSelectedCveIds().Count > 0)
+                            @if (GetSelectedCveIds().Count > 0 && !CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
                             {
                                 <div class="mb-3">
                                     <label class="form-label">CVE references</label>
@@ -1030,6 +1102,9 @@ else
         _suppressRemediations = [];
         _suppressProblems = [];
         _suppressLoadCts?.Cancel();
+
+        if (!_readOnly && CveEnrichmentPolicy.ShouldEnrich(f))
+            _ = EnrichFindingInBackgroundAsync(f);
     }
 
     private Task LoadSuppressOptionsAsync()
@@ -1644,30 +1719,29 @@ else
             return;
         }
 
-        var hostnames = _session.Findings
-            .SelectMany(f => f.AffectedSystems ?? [])
-            .Select(s => s.HostName)
-            .Where(h => !string.IsNullOrWhiteSpace(h))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (hostnames.Count == 0)
-        {
-            _usernameRefreshError = "No hostnames on findings to look up.";
-            return;
-        }
-
         _usernameRefreshBusy = true;
         try
         {
-            var lookup = await UsernameLookup.GetUsernamesByHostnameAsync(companyId, hostnames);
-            var updated = ReviewUsernameLookup.ApplyEmptyUsernames(_session, lookup);
-            var matched = lookup.Values.Count(v => !string.IsNullOrWhiteSpace(v));
-            await SessionRepo.SaveAsync(_session);
+            var result = await UsernameRefresh.RefreshSessionAsync(_session, companyId, exportFindingsOnly: false);
+            if (result.Status == ReviewUsernameRefreshStatus.NoEmptyUsernames)
+            {
+                _usernameRefreshError = "All hosts already have usernames.";
+                return;
+            }
+
+            if (result.Status == ReviewUsernameRefreshStatus.Skipped && !string.IsNullOrWhiteSpace(result.Error))
+            {
+                _usernameRefreshError = result.Error;
+                return;
+            }
+
+            if (result.UsernamesFilled > 0)
+                await SessionRepo.SaveAsync(_session);
+
             RefreshFindingCaches();
-            _saveStatus = updated > 0
-                ? $"Refreshed usernames: filled {updated} host(s) from ConnectSecure ({matched} matched of {hostnames.Count} requested) at {DateTime.Now:HH:mm:ss}"
-                : $"Username refresh complete: no new usernames to fill ({matched} matched of {hostnames.Count} hosts) at {DateTime.Now:HH:mm:ss}";
+            _saveStatus = result.UsernamesFilled > 0
+                ? $"Refreshed usernames: filled {result.UsernamesFilled} host(s) from ConnectSecure ({result.LookupMatches} matched of {result.HostnamesRequested} requested) at {DateTime.Now:HH:mm:ss}"
+                : $"Username refresh complete: no new usernames to fill ({result.LookupMatches} matched of {result.HostnamesRequested} hosts) at {DateTime.Now:HH:mm:ss}";
         }
         catch (Exception ex)
         {

@@ -195,6 +195,11 @@ else
         <button class="btn btn-success me-2" disabled="@(!CanDownload)" @onclick="DownloadSelected">
             Download selected reports
         </button>
+        <QuarterFolderReplacePrompt Visible="@_showQuarterReplacePrompt"
+                                    QuarterFolderLabel="@_quarterReplaceLabel"
+                                    FileCount="@_quarterReplaceFileCount"
+                                    Busy="@_busy"
+                                    OnChoice="OnQuarterReplaceChoice" />
         @if (_scope == ReportCatalogScope.Company && !string.IsNullOrEmpty(_downloadedAllVulnsPath))
         {
             <button class="btn btn-primary" disabled="@_busy" @onclick="GoToIngest">Start review from All Vulnerabilities</button>
@@ -255,6 +260,11 @@ else
     private UserSettings _userSettings = new();
     private readonly CheckboxRangeColumn _bundleSelectRange = new();
     private readonly CheckboxRangeColumn _catalogSelectRange = new();
+    private bool _showQuarterReplacePrompt;
+    private string _quarterReplaceLabel = "";
+    private int _quarterReplaceFileCount;
+    private ReportOutputLayout? _pendingDownloadLayout;
+    private bool _useStableExportNames;
 
     private bool CanDownload =>
         !_busy &&
@@ -536,6 +546,7 @@ else
         _status = null;
         _downloadResult = null;
         _downloadedAllVulnsPath = null;
+        _showQuarterReplacePrompt = false;
 
         if (_scope == ReportCatalogScope.Company && string.IsNullOrEmpty(_selectedCompanyId))
         {
@@ -557,13 +568,49 @@ else
             return;
         }
 
+        var layout = ResolveDownloadLayout(companyId, clientName);
+        if (!_outputDirectoryOverridden)
+            _outputDirectory = layout.OutputDirectory;
+
+        if (QuarterFolderContentsHelper.HasContent(layout.OutputDirectory))
+        {
+            _pendingDownloadLayout = layout;
+            _quarterReplaceLabel = Path.GetFileName(layout.OutputDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            _quarterReplaceFileCount = QuarterFolderContentsHelper.CountFiles(layout.OutputDirectory);
+            _showQuarterReplacePrompt = true;
+            return;
+        }
+
+        await ExecuteDownloadAsync(layout, replaceMode: false);
+    }
+
+    private async Task OnQuarterReplaceChoice(QuarterFolderReplaceChoice choice)
+    {
+        _showQuarterReplacePrompt = false;
+        if (choice == QuarterFolderReplaceChoice.Cancel || _pendingDownloadLayout is null)
+        {
+            _pendingDownloadLayout = null;
+            return;
+        }
+
+        var layout = _pendingDownloadLayout;
+        _pendingDownloadLayout = null;
+        await ExecuteDownloadAsync(layout, choice == QuarterFolderReplaceChoice.Replace);
+    }
+
+    private async Task ExecuteDownloadAsync(ReportOutputLayout layout, bool replaceMode)
+    {
+        var companyId = ResolveCompanyId();
+        var clientName = SelectedClientName.Trim();
+        _useStableExportNames = replaceMode;
         _busy = true;
         try
         {
-            var layout = ResolveDownloadLayout(companyId, clientName);
+            if (replaceMode)
+                QuarterFolderContentsHelper.ClearContents(layout.OutputDirectory);
+
             var outputDir = layout.OutputDirectory;
-            if (!_outputDirectoryOverridden)
-                _outputDirectory = outputDir;
+            var downloadOptions = new ReportDownloadOptions(UseStableFilenames: replaceMode);
 
             StandardReportDownloadResult? bundleResult = null;
             if (HasBundleSelection())
@@ -574,6 +621,7 @@ else
                     clientName,
                     layout,
                     bundle,
+                    downloadOptions,
                     new Progress<string>(m =>
                     {
                         _status = m;
@@ -590,6 +638,7 @@ else
                     clientName,
                     layout,
                     catalogItems,
+                    downloadOptions,
                     new Progress<string>(m =>
                     {
                         _status = m;
@@ -621,7 +670,9 @@ else
             Settings.SaveUserSettings(userSettings);
             _userSettings = userSettings;
             RefreshResolvedOutputPath();
-            _status = $"Downloaded {succeeded.Count} report(s), {failed.Count} failed.";
+            _status = replaceMode
+                ? $"Downloaded {succeeded.Count} report(s) with quarter folder replaced ({failed.Count} failed)."
+                : $"Downloaded {succeeded.Count} report(s), {failed.Count} failed.";
         }
         catch (Exception ex)
         {
@@ -663,7 +714,8 @@ else
             return;
 
         var path = Uri.EscapeDataString(_downloadedAllVulnsPath);
-        Nav.NavigateTo($"/?allVulns={path}");
+        var stable = _useStableExportNames ? "&stableExport=1" : "";
+        Nav.NavigateTo($"/?allVulns={path}{stable}");
     }
 
     private sealed record DownloadUiResult(

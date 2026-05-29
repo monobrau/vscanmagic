@@ -1,0 +1,32 @@
+@if (Visible)
+{
+    <div class="alert alert-warning quarter-replace-prompt mb-3">
+        <p class="mb-2">
+            <strong>@QuarterFolderLabel</strong> already exists for this client and contains @FileCount file@(FileCount == 1 ? "" : "s").
+            Replace existing quarter files with this run?
+        </p>
+        <p class="small mb-3 mb-md-2">
+            The quarter <strong>folder</strong> link should keep working. The <strong>Top N</strong> file link stays valid when export uses the same filename (replace mode).
+            You may still need to re-copy links after export.
+        </p>
+        <div class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-warning" disabled="@Busy" @onclick="() => OnChoice.InvokeAsync(QuarterFolderReplaceChoice.Replace)">
+                Replace and continue
+            </button>
+            <button type="button" class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => OnChoice.InvokeAsync(QuarterFolderReplaceChoice.KeepExisting)">
+                Keep existing files
+            </button>
+            <button type="button" class="btn btn-outline-secondary" disabled="@Busy" @onclick="() => OnChoice.InvokeAsync(QuarterFolderReplaceChoice.Cancel)">
+                Cancel
+            </button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public string QuarterFolderLabel { get; set; } = "";
+    [Parameter] public int FileCount { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<QuarterFolderReplaceChoice> OnChoice { get; set; }
+}

@@ -41,7 +41,7 @@ public sealed class FlatXlsxExporter
             ws.Cell(row, 9).Value = f.High;
             ws.Cell(row, 10).Value = f.Medium;
             ws.Cell(row, 11).Value = f.Low;
-            ws.Cell(row, 12).Value = f.VulnCount;
+            ws.Cell(row, 12).Value = FindingExportDetails.GetIncludedVulnCount(f);
             ws.Cell(row, 13).Value = ExcelCellText.FormatAffectedSystemsForExcel(f);
             ws.Cell(row, 14).Value = ExcelCellText.Truncate(FindingExportDetails.GetRemediationText(f));
             ws.Cell(row, 15).Value = ExcelCellText.Truncate(f.MeetingNotes);

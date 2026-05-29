@@ -400,4 +400,45 @@ public sealed class ReportPathResolverTests : IDisposable
         Assert.Equal(pinned, layout.OutputDirectory);
         Assert.EndsWith("Misc", layout.TextOutputDirectory);
     }
+
+    [Fact]
+    public void FormatExportSuffix_WithTimestamp_AppendsStamp()
+    {
+        Assert.Equal(" Top Ten Data_2026-05-21_143022", ReportPathResolver.FormatExportSuffix(" Top Ten Data", "2026-05-21_143022"));
+    }
+
+    [Fact]
+    public void FormatExportSuffix_WithoutTimestamp_ReturnsBaseSuffix()
+    {
+        Assert.Equal(" Top Ten Vulnerabilities Report", ReportPathResolver.FormatExportSuffix(" Top Ten Vulnerabilities Report", null));
+    }
+
+    [Fact]
+    public void QuarterFolderContentsHelper_HasContent_FalseWhenEmpty()
+    {
+        var quarter = Path.Combine(_root, "2026 - Q2");
+        Directory.CreateDirectory(quarter);
+
+        Assert.False(QuarterFolderContentsHelper.HasContent(quarter));
+        Assert.Equal(0, QuarterFolderContentsHelper.CountFiles(quarter));
+    }
+
+    [Fact]
+    public void QuarterFolderContentsHelper_CountsAndClearsQuarterAndMisc()
+    {
+        var quarter = Path.Combine(_root, "2026 - Q2");
+        var misc = Path.Combine(quarter, ReportPathResolver.MiscSubfolderName);
+        Directory.CreateDirectory(misc);
+        File.WriteAllText(Path.Combine(quarter, "report.xlsx"), "x");
+        File.WriteAllText(Path.Combine(misc, "extra.pdf"), "y");
+
+        Assert.True(QuarterFolderContentsHelper.HasContent(quarter));
+        Assert.Equal(2, QuarterFolderContentsHelper.CountFiles(quarter));
+
+        QuarterFolderContentsHelper.ClearContents(quarter);
+
+        Assert.False(QuarterFolderContentsHelper.HasContent(quarter));
+        Assert.True(Directory.Exists(quarter));
+        Assert.True(Directory.Exists(misc));
+    }
 }

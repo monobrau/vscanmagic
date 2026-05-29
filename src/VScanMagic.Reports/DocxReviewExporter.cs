@@ -26,9 +26,10 @@ public sealed class DocxReviewExporter(RemediationRuleService remediationRules)
 
         var findings = ReviewSessionRanker.GetExportFindings(session);
         var maxRisk = findings.Count > 0 ? findings.Max(f => f.RiskScore) : 10;
-        var topLabel = session.ExportTopN <= 0 ? "Top" : (findings.Count == session.ExportTopN ? $"Top {session.ExportTopN}" : $"Top {findings.Count}");
+        var reportTitle = ReviewExportLabels.GetReportTitle(session);
+        var topLabel = ReviewExportLabels.GetTopNLabel(session);
 
-        AppendParagraph(body, "Top Ten Vulnerabilities Report", bold: true, size: 32, center: true);
+        AppendParagraph(body, reportTitle, bold: true, size: 32, center: true);
         AppendParagraph(body, session.ClientName, bold: true, size: 24, center: true);
         AppendParagraph(body, $"Scan Date: {session.ScanDate}", size: 22, center: true);
         AppendParagraph(body, $"Prepared by: {session.Presenter}", size: 20, center: true);
@@ -49,7 +50,7 @@ public sealed class DocxReviewExporter(RemediationRuleService remediationRules)
         {
             var f = findings[i];
             AppendParagraph(body, $"{FindingTitleFormatter.FormatDocxHeading(f, i + 1, session.IsRmitPlus)} [{f.Status}]", bold: true, size: 24);
-            AppendParagraph(body, $"Risk Score: {f.RiskScore:N2} | EPSS: {f.Epss:N4} | Avg CVSS: {f.AvgCvss:N2} | Total Vulns: {f.VulnCount}");
+            AppendParagraph(body, $"Risk Score: {f.RiskScore:N2} | EPSS: {f.Epss:N4} | Avg CVSS: {f.AvgCvss:N2} | Total Vulns: {FindingExportDetails.GetIncludedVulnCount(f)}");
             AppendParagraph(body, "Affected Systems:", bold: true);
             AppendAffectedSystems(body, f);
             var cveReferences = CveExportFormatter.FormatReferencesSection(f);
