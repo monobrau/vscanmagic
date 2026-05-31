@@ -1,4 +1,5 @@
 using VScanMagic.ConnectSecure;
+using VScanMagic.Core.IO;
 using VScanMagic.Core.Models;
 using VScanMagic.Core.Paths;
 using VScanMagic.Core.Services;
@@ -12,6 +13,10 @@ namespace VScanMagic.Web.Services;
 
 public sealed class BulkReviewJobService
 {
+    private static readonly TimeSpan ProgressPersistInterval = TimeSpan.FromSeconds(2);
+    private static readonly IReadOnlyList<StandardReportRequest> BulkPrepReports =
+        StandardReportCatalog.AllVulnerabilitiesOnly;
+
     private readonly IBulkReviewJobRepository _jobRepo;
     private readonly IReviewSessionRepository _sessionRepo;
     private readonly ConnectSecureReportService _reportService;
@@ -23,8 +28,11 @@ public sealed class BulkReviewJobService
     private readonly RmitPlusSettingsService _rmitPlusSettings;
 
     private readonly SemaphoreSlim _runLock = new(1, 1);
+    private readonly object _progressLock = new();
     private CancellationTokenSource? _runCts;
     private string? _activeJobId;
+    private volatile bool _cancelRequested;
+    private DateTimeOffset _lastProgressPersist = DateTimeOffset.MinValue;
 
     public BulkReviewJobService(
         IBulkReviewJobRepository jobRepo,
@@ -52,6 +60,9 @@ public sealed class BulkReviewJobService
 
     public string? ActiveJobId => _activeJobId;
 
+    public Task RecoverInterruptedJobsAsync(CancellationToken ct = default) =>
+        _jobRepo.RecoverInterruptedJobsAsync(ct);
+
     public Task<IReadOnlyList<BulkReviewJob>> ListJobsAsync(int limit = 20, CancellationToken ct = default) =>
         _jobRepo.ListAsync(limit, ct);
 
@@ -74,7 +85,10 @@ public sealed class BulkReviewJobService
         try
         {
             if (_activeJobId is not null)
+            {
+                _runLock.Release();
                 return (false, "A bulk job is already running.", null);
+            }
 
             var job = new BulkReviewJob
             {
@@ -92,6 +106,7 @@ public sealed class BulkReviewJobService
 
             await _jobRepo.SaveAsync(job, ct);
 
+            _cancelRequested = false;
             _runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _activeJobId = job.Id;
             _ = Task.Run(async () =>
@@ -117,6 +132,7 @@ public sealed class BulkReviewJobService
 
     public async Task CancelActiveJobAsync(CancellationToken ct = default)
     {
+        _cancelRequested = true;
         _runCts?.Cancel();
         if (_activeJobId is null)
             return;
@@ -132,6 +148,7 @@ public sealed class BulkReviewJobService
 
     private async Task RunJobAsync(string jobId, CancellationToken ct)
     {
+        var userSettingsDirty = false;
         try
         {
             var job = await _jobRepo.GetAsync(jobId, ct);
@@ -144,15 +161,12 @@ public sealed class BulkReviewJobService
             var userSettings = _settings.LoadUserSettings();
             var exportFilters = ReportFilters.FromUserSettings(userSettings);
             var exportTopN = exportFilters.TopN;
-            var reports = StandardReportCatalog.DefaultCompanyReports.ToList();
 
             foreach (var item in job.Items)
             {
-                if (ct.IsCancellationRequested)
+                if (IsJobCancelled(ct))
                 {
-                    job.Status = BulkReviewJobStatus.Cancelled;
-                    job.ErrorMessage = "Cancelled.";
-                    await _jobRepo.SaveAsync(job, ct);
+                    await MarkJobCancelledAsync(job, ct);
                     return;
                 }
 
@@ -161,13 +175,11 @@ public sealed class BulkReviewJobService
 
                 try
                 {
-                    await ProcessItemAsync(job, item, userSettings, exportFilters, exportTopN, reports, ct);
+                    userSettingsDirty |= await ProcessItemAsync(job, item, userSettings, exportFilters, exportTopN, ct);
                 }
                 catch (OperationCanceledException)
                 {
-                    job.Status = BulkReviewJobStatus.Cancelled;
-                    job.ErrorMessage = "Cancelled.";
-                    await _jobRepo.SaveAsync(job, ct);
+                    await MarkJobCancelledAsync(job, ct);
                     return;
                 }
                 catch (Exception ex)
@@ -179,32 +191,56 @@ public sealed class BulkReviewJobService
                 }
             }
 
-            job.Status = job.Items.Any(i => i.Phase == BulkReviewItemPhase.Completed)
-                ? BulkReviewJobStatus.Completed
-                : BulkReviewJobStatus.Failed;
+            if (userSettingsDirty)
+                _settings.SaveUserSettings(userSettings);
 
-            if (job.FailedCount > 0 && job.CompletedCount > 0)
-                job.ErrorMessage = $"{job.CompletedCount} succeeded, {job.FailedCount} failed.";
-            else if (job.FailedCount > 0 && job.CompletedCount == 0)
-                job.ErrorMessage = "All clients failed.";
-
-            await _jobRepo.SaveAsync(job, ct);
+            await FinalizeJobAsync(job, ct);
         }
         finally
         {
             _activeJobId = null;
+            _cancelRequested = false;
             _runCts?.Dispose();
             _runCts = null;
         }
     }
 
-    private async Task ProcessItemAsync(
+    private async Task FinalizeJobAsync(BulkReviewJob job, CancellationToken ct)
+    {
+        if (IsJobCancelled(ct) || job.Status == BulkReviewJobStatus.Cancelled)
+        {
+            await MarkJobCancelledAsync(job, ct);
+            return;
+        }
+
+        job.Status = job.Items.Any(i => i.Phase == BulkReviewItemPhase.Completed)
+            ? BulkReviewJobStatus.Completed
+            : BulkReviewJobStatus.Failed;
+
+        if (job.FailedCount > 0 && job.CompletedCount > 0)
+            job.ErrorMessage = $"{job.CompletedCount} succeeded, {job.FailedCount} failed.";
+        else if (job.FailedCount > 0 && job.CompletedCount == 0)
+            job.ErrorMessage = "All clients failed.";
+
+        await _jobRepo.SaveAsync(job, ct);
+    }
+
+    private async Task MarkJobCancelledAsync(BulkReviewJob job, CancellationToken ct)
+    {
+        job.Status = BulkReviewJobStatus.Cancelled;
+        job.ErrorMessage ??= "Cancelled.";
+        await _jobRepo.SaveAsync(job, ct);
+    }
+
+    private bool IsJobCancelled(CancellationToken ct) =>
+        _cancelRequested || ct.IsCancellationRequested;
+
+    private async Task<bool> ProcessItemAsync(
         BulkReviewJob job,
         BulkReviewJobItem item,
         UserSettings userSettings,
         ReportFilters exportFilters,
         int exportTopN,
-        IReadOnlyList<StandardReportRequest> reports,
         CancellationToken ct)
     {
         if (!int.TryParse(item.CompanyId, out var companyId))
@@ -215,8 +251,9 @@ public sealed class BulkReviewJobService
             throw new InvalidOperationException("Company name is empty.");
 
         item.Phase = BulkReviewItemPhase.Downloading;
-        item.StatusMessage = "Downloading reports...";
+        item.StatusMessage = "Downloading All Vulnerabilities report...";
         item.ErrorMessage = null;
+        ResetProgressThrottle();
         await _jobRepo.SaveAsync(job, ct);
 
         var layout = _pathResolver.Resolve(
@@ -230,17 +267,17 @@ public sealed class BulkReviewJobService
         string? allVulnsPath = null;
         const int maxAttempts = 2;
         Exception? lastCorruptError = null;
+        var settingsDirty = false;
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var reportsForAttempt = attempt == 1 ? reports : StandardReportCatalog.AllVulnerabilitiesOnly;
-
             if (attempt > 1)
             {
                 item.Phase = BulkReviewItemPhase.Downloading;
-                item.StatusMessage = "Retrying All Vulnerabilities download…";
+                item.StatusMessage = "Retrying All Vulnerabilities download (ConnectSecure may still be preparing the file)…";
+                ResetProgressThrottle();
                 await _jobRepo.SaveAsync(job, ct);
-                TryDeleteFile(allVulnsPath);
+                XlsxFileValidator.TryDeleteFile(allVulnsPath);
             }
 
             var progress = new Progress<string>(msg =>
@@ -249,14 +286,14 @@ public sealed class BulkReviewJobService
                     return;
 
                 item.StatusMessage = msg;
-                PersistJobProgress(job);
+                PersistJobProgressThrottled(job);
             });
 
             var downloadResult = await _reportService.DownloadStandardReportsAsync(
                 companyId,
                 clientName,
                 layout,
-                reportsForAttempt,
+                BulkPrepReports,
                 downloadOptions,
                 progress,
                 ct).ConfigureAwait(false);
@@ -273,20 +310,19 @@ public sealed class BulkReviewJobService
             }
 
             allVulnsPath = allVulns.Path;
-            if (!IsLikelyValidXlsx(allVulnsPath))
+            if (!XlsxFileValidator.IsLikelyValidXlsx(allVulnsPath))
             {
                 if (attempt < maxAttempts)
                     continue;
 
                 throw new InvalidOperationException(
-                    "Downloaded All Vulnerabilities file is invalid or incomplete. " +
-                    "Try Report downloader for this client, or run bulk prep again.");
+                    "All Vulnerabilities file is not ready to read yet. ConnectSecure may still be generating it for large clients — try Report downloader or run bulk prep again.");
             }
 
             item.OutputDirectory = layout.OutputDirectory;
             _folderHistory.Add(clientName, layout.OutputDirectory);
             ReportOutputDirectoryPersistence.UpdateLastOutputDirectory(userSettings, layout.OutputDirectory);
-            _settings.SaveUserSettings(userSettings);
+            settingsDirty = true;
 
             item.Phase = BulkReviewItemPhase.Ingesting;
             item.StatusMessage = "Creating review session...";
@@ -328,9 +364,9 @@ public sealed class BulkReviewJobService
                 item.StatusMessage = "Review session created.";
                 item.SessionId = session.Id;
                 await _jobRepo.SaveAsync(job, ct);
-                return;
+                return settingsDirty;
             }
-            catch (Exception ex) when (IsCorruptExcelError(ex))
+            catch (Exception ex) when (XlsxFileValidator.IsCorruptExcelError(ex))
             {
                 lastCorruptError = ex;
                 if (attempt < maxAttempts)
@@ -339,56 +375,25 @@ public sealed class BulkReviewJobService
         }
 
         throw new InvalidOperationException(
-            "All Vulnerabilities XLSX could not be read (file may be truncated). " +
-            "Use Report downloader for this client, then Start client review manually.",
+            "All Vulnerabilities XLSX could not be read after waiting for ConnectSecure to finish. " +
+            "Use Report downloader for this client (allow extra time for large reports), then start review manually.",
             lastCorruptError);
     }
 
-    private static bool IsLikelyValidXlsx(string path)
+    private void ResetProgressThrottle() =>
+        _lastProgressPersist = DateTimeOffset.MinValue;
+
+    private void PersistJobProgressThrottled(BulkReviewJob job)
     {
-        if (!File.Exists(path))
-            return false;
-
-        var info = new FileInfo(path);
-        if (info.Length < 512)
-            return false;
-
-        Span<byte> header = stackalloc byte[2];
-        using var stream = File.OpenRead(path);
-        return stream.Read(header) == 2 && header[0] == 0x50 && header[1] == 0x4B;
-    }
-
-    private static bool IsCorruptExcelError(Exception ex)
-    {
-        for (var current = ex; current is not null; current = current.InnerException)
+        var now = DateTimeOffset.UtcNow;
+        lock (_progressLock)
         {
-            if (current.Message.Contains("corrupted data", StringComparison.OrdinalIgnoreCase) ||
-                current.Message.Contains("invalid signature", StringComparison.OrdinalIgnoreCase) ||
-                current.Message.Contains("central directory", StringComparison.OrdinalIgnoreCase))
-                return true;
+            if (now - _lastProgressPersist < ProgressPersistInterval)
+                return;
+
+            _lastProgressPersist = now;
         }
 
-        return false;
-    }
-
-    private static void TryDeleteFile(string? path)
-    {
-        if (string.IsNullOrEmpty(path))
-            return;
-
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch
-        {
-            // Best effort before retry.
-        }
-    }
-
-    private void PersistJobProgress(BulkReviewJob job)
-    {
         try
         {
             _jobRepo.SaveAsync(job, CancellationToken.None).GetAwaiter().GetResult();

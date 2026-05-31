@@ -33,45 +33,34 @@ else
                 Scan: @_session.ScanDate | Presenter: @_session.Presenter | Export set: @ExportSetLabel()
                 | Client type: @(_session.IsRmitPlus ? "RMIT+" : "RMIT/CMIT")
             </p>
-            @if (!_readOnly)
+            <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" @bind="_session.IsRmitPlus" @bind:after="OnClientTypeChanged" id="sessionRmitPlus" />
+                <label class="form-check-label" for="sessionRmitPlus">RMIT+ client (affects email and ticket HTML exports)</label>
+            </div>
+            <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ApplyOsHostThresholds">
+                    Apply OS host thresholds
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
+                    @(_usernameRefreshBusy ? "Refreshing usernames…" : "Refresh usernames")
+                </button>
+                <span class="form-text">
+                    OS thresholds: Application-scan OS findings only.
+                    Usernames: ConnectSecure logged-in user per host (fills blanks only).
+                </span>
+            </div>
+            @if (!TryGetCompanyId(out _))
             {
-                <div class="form-check mt-2">
-                    <input class="form-check-input" type="checkbox" @bind="_session.IsRmitPlus" @bind:after="OnClientTypeChanged" id="sessionRmitPlus" />
-                    <label class="form-check-label" for="sessionRmitPlus">RMIT+ client (affects email and ticket HTML exports)</label>
-                </div>
-                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
-                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ApplyOsHostThresholds">
-                        Apply OS host thresholds
-                    </button>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
-                        @(_usernameRefreshBusy ? "Refreshing usernames…" : "Refresh usernames")
-                    </button>
-                    <span class="form-text">
-                        OS thresholds: Application-scan OS findings only.
-                        Usernames: ConnectSecure logged-in user per host (fills blanks only).
-                    </span>
-                </div>
-                @if (!TryGetCompanyId(out _))
-                {
-                    <p class="form-text text-warning mb-0">Set company ID below to refresh usernames from ConnectSecure during the client call.</p>
-                }
+                <p class="form-text text-warning mb-0">Set company ID below to refresh usernames from ConnectSecure during the client call.</p>
             }
         </div>
         <div>
             <a class="btn btn-outline-secondary me-2" href="@($"/hostname-review?sessionId={SessionId}")">Host Vuln Counts</a>
-            @if (!_readOnly)
-            {
-                <button type="button" class="btn btn-outline-secondary me-2" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
-                    @(_usernameRefreshBusy ? "Refreshing…" : "Refresh usernames")
-                </button>
-                <a class="btn btn-outline-secondary me-2" href="@($"/review/{SessionId}?mode=client")" target="_blank">Open Client View</a>
-                <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">Deliverables <HelpTip Text="Copy ticket instructions, email (paste OneDrive links here), time estimate, and Manage PSA notes." /></a>
-                <a class="btn btn-success" href="@($"/export/{SessionId}")">Export</a>
-            }
-            else
-            {
-                <span class="badge bg-secondary">Read-only client view</span>
-            }
+            <button type="button" class="btn btn-outline-secondary me-2" disabled="@_usernameRefreshBusy" @onclick="RefreshUsernamesAsync">
+                @(_usernameRefreshBusy ? "Refreshing…" : "Refresh usernames")
+            </button>
+            <a class="btn btn-outline-primary me-2" href="@($"/review/{SessionId}/deliverables")">Deliverables <HelpTip Text="Copy ticket instructions, email (paste OneDrive links here), time estimate, and Manage PSA notes." /></a>
+            <a class="btn btn-success" href="@($"/export/{SessionId}")">Export</a>
         </div>
     </div>
 
@@ -99,7 +88,7 @@ else
             }
         </div>
     }
-    else if (!_readOnly)
+    else
     {
         <ul class="nav nav-tabs mb-3">
             <li class="nav-item">
@@ -120,7 +109,7 @@ else
         </ul>
     }
 
-    @if (_orderedFindings.Count > 0 && (_readOnly || _activeTab == TimeEstimatesTab))
+    @if (_orderedFindings.Count > 0 && _activeTab == TimeEstimatesTab)
     {
         <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -167,20 +156,13 @@ else
                                     <td class="text-break">@row.GroupKey</td>
                                     <td class="text-end">@row.HostCount</td>
                                     <td>
-                                        @if (_readOnly)
-                                        {
-                                            @row.SourceFinding.TimeEstimateHours
-                                        }
-                                        else
-                                        {
-                                            <input class="form-control form-control-sm" type="number" min="0" step="0.25"
-                                                   @bind="row.SourceFinding.TimeEstimateHours"
-                                                   @bind:after="() => OnTimeEstimateFieldChanged(row.SourceFinding)"
-                                                   list="timeEstimatePresets" />
-                                        }
+                                        <input class="form-control form-control-sm" type="number" min="0" step="0.25"
+                                               @bind="row.SourceFinding.TimeEstimateHours"
+                                               @bind:after="() => OnTimeEstimateFieldChanged(row.SourceFinding)"
+                                               list="timeEstimatePresets" />
                                     </td>
                                     <td class="text-center">
-                                        <input class="form-check-input" type="checkbox" disabled="@_readOnly"
+                                        <input class="form-check-input" type="checkbox"
                                                checked="@row.SourceFinding.AfterHours"
                                                @onclick="e => OnTimeEstimateCheckboxClick(rowIndex, TimeEstimateCheckbox.AfterHours, e)"
                                                @onclick:preventDefault
@@ -189,14 +171,14 @@ else
                                     @if (_session.IsRmitPlus)
                                     {
                                         <td class="text-center">
-                                            <input class="form-check-input" type="checkbox" disabled="@_readOnly"
+                                            <input class="form-check-input" type="checkbox"
                                                    checked="@row.SourceFinding.ThirdParty"
                                                    @onclick="e => OnTimeEstimateCheckboxClick(rowIndex, TimeEstimateCheckbox.ThirdParty, e)"
                                                    @onclick:preventDefault
                                                    id="@($"thirdParty-{rowId}")" />
                                         </td>
                                         <td class="text-center">
-                                            <input class="form-check-input" type="checkbox" disabled="@_readOnly"
+                                            <input class="form-check-input" type="checkbox"
                                                    checked="@row.SourceFinding.TicketGenerated"
                                                    @onclick="e => OnTimeEstimateCheckboxClick(rowIndex, TimeEstimateCheckbox.TicketGenerated, e)"
                                                    @onclick:preventDefault
@@ -208,20 +190,17 @@ else
                         </tbody>
                     </table>
                 </div>
-                @if (!_readOnly)
-                {
-                    <datalist id="timeEstimatePresets">
-                        @foreach (var preset in TimeEstimatePresets)
-                        {
-                            <option value="@preset"></option>
-                        }
-                    </datalist>
-                }
+                <datalist id="timeEstimatePresets">
+                    @foreach (var preset in TimeEstimatePresets)
+                    {
+                        <option value="@preset"></option>
+                    }
+                </datalist>
             </div>
         </div>
     }
 
-    @if (GetOrderedFindings().Count > 0 && !_readOnly && _activeTab == AddToExportTab)
+    @if (GetOrderedFindings().Count > 0 && _activeTab == AddToExportTab)
     {
         <div class="alert alert-info py-2">
             Network and registry findings are never auto-ranked into Top N. Review every item below and
@@ -248,10 +227,11 @@ else
                         <tr>
                             <th>Source</th>
                             <th>Product</th>
-                            <th>Severity</th>
-                            <th class="text-end">Risk</th>
-                            <th class="text-end">EPSS</th>
-                            <th class="text-end">Hosts</th>
+                            <th class="sortable-th" role="button" @onclick='() => SetCandidateSort("severity")'>Severity @CandidateSortIcon("severity")</th>
+                            <th class="text-end sortable-th" role="button" @onclick='() => SetCandidateSort("risk")'>Risk @CandidateSortIcon("risk")</th>
+                            <th class="text-end sortable-th" role="button" @onclick='() => SetCandidateSort("epss")'>EPSS @CandidateSortIcon("epss")</th>
+                            <th class="text-end sortable-th" role="button" @onclick='() => SetCandidateSort("cvss")'>CVSS @CandidateSortIcon("cvss")</th>
+                            <th class="text-end sortable-th" role="button" @onclick='() => SetCandidateSort("hosts")'>Hosts @CandidateSortIcon("hosts")</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -270,6 +250,7 @@ else
                                 <td>@ReviewCandidatePool.SeverityLabel(candidate)</td>
                                 <td class="text-end">@candidate.RiskScore.ToString("N2")</td>
                                 <td class="text-end">@candidate.Epss.ToString("N4")</td>
+                                <td class="text-end">@candidate.AvgCvss.ToString("N2")</td>
                                 <td class="text-end">@IncludedHostCount(candidate)</td>
                                 <td class="text-end text-nowrap">
                                     <button type="button" class="btn btn-outline-primary btn-sm" @onclick="() => PromoteCandidate(candidate)">Add to export</button>
@@ -283,11 +264,11 @@ else
         }
     }
 
-    @if (_orderedFindings.Count > 0 && (_readOnly || _activeTab == ReviewTab))
+    @if (_orderedFindings.Count > 0 && _activeTab == ReviewTab)
     {
     <div class="row">
         <div class="col-md-4">
-            @if (!_readOnly && _selectedFindingRanks.Count > 0)
+            @if (_selectedFindingRanks.Count > 0)
             {
                 <div class="alert alert-light py-2 small mb-2">
                     <strong>@_selectedFindingRanks.Count</strong> @(_selectedFindingRanks.Count == 1 ? "finding" : "findings") selected
@@ -350,10 +331,7 @@ else
                     </button>
                 </Virtualize>
             </div>
-            @if (!_readOnly)
-            {
-                <div class="form-text mt-2">Shift-click findings to select a range.</div>
-            }
+            <div class="form-text mt-2">Shift-click findings to select a range.</div>
         </div>
         <div class="col-md-8">
             @if (_selected is not null)
@@ -362,29 +340,22 @@ else
                     <div class="card-header">
                         <div>
                             <strong>@FormatFindingTitle(_selected)</strong> (@_selected.Source)
-                            @if (!_readOnly)
+                            @if (_selected.ConnectSecureSuppressed)
                             {
-                                @if (_selected.ConnectSecureSuppressed)
+                                <span class="badge bg-warning text-dark mt-2">Suppressed in ConnectSecure</span>
+                                @if (!string.IsNullOrWhiteSpace(_selected.SuppressionReason))
                                 {
-                                    <span class="badge bg-warning text-dark mt-2">Suppressed in ConnectSecure</span>
-                                    @if (!string.IsNullOrWhiteSpace(_selected.SuppressionReason))
-                                    {
-                                        <div class="form-text">@_selected.SuppressionReason@if (!string.IsNullOrWhiteSpace(_selected.SuppressionComments)) { <text> — @_selected.SuppressionComments</text> }</div>
-                                    }
-                                }
-                                else
-                                {
-                                    <div class="form-check mt-2 mb-0">
-                                        <input class="form-check-input" type="checkbox" checked="@_selected.IncludeInExport"
-                                               @onchange="e => SetFindingExport(e.Value is true)" id="includeExport" />
-                                        <label class="form-check-label" for="includeExport">Include finding in export</label>
-                                    </div>
-                                    <div class="form-text">Uncheck to drop this item — the next application reserve promotes into the suggested export set (@ExportSetLabel()). Network/registry items are added from the Add to export tab.</div>
+                                    <div class="form-text">@_selected.SuppressionReason@if (!string.IsNullOrWhiteSpace(_selected.SuppressionComments)) { <text> — @_selected.SuppressionComments</text> }</div>
                                 }
                             }
-                            else if (!_selected.IncludeInExport || _selected.ExcludedFromExport)
+                            else
                             {
-                                <span class="badge bg-secondary mt-1">Excluded from export</span>
+                                <div class="form-check mt-2 mb-0">
+                                    <input class="form-check-input" type="checkbox" checked="@_selected.IncludeInExport"
+                                           @onchange="e => SetFindingExport(e.Value is true)" id="includeExport" />
+                                    <label class="form-check-label" for="includeExport">Include finding in export</label>
+                                </div>
+                                <div class="form-text">Uncheck to drop this item — the next application reserve promotes into the suggested export set (@ExportSetLabel()). Network/registry items are added from the Add to export tab.</div>
                             }
                         </div>
                     </div>
@@ -404,14 +375,11 @@ else
                                 {
                                     <div class="alert alert-info py-2 small mb-3">@CveOnlyFindingDisplay.Explanation</div>
                                 }
-                                @if (!_readOnly)
-                                {
-                                    <div class="d-flex flex-wrap justify-content-end mb-2">
-                                        <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
-                                            @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
-                                        </button>
-                                    </div>
-                                }
+                                <div class="d-flex flex-wrap justify-content-end mb-2">
+                                    <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
+                                        @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
+                                    </button>
+                                </div>
                                 @if (cveCount > 0)
                                 {
                                     <div class="d-flex flex-wrap gap-2 mb-2">
@@ -445,7 +413,7 @@ else
                                         </ul>
                                     </div>
                                 }
-                                @if (!_readOnly && !string.IsNullOrWhiteSpace(_nvdStatus))
+                                @if (!string.IsNullOrWhiteSpace(_nvdStatus))
                                 {
                                     <div class="form-text mt-2">@_nvdStatus</div>
                                 }
@@ -453,10 +421,8 @@ else
                             </details>
                         }
 
-                        @if (!_readOnly)
-                        {
-                            <div class="mb-3 border rounded p-3 bg-light">
-                                <label class="form-label mb-2">Time estimate &amp; billing</label>
+                        <div class="mb-3 border rounded p-3 bg-light">
+                            <label class="form-label mb-2">Time estimate &amp; billing</label>
                                 <div class="row g-2 align-items-end">
                                     <div class="col-sm-4">
                                         <label class="form-label small mb-1" for="timeEstimateHours">Hours</label>
@@ -708,111 +674,58 @@ else
                                     </div>
                                 }
                             </div>
-                        }
-                        else
-                        {
-                            <p><strong>Affected:</strong> @FormatAffectedSystems(_selected)</p>
-                        }
 
-                        @if (_readOnly)
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select class="form-select" @bind="_selected.Status" @bind:after="ScheduleSave">
+                                @foreach (FindingStatus s in Enum.GetValues<FindingStatus>())
+                                {
+                                    <option value="@s">@s</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Revised Remediation</label>
+                            <textarea class="form-control" rows="6" @bind="_selected.RevisedRemediation" @bind:after="ScheduleSave"></textarea>
+                        </div>
+                        @if (GetSelectedCveIds().Count > 0 && !CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
                         {
-                            @if (_selected.TimeEstimateHours > 0 || _selected.AfterHours || (_session.IsRmitPlus && (_selected.ThirdParty || _selected.TicketGenerated)))
-                            {
-                                <p>
-                                    <strong>Time estimate:</strong>
-                                    @if (_selected.TimeEstimateHours > 0)
+                            var cveRefCount = GetSelectedCveIds().Count;
+                            <details class="mb-3">
+                                <summary class="review-collapsible-summary">
+                                    CVE references <span class="text-muted">(@cveRefCount)</span>
+                                </summary>
+                                <div class="mt-2">
+                                <div class="d-flex flex-wrap gap-2 mb-2">
+                                    @foreach (var cve in GetSelectedCveIds())
                                     {
-                                        <span>@_selected.TimeEstimateHours hour(s)</span>
+                                        <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
                                     }
-                                    else
-                                    {
-                                        <span>—</span>
-                                    }
-                                    @if (_selected.AfterHours)
-                                    {
-                                        <span class="badge bg-secondary ms-1">After Hours</span>
-                                    }
-                                    @if (_session.IsRmitPlus && _selected.ThirdParty)
-                                    {
-                                        <span class="badge bg-warning text-dark ms-1">3rd Party</span>
-                                    }
-                                    @if (_session.IsRmitPlus && TimeEstimateModifierHelper.IsTicketGenerated(_selected.AfterHours, _selected.TicketGenerated, _selected.ThirdParty))
-                                    {
-                                        <span class="badge bg-info text-dark ms-1">Ticket Generated</span>
-                                    }
-                                </p>
-                            }
-                            <p><strong>Status:</strong> @_selected.Status</p>
-                            <p><strong>Remediation:</strong></p>
-                            <p>@(_selected.RevisedRemediation)</p>
-                            @if (!string.IsNullOrWhiteSpace(_selected.MeetingNotes))
-                            {
-                                <p><strong>Notes:</strong> @_selected.MeetingNotes</p>
-                            }
-                            @if ((_selected.Tasks ?? []).Count > 0)
-                            {
-                                <ul>
-                                    @foreach (var t in _selected.Tasks ?? [])
-                                    {
-                                        <li>@t.Text</li>
-                                    }
-                                </ul>
-                            }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
+                                {
+                                    <div class="small border rounded p-2 bg-light mb-2" style="white-space: pre-wrap;">@_selected.NvdEnrichment</div>
+                                }
+                                <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
+                                    @(_nvdBusy ? "Fetching NVD…" : "Fetch NVD details")
+                                </button>
+                                @if (!string.IsNullOrWhiteSpace(_nvdStatus))
+                                {
+                                    <span class="form-text ms-2">@_nvdStatus</span>
+                                }
+                                </div>
+                            </details>
                         }
-                        else
-                        {
-                            <div class="mb-3">
-                                <label class="form-label">Status</label>
-                                <select class="form-select" @bind="_selected.Status" @bind:after="ScheduleSave">
-                                    @foreach (FindingStatus s in Enum.GetValues<FindingStatus>())
-                                    {
-                                        <option value="@s">@s</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Revised Remediation</label>
-                                <textarea class="form-control" rows="6" @bind="_selected.RevisedRemediation" @bind:after="ScheduleSave"></textarea>
-                            </div>
-                            @if (GetSelectedCveIds().Count > 0 && !CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
-                            {
-                                var cveRefCount = GetSelectedCveIds().Count;
-                                <details class="mb-3">
-                                    <summary class="review-collapsible-summary">
-                                        CVE references <span class="text-muted">(@cveRefCount)</span>
-                                    </summary>
-                                    <div class="mt-2">
-                                    <div class="d-flex flex-wrap gap-2 mb-2">
-                                        @foreach (var cve in GetSelectedCveIds())
-                                        {
-                                            <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
-                                        }
-                                    </div>
-                                    @if (!string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
-                                    {
-                                        <div class="small border rounded p-2 bg-light mb-2" style="white-space: pre-wrap;">@_selected.NvdEnrichment</div>
-                                    }
-                                    <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
-                                        @(_nvdBusy ? "Fetching NVD…" : "Fetch NVD details")
-                                    </button>
-                                    @if (!string.IsNullOrWhiteSpace(_nvdStatus))
-                                    {
-                                        <span class="form-text ms-2">@_nvdStatus</span>
-                                    }
-                                    </div>
-                                </details>
-                            }
-                            <div class="mb-3">
-                                <label class="form-label">Meeting Notes</label>
-                                <textarea class="form-control" rows="3" @bind="_selected.MeetingNotes" @bind:after="ScheduleSave"></textarea>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Tasks (one per line)</label>
-                                <textarea class="form-control" rows="3" @bind="_tasksText" @bind:after="UpdateTasks"></textarea>
-                            </div>
-                        }
+                        <div class="mb-3">
+                            <label class="form-label">Meeting Notes</label>
+                            <textarea class="form-control" rows="3" @bind="_selected.MeetingNotes" @bind:after="ScheduleSave"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Tasks (one per line)</label>
+                            <textarea class="form-control" rows="3" @bind="_tasksText" @bind:after="UpdateTasks"></textarea>
+                        </div>
 
-                        @if (!_readOnly && !string.IsNullOrWhiteSpace(_selected.OriginalFix))
+                        @if (!string.IsNullOrWhiteSpace(_selected.OriginalFix))
                         {
                             <details class="mt-3">
                                 <summary>ConnectSecure patch reference</summary>
@@ -836,12 +749,10 @@ else
     private static readonly decimal[] TimeEstimatePresets = [0.25m, 0.5m, 0.75m, 1m, 1.5m, 2m, 2.5m, 3m, 4m, 5m, 6m, 8m];
 
     [Parameter] public string SessionId { get; set; } = "";
-    [SupplyParameterFromQuery] public string? Mode { get; set; }
 
     private ReviewSession? _session;
     private ReviewFinding? _selected;
     private UserSettings _userSettings = new();
-    private bool _readOnly;
     private string _activeTab = ReviewTab;
     private string? _saveStatus;
     private string _tasksText = "";
@@ -857,6 +768,7 @@ else
     private readonly CheckboxRangeColumn _thirdPartyRange = new();
     private readonly CheckboxRangeColumn _ticketGeneratedRange = new();
     private string? _candidateSourceFilter;
+    private readonly TableColumnSort _candidateSort = new("risk", defaultDescending: true);
     private List<SuppressibleRemediationEntry> _suppressRemediations = [];
     private List<SuppressibleProblemEntry> _suppressProblems = [];
     private bool _suppressUsesProblemId;
@@ -886,7 +798,6 @@ else
 
     protected override async Task OnParametersSetAsync()
     {
-        _readOnly = string.Equals(Mode, "client", StringComparison.OrdinalIgnoreCase);
         _userSettings = SettingsSvc.LoadUserSettings();
         _session = await SessionRepo.GetAsync(SessionId);
         if (_session is not null)
@@ -901,7 +812,7 @@ else
                 !string.Equals(after.Product, prior, StringComparison.Ordinal)).Any(changed => changed);
             var fixesChanged = _session.Findings.Zip(beforeFixes, (after, prior) =>
                 !string.Equals(after.OriginalFix, prior, StringComparison.Ordinal)).Any(changed => changed);
-            if ((namesChanged || fixesChanged || hadCveData) && !_readOnly)
+            if (namesChanged || fixesChanged || hadCveData)
                 await SessionRepo.SaveAsync(_session);
             if (_session.Findings.Count > 0)
             {
@@ -913,8 +824,7 @@ else
 
             _sessionCompanyId = _session.CompanyId ?? "";
 
-            if (!_readOnly)
-                _ = AutoEnrichMissingAsync();
+            _ = AutoEnrichMissingAsync();
         }
 
         RefreshFindingCaches();
@@ -925,13 +835,49 @@ else
         _orderedFindings = (_session?.Findings ?? []).OrderBy(x => x.OriginalRank).ToList();
         _candidateFindings = _session is null
             ? []
-            : ReviewCandidatePool.GetCandidates(_session, _candidateSourceFilter).ToList();
+            : SortCandidates(ReviewCandidatePool.GetCandidates(_session, _candidateSourceFilter));
         _timeEstimateGroups = _session is null
             ? []
             : ReviewFindingTimeEstimate.GetExportGroups(_session).ToList();
     }
 
     private IReadOnlyList<ReviewFinding> GetOrderedFindings() => _orderedFindings;
+
+    private void SetCandidateSort(string column)
+    {
+        _candidateSort.Toggle(column, defaultDescending: true);
+        _candidateFindings = SortCandidates(_candidateFindings);
+    }
+
+    private string CandidateSortIcon(string column) => _candidateSort.Icon(column);
+
+    private List<ReviewFinding> SortCandidates(IEnumerable<ReviewFinding> items)
+    {
+        IEnumerable<ReviewFinding> q = _candidateSort.Column switch
+        {
+            "severity" => _candidateSort.Descending
+                ? items.OrderByDescending(ReviewCandidatePool.SeverityRank).ThenBy(f => f.OriginalRank)
+                : items.OrderBy(ReviewCandidatePool.SeverityRank).ThenBy(f => f.OriginalRank),
+            "risk" => _candidateSort.Descending
+                ? items.OrderByDescending(f => f.RiskScore).ThenBy(f => f.OriginalRank)
+                : items.OrderBy(f => f.RiskScore).ThenBy(f => f.OriginalRank),
+            "epss" => _candidateSort.Descending
+                ? items.OrderByDescending(f => f.Epss).ThenBy(f => f.OriginalRank)
+                : items.OrderBy(f => f.Epss).ThenBy(f => f.OriginalRank),
+            "cvss" => _candidateSort.Descending
+                ? items.OrderByDescending(f => f.AvgCvss).ThenBy(f => f.OriginalRank)
+                : items.OrderBy(f => f.AvgCvss).ThenBy(f => f.OriginalRank),
+            "hosts" => _candidateSort.Descending
+                ? items.OrderByDescending(GetIncludedHostCountValue).ThenBy(f => f.OriginalRank)
+                : items.OrderBy(GetIncludedHostCountValue).ThenBy(f => f.OriginalRank),
+            _ => items.OrderByDescending(f => f.RiskScore).ThenBy(f => f.OriginalRank)
+        };
+
+        return q.ToList();
+    }
+
+    private static int GetIncludedHostCountValue(ReviewFinding finding) =>
+        (finding.AffectedSystems ?? []).Count(s => !s.ExcludedFromExport);
 
     private bool IsFindingSelected(ReviewFinding finding) =>
         _selectedFindingRanks.Contains(finding.OriginalRank);
@@ -1112,7 +1058,7 @@ else
         _suppressProblems = [];
         _suppressLoadCts?.Cancel();
 
-        if (!_readOnly && CveEnrichmentPolicy.ShouldEnrich(f))
+        if (CveEnrichmentPolicy.ShouldEnrich(f))
             _ = EnrichFindingInBackgroundAsync(f);
     }
 
@@ -1708,7 +1654,7 @@ else
 
     private async Task ApplyOsHostThresholds()
     {
-        if (_session is null || _readOnly) return;
+        if (_session is null) return;
         _userSettings = SettingsSvc.LoadUserSettings();
         HostOsThresholdApplier.Apply(_session, _userSettings);
         await SessionRepo.SaveAsync(_session);
@@ -1718,7 +1664,7 @@ else
 
     private async Task RefreshUsernamesAsync()
     {
-        if (_readOnly || _session is null)
+        if (_session is null)
             return;
 
         _usernameRefreshError = null;
@@ -1771,7 +1717,7 @@ else
 
     private void ScheduleSave()
     {
-        if (_readOnly || _session is null) return;
+        if (_session is null) return;
         RefreshFindingCaches();
         _saveCts?.Cancel();
         _saveCts = new CancellationTokenSource();
@@ -1827,7 +1773,7 @@ else
 
     private async Task AutoEnrichMissingAsync()
     {
-        if (_session is null || _readOnly || _nvdBusy || !_userSettings.NvdEnrichOnIngest)
+        if (_session is null || _nvdBusy || !_userSettings.NvdEnrichOnIngest)
             return;
 
         if (!_session.Findings.Any(f => f.IncludeInExport && CveEnrichmentPolicy.ShouldEnrich(f)))

@@ -4,6 +4,7 @@ using VScanMagic.Core.Services;
 using VScanMagic.Reports;
 using VScanMagic.Review;
 using VScanMagic.Review.Models;
+using VScanMagic.Review.Storage;
 
 namespace VScanMagic.ConnectWiseManage;
 
@@ -30,6 +31,7 @@ public sealed class ConnectWiseManageTicketService
     private readonly SettingsService _settings;
     private readonly RemediationRuleService _remediationRules;
     private readonly ReportPathResolver _pathResolver;
+    private readonly IReviewSessionRepository _sessionRepo;
 
     public ConnectWiseManageTicketService(
         ConnectWiseManageClient client,
@@ -37,7 +39,8 @@ public sealed class ConnectWiseManageTicketService
         ConnectWiseManageSettingsStore manageSettings,
         SettingsService settings,
         RemediationRuleService remediationRules,
-        ReportPathResolver pathResolver)
+        ReportPathResolver pathResolver,
+        IReviewSessionRepository sessionRepo)
     {
         _client = client;
         _companyMap = companyMap;
@@ -45,6 +48,7 @@ public sealed class ConnectWiseManageTicketService
         _settings = settings;
         _remediationRules = remediationRules;
         _pathResolver = pathResolver;
+        _sessionRepo = sessionRepo;
     }
 
     public async Task<ManageTicketBatchResult> CreateTicketsForSessionAsync(
@@ -114,16 +118,19 @@ public sealed class ConnectWiseManageTicketService
                     Company = new ManageReference { Id = manageCompanyId }
                 }, ct).ConfigureAwait(false);
 
+                var ticketNumber = ticket.GetDisplayTicketNumber();
                 finding.ManageTicketId = ticket.Id;
-                finding.ManageTicketNumber = ticket.Id.ToString();
+                finding.ManageTicketNumber = ticketNumber;
                 finding.ManageTicketStatus = ticket.Status?.Name ?? "New";
                 finding.ManageTicketCreatedAt = DateTimeOffset.Now;
                 finding.TicketGenerated = true;
 
+                await _sessionRepo.SaveAsync(session, ct).ConfigureAwait(false);
+
                 created++;
                 results.Add(new ManageTicketCreateResult(
                     true,
-                    $"Created ticket #{finding.ManageTicketNumber}.",
+                    $"Created ticket #{ticketNumber}.",
                     finding.ManageTicketId,
                     finding.ManageTicketNumber,
                     finding.ManageTicketStatus));
@@ -146,15 +153,17 @@ public sealed class ConnectWiseManageTicketService
 
         var findings = ReviewSessionRanker.GetExportFindings(session);
         var refreshed = 0;
+        var dirty = false;
 
         foreach (var finding in findings.Where(f => f.ManageTicketId is not null))
         {
             try
             {
                 var ticket = await _client.GetTicketAsync(finding.ManageTicketId!.Value, ct).ConfigureAwait(false);
-                finding.ManageTicketNumber = ticket.Id.ToString();
+                finding.ManageTicketNumber = ticket.GetDisplayTicketNumber();
                 finding.ManageTicketStatus = ticket.Status?.Name ?? finding.ManageTicketStatus;
                 refreshed++;
+                dirty = true;
                 await Task.Delay(CreateDelay, ct).ConfigureAwait(false);
             }
             catch
@@ -162,6 +171,9 @@ public sealed class ConnectWiseManageTicketService
                 // Keep existing values when refresh fails for one ticket.
             }
         }
+
+        if (dirty)
+            await _sessionRepo.SaveAsync(session, ct).ConfigureAwait(false);
 
         return refreshed;
     }

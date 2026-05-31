@@ -5,7 +5,9 @@ using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components.Web;
 using VScanMagic.ConnectSecure;
+using VScanMagic.ConnectWiseManage;
 using VScanMagic.Core.Configuration;
+using VScanMagic.Core.IO;
 using VScanMagic.Core.Models;
 using VScanMagic.Data;
 using VScanMagic.Data.Parsing;
@@ -2507,6 +2509,145 @@ public class BulkReviewJobRepositoryTests
             if (Directory.Exists(dir))
                 Directory.Delete(dir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedJobs_MarksRunningAndQueuedAsFailed()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("VSCANMAGIC_CONFIG_DIR", dir);
+        try
+        {
+            using var repo = new SqliteBulkReviewJobRepository(dir);
+            var running = new BulkReviewJob
+            {
+                Status = BulkReviewJobStatus.Running,
+                Items = [new BulkReviewJobItem { CompanyId = "1", CompanyName = "A", Phase = BulkReviewItemPhase.Downloading }]
+            };
+            var queued = new BulkReviewJob
+            {
+                Status = BulkReviewJobStatus.Queued,
+                Items = [new BulkReviewJobItem { CompanyId = "2", CompanyName = "B", Phase = BulkReviewItemPhase.Pending }]
+            };
+            var completed = new BulkReviewJob
+            {
+                Status = BulkReviewJobStatus.Completed,
+                Items = [new BulkReviewJobItem { CompanyId = "3", CompanyName = "C", Phase = BulkReviewItemPhase.Completed }]
+            };
+
+            await repo.SaveAsync(running);
+            await repo.SaveAsync(queued);
+            await repo.SaveAsync(completed);
+
+            await repo.RecoverInterruptedJobsAsync();
+
+            var loadedRunning = await repo.GetAsync(running.Id);
+            var loadedQueued = await repo.GetAsync(queued.Id);
+            var loadedCompleted = await repo.GetAsync(completed.Id);
+
+            Assert.Equal(BulkReviewJobStatus.Failed, loadedRunning!.Status);
+            Assert.Equal(BulkReviewItemPhase.Failed, loadedRunning.Items[0].Phase);
+            Assert.Equal(BulkReviewJobStatus.Failed, loadedQueued!.Status);
+            Assert.Equal(BulkReviewJobStatus.Completed, loadedCompleted!.Status);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Environment.SetEnvironmentVariable("VSCANMAGIC_CONFIG_DIR", null);
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+}
+
+public class StandardReportCatalogTests
+{
+    [Fact]
+    public void SupplementalCompanyReports_ExcludesAllVulnerabilities()
+    {
+        Assert.Equal(5, StandardReportCatalog.SupplementalCompanyReports.Count);
+        Assert.DoesNotContain(
+            StandardReportCatalog.SupplementalCompanyReports,
+            r => r.Type.Equals("all-vulnerabilities", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            StandardReportCatalog.DefaultCompanyReports.Count,
+            StandardReportCatalog.AllVulnerabilitiesOnly.Count + StandardReportCatalog.SupplementalCompanyReports.Count);
+    }
+
+    [Fact]
+    public void FilterMissingReports_SkipsExistingStableFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var layout = new ReportOutputLayout
+            {
+                OutputDirectory = dir,
+                TextOutputDirectory = dir,
+                UsesStructuredPaths = false,
+                UsesMiscSubfolder = false
+            };
+            var client = "Contoso";
+            var existing = ConnectSecureReportService.GetExpectedReportPath(
+                layout,
+                client,
+                StandardReportCatalog.SupplementalCompanyReports[0],
+                useStableFilenames: true);
+            Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+            File.WriteAllText(existing, "placeholder");
+
+            var missing = ConnectSecureReportService.FilterMissingReports(
+                layout,
+                client,
+                StandardReportCatalog.SupplementalCompanyReports,
+                useStableFilenames: true);
+
+            Assert.Equal(4, missing.Count);
+            Assert.DoesNotContain(missing, r => r.Type == StandardReportCatalog.SupplementalCompanyReports[0].Type);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+}
+
+public class XlsxFileValidatorTests
+{
+    [Fact]
+    public void IsLikelyValidXlsx_RejectsTruncatedZipHeaderOnly()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N") + ".xlsx");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            File.WriteAllBytes(path, [0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]);
+            Assert.False(XlsxFileValidator.IsLikelyValidXlsx(path));
+        }
+        finally
+        {
+            XlsxFileValidator.TryDeleteFile(path);
+        }
+    }
+}
+
+public class ManageTicketDisplayTests
+{
+    [Fact]
+    public void GetDisplayTicketNumber_PrefersBoardTicketNumber()
+    {
+        var ticket = new ManageTicket { Id = 999, BoardTicketNumber = 12345 };
+        Assert.Equal("12345", ticket.GetDisplayTicketNumber());
+    }
+
+    [Fact]
+    public void GetDisplayTicketNumber_FallsBackToId()
+    {
+        var ticket = new ManageTicket { Id = 67890 };
+        Assert.Equal("67890", ticket.GetDisplayTicketNumber());
     }
 }
 

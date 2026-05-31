@@ -173,6 +173,17 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
                         progress?.Report($"Downloading {p.Report.Name}…");
                         await client.DownloadFileFromUrlAsync(url, p.Path, ct).ConfigureAwait(false);
                         ReportArchiveHelper.NormalizeDownloadedReportFile(p.Path);
+
+                        if (string.Equals(p.Report.Extension, "xlsx", StringComparison.OrdinalIgnoreCase) &&
+                            !XlsxFileValidator.IsLikelyValidXlsx(p.Path))
+                        {
+                            progress?.Report(
+                                $"Downloaded {p.Report.Name} is not ready yet — ConnectSecure may still be generating (large reports take longer). Waiting to retry…");
+                            XlsxFileValidator.TryDeleteFile(p.Path);
+                            stillPending.Add(p);
+                            continue;
+                        }
+
                         succeeded.Add(new DownloadedReport(p.Report.ReportId, p.Report.Name, p.Path));
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -209,6 +220,46 @@ public sealed class ConnectSecureReportService(ConnectSecureClient client)
         var safeReport = SanitizeFileName(reportName);
         var suffix = string.IsNullOrWhiteSpace(timestamp) ? "" : $"_{timestamp}";
         return Path.Combine(dir, $"{safeClient} - {safeReport}{suffix}.{extension}");
+    }
+
+    public static string GetExpectedReportPath(
+        ReportOutputLayout layout,
+        string clientName,
+        StandardReportRequest report,
+        bool useStableFilenames)
+    {
+        var downloadDir = ReportPathResolver.GetDownloadDirectory(layout, report.Type);
+        var timestamp = useStableFilenames ? null : DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+        return BuildOutputPath(downloadDir, clientName, report.Name, report.Extension, timestamp);
+    }
+
+    public static IReadOnlyList<StandardReportRequest> FilterMissingReports(
+        ReportOutputLayout layout,
+        string clientName,
+        IEnumerable<StandardReportRequest> reports,
+        bool useStableFilenames)
+    {
+        if (!useStableFilenames)
+            return reports.ToList();
+
+        var missing = new List<StandardReportRequest>();
+        foreach (var report in reports)
+        {
+            var path = GetExpectedReportPath(layout, clientName, report, useStableFilenames: true);
+            if (!File.Exists(path))
+            {
+                missing.Add(report);
+                continue;
+            }
+
+            if (string.Equals(report.Extension, "xlsx", StringComparison.OrdinalIgnoreCase) &&
+                !XlsxFileValidator.IsLikelyValidXlsx(path))
+            {
+                missing.Add(report);
+            }
+        }
+
+        return missing;
     }
 
     private static string SanitizeFileName(string name)

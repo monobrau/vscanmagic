@@ -4,7 +4,7 @@ A PowerShell tool for vulnerability management and report generation from Connec
 
 ## .NET 8 Rebuild (cross-platform)
 
-A new **.NET 8** implementation lives under [`src/`](src/README.md). It centers on **Client Review Sessions** (presenter web UI, read-only client view, post-review editable DOCX/PDF export) and does **not** require Microsoft Office.
+A new **.NET 8** implementation lives under [`src/`](src/README.md). It centers on **Client Review Sessions** (presenter web UI, post-review editable DOCX/PDF export) and does **not** require Microsoft Office.
 
 ```bash
 cd src

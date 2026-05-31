@@ -5,8 +5,11 @@
 @using VScanMagic.Data
 @using VScanMagic.Review.Models
 @using VScanMagic.ConnectSecure
+@using VScanMagic.Web.Services
 @inject IReviewSessionRepository SessionRepo
 @inject ExportOrchestrator Exporter
+@inject SessionSupplementalReportService SupplementalReports
+@inject ConnectSecureClient CsClient
 @inject VulnerabilityPipeline Pipeline
 @inject SettingsService Settings
 @inject ReportPathResolver PathResolver
@@ -52,6 +55,10 @@ else
             }
         </div>
     </div>
+    @if (!string.IsNullOrEmpty(_supplementalStatus))
+    {
+        <div class="alert alert-info py-2">@_supplementalStatus</div>
+    }
     @if (!string.IsNullOrEmpty(_error))
     {
         <div class="alert alert-danger">@_error</div>
@@ -82,6 +89,10 @@ else
         </div>
     }
     <button class="btn btn-primary" disabled="@_busy" @onclick="RunExport">Export client reports</button>
+    @if (CsClient.IsConfigured)
+    {
+        <p class="form-text mt-2 mb-0">Downloads the five other ConnectSecure standard reports into the quarter folder first (if missing), then writes Top N Word/PDF/XLSX exports.</p>
+    }
 }
 
 @code {
@@ -91,6 +102,7 @@ else
     private string? _pathHint;
     private ExportResult? _result;
     private string? _error;
+    private string? _supplementalStatus;
     private bool _busy;
     private bool _includeHostCounts;
     private UserSettings _userSettings = new();
@@ -146,10 +158,26 @@ else
         if (_session is null) return;
         _busy = true;
         _error = null;
+        _supplementalStatus = null;
         try
         {
             var layout = BuildLayout();
             _outputDir = layout.OutputDirectory;
+
+            if (CsClient.IsConfigured && !string.IsNullOrWhiteSpace(_session.CompanyId))
+            {
+                var supplemental = await SupplementalReports.EnsureSupplementalReportsAsync(
+                    _session,
+                    layout,
+                    new Progress<string>(msg => _supplementalStatus = msg));
+
+                if (supplemental.Succeeded.Count > 0 && supplemental.Failed.Count == 0)
+                    _supplementalStatus = $"Downloaded {supplemental.Succeeded.Count} ConnectSecure supplemental report(s).";
+                else if (supplemental.Succeeded.Count > 0)
+                    _supplementalStatus = $"Downloaded {supplemental.Succeeded.Count} supplemental report(s); {supplemental.Failed.Count} failed.";
+                else if (supplemental.Failed.Count > 0)
+                    _supplementalStatus = $"Supplemental report download: {string.Join("; ", supplemental.Failed.Select(f => f.Error))}";
+            }
 
             var companyId = int.TryParse(_session.CompanyId, out var cid) ? cid : 0;
             var usernameRefresh = await UsernameRefresh.RefreshSessionAsync(

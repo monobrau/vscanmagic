@@ -1,12 +1,12 @@
 ﻿@page "/"
 @rendermode InteractiveServer
+@using VScanMagic.Core.IO
 @using VScanMagic.Data
 @using VScanMagic.ConnectSecure
 @using VScanMagic.Core.Paths
 @using VScanMagic.Core.Services
 @using VScanMagic.Review
 @using VScanMagic.Review.Services
-@using VScanMagic.Web.Helpers
 @using VScanMagic.Web.Services
 @inject VulnerabilityPipeline Pipeline
 @inject ReviewSessionFactory SessionFactory
@@ -79,9 +79,9 @@
         @if (CsClient.IsConfigured)
         {
             <div class="home-download-section mb-4 pb-3 border-bottom">
-                <h2 class="h6 mb-3">1. Download from ConnectSecure <HelpTip Text="Standard quarterly bundle. All Vulnerabilities is selected below for the review session." /></h2>
+                <h2 class="h6 mb-3">1. Download All Vulnerabilities <HelpTip Text="Only All Vulnerabilities is needed to start review. The other five standard ConnectSecure reports download automatically when you export client reports." /></h2>
                 <div class="mb-3">
-                    <label class="form-label">Output directory <HelpTip Text="Quarterly folder under Reports Base Path when configured. Downloads and exports land here." AlignEnd="true" /></label>
+                    <label class="form-label">Output directory <HelpTip Text="Quarterly folder under Reports Base Path when configured. All Vulnerabilities lands here; other standard reports are added at export." AlignEnd="true" /></label>
                     <input class="form-control" @bind="_outputDirectory" @bind:after="OnOutputDirectoryChanged" />
                     @if (!string.IsNullOrWhiteSpace(_resolvedPathHint))
                     {
@@ -89,27 +89,19 @@
                     }
                 </div>
 
-                <p class="fw-semibold mb-2 small">Standard reports</p>
-                <div class="row mb-1">
-                    @for (var ri = 0; ri < _standardReports.Count; ri++)
-                    {
-                        var report = _standardReports[ri];
-                        var reportIndex = ri;
-                        <div class="col-md-6">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" checked="@GetReportSelected(report.Type)"
-                                       @onclick="e => OnReportCheckboxClick(reportIndex, e)" @onclick:preventDefault
-                                       id="@($"rep_{report.Type}")" />
-                                <label class="form-check-label" for="@($"rep_{report.Type}")">@report.Name (@report.Extension.ToUpperInvariant())</label>
-                            </div>
-                        </div>
-                    }
-                </div>
-                <p class="form-text mb-3">Shift-click to select a range. Include <strong>All Vulnerabilities</strong> to start the review below.</p>
-
-                <button class="btn btn-success" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="DownloadStandardReports">
-                    Download selected reports
+                <button class="btn btn-success" disabled="@(_busy || string.IsNullOrEmpty(_selectedCompanyId))" @onclick="DownloadAllVulnerabilities">
+                    @(_busy && !string.IsNullOrEmpty(_downloadStatus) ? "Downloading…" : "Download All Vulnerabilities")
                 </button>
+                <p class="form-text mt-2 mb-0">Large clients can take several minutes for ConnectSecure to generate and download the full All Vulnerabilities file. The app keeps waiting and retries if the file is not ready yet.</p>
+
+                @if (!string.IsNullOrEmpty(_downloadStatus))
+                {
+                    <div class="alert alert-info mt-3 mb-0 py-2">@_downloadStatus</div>
+                }
+                @if (!string.IsNullOrEmpty(_downloadError))
+                {
+                    <div class="alert alert-danger mt-3 mb-0 py-2">@_downloadError</div>
+                }
 
                 <QuarterFolderReplacePrompt Visible="@_showQuarterReplacePrompt"
                                             QuarterFolderLabel="@_quarterReplaceLabel"
@@ -165,7 +157,7 @@
         {
             <div class="alert alert-info py-2">@_status</div>
         }
-        @if (!string.IsNullOrEmpty(_error))
+        @if (!string.IsNullOrEmpty(_error) && string.IsNullOrEmpty(_downloadError))
         {
             <div class="alert alert-danger py-2">@_error</div>
         }
@@ -205,18 +197,17 @@
     private string _outputDirectory = "";
     private string? _uploadedPath;
     private string? _status;
+    private string? _downloadStatus;
+    private string? _downloadError;
     private string? _error;
     private bool _busy;
     private string _selectedCompanyId = "";
     private List<CompanyInfo> _companies = [];
-    private List<StandardReportRequest> _standardReports = [];
-    private HashSet<string> _selectedReportTypes = new(StringComparer.OrdinalIgnoreCase);
     private DownloadUiResult? _downloadResult;
     private string? _downloadedAllVulnsPath;
     private string? _resolvedPathHint;
     private UserSettings _userSettings = new();
     private bool _isRmitPlus;
-    private readonly CheckboxRangeColumn _reportSelectRange = new();
     private bool _showQuarterReplacePrompt;
     private string _quarterReplaceLabel = "";
     private int _quarterReplaceFileCount;
@@ -275,9 +266,6 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _standardReports = StandardReportCatalog.DefaultCompanyReports.ToList();
-        _selectedReportTypes = _standardReports.Select(r => r.Type).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var userSettings = Settings.LoadUserSettings();
         _userSettings = userSettings;
         _presenter = userSettings.PreparedBy;
@@ -316,25 +304,6 @@
             _useStableExportNames = true;
     }
 
-    private bool GetReportSelected(string type) => _selectedReportTypes.Contains(type);
-
-    private void SetReportSelected(string type, bool selected)
-    {
-        if (selected) _selectedReportTypes.Add(type);
-        else _selectedReportTypes.Remove(type);
-    }
-
-    private void OnReportCheckboxClick(int index, MouseEventArgs e)
-    {
-        if (index < 0 || index >= _standardReports.Count)
-            return;
-
-        var type = _standardReports[index].Type;
-        var newValue = !GetReportSelected(type);
-        _reportSelectRange.Click(index, newValue, e, (i, on) =>
-            SetReportSelected(_standardReports[i].Type, on));
-    }
-
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
         _error = null;
@@ -348,10 +317,12 @@
         _status = $"Uploaded {file.Name}";
     }
 
-    private async Task DownloadStandardReports()
+    private async Task DownloadAllVulnerabilities()
     {
         _error = null;
         _status = null;
+        _downloadStatus = null;
+        _downloadError = null;
         _downloadResult = null;
         _downloadedAllVulnsPath = null;
         _showQuarterReplacePrompt = false;
@@ -417,45 +388,77 @@
         var clientName = SelectedCompanyName.Trim();
         _useStableExportNames = replaceMode;
         _busy = true;
+        _downloadStatus = "Starting download…";
+        _downloadError = null;
         try
         {
             if (replaceMode)
                 QuarterFolderContentsHelper.ClearContents(layout.OutputDirectory);
 
             var outputDir = layout.OutputDirectory;
-            var reports = _standardReports.Where(r => _selectedReportTypes.Contains(r.Type)).ToList();
             var downloadOptions = new ReportDownloadOptions(UseStableFilenames: replaceMode);
-            var result = await ReportService.DownloadStandardReportsAsync(
-                companyId,
-                clientName,
-                layout,
-                reports,
-                downloadOptions,
-                new Progress<string>(m =>
+            string? allVulnsPath = null;
+            StandardReportDownloadResult? result = null;
+            const int maxAttempts = 2;
+
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                if (attempt > 1)
                 {
-                    _status = m;
-                    _ = InvokeAsync(() =>
+                    _downloadStatus = "Retrying All Vulnerabilities download (ConnectSecure may still be preparing the file)…";
+                    XlsxFileValidator.TryDeleteFile(allVulnsPath);
+                }
+
+                result = await ReportService.DownloadStandardReportsAsync(
+                    companyId,
+                    clientName,
+                    layout,
+                    StandardReportCatalog.AllVulnerabilitiesOnly,
+                    downloadOptions,
+                    new Progress<string>(m =>
                     {
-                        StateHasChanged();
-                        return Task.CompletedTask;
-                    });
-                }),
-                CancellationToken.None);
+                        _downloadStatus = m;
+                        _ = InvokeAsync(() =>
+                        {
+                            StateHasChanged();
+                            return Task.CompletedTask;
+                        });
+                    }),
+                    CancellationToken.None);
 
-            _downloadResult = new DownloadUiResult(outputDir, result.Succeeded.ToList(), result.Failed.ToList());
-            _downloadedAllVulnsPath = result.Succeeded
-                .FirstOrDefault(s => s.Name.Contains("All Vulnerabilities", StringComparison.OrdinalIgnoreCase))?.Path;
+                allVulnsPath = result.Succeeded
+                    .FirstOrDefault(s => s.Name.Contains("All Vulnerabilities", StringComparison.OrdinalIgnoreCase))?.Path;
 
-            if (!string.IsNullOrEmpty(_downloadedAllVulnsPath))
+                if (allVulnsPath is not null && XlsxFileValidator.IsLikelyValidXlsx(allVulnsPath))
+                    break;
+
+                if (attempt >= maxAttempts)
+                    break;
+            }
+
+            _downloadResult = new DownloadUiResult(outputDir, result!.Succeeded.ToList(), result.Failed.ToList());
+            _downloadedAllVulnsPath = allVulnsPath;
+
+            _downloadStatus = null;
+
+            if (!string.IsNullOrEmpty(_downloadedAllVulnsPath) &&
+                XlsxFileValidator.IsLikelyValidXlsx(_downloadedAllVulnsPath))
             {
                 _filePath = _downloadedAllVulnsPath;
-                _status = replaceMode
-                    ? "All Vulnerabilities ready — quarter folder replaced with stable filenames."
-                    : "All Vulnerabilities ready — start the review session below.";
+            }
+            else if (!string.IsNullOrEmpty(allVulnsPath))
+            {
+                _downloadError =
+                    "All Vulnerabilities did not finish downloading. Large clients need more time — try again and let ConnectSecure complete generation, or use Report downloader.";
+                XlsxFileValidator.TryDeleteFile(allVulnsPath);
+                _downloadedAllVulnsPath = null;
+                _downloadResult = null;
             }
             else
             {
-                _status = $"Downloaded {result.Succeeded.Count} report(s), {result.Failed.Count} failed. Select All Vulnerabilities in the bundle to ingest.";
+                _downloadError = result.Failed.Count > 0
+                    ? string.Join("; ", result.Failed.Select(f => $"{f.Name}: {f.Error}"))
+                    : "All Vulnerabilities report was not downloaded.";
             }
 
             FolderHistory.Add(clientName, outputDir);
@@ -469,7 +472,7 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _downloadError = ex.Message;
         }
         finally
         {
@@ -502,6 +505,12 @@
         if (string.IsNullOrWhiteSpace(clientName))
         {
             _error = "Select a company.";
+            return;
+        }
+
+        if (!XlsxFileValidator.IsLikelyValidXlsx(path))
+        {
+            _error = "The All Vulnerabilities file is not ready to read yet. Wait for the download to finish, or download again and verify it opens in Excel.";
             return;
         }
 
@@ -544,7 +553,9 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _error = XlsxFileValidator.IsCorruptExcelError(ex)
+                ? "The All Vulnerabilities file could not be read. If you just downloaded, ConnectSecure may still be finishing — wait and try again, or re-download and verify it opens in Excel."
+                : ex.Message;
         }
         finally
         {

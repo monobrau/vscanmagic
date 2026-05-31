@@ -35,4 +35,10 @@ public static class ReviewCandidatePool
         if (finding.Low > 0) return "Low";
         return "—";
     }
+
+    public static int SeverityRank(ReviewFinding finding) =>
+        finding.Critical > 0 ? 4 :
+        finding.High > 0 ? 3 :
+        finding.Medium > 0 ? 2 :
+        finding.Low > 0 ? 1 : 0;
 }

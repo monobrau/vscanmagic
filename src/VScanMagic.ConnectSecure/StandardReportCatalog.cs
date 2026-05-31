@@ -7,6 +7,16 @@ public static class StandardReportCatalog
         new("all-vulnerabilities", "All Vulnerabilities Report", "xlsx")
     ];
 
+    /// <summary>Standard bundle minus All Vulnerabilities — fetched at export time, not during review prep.</summary>
+    public static readonly IReadOnlyList<StandardReportRequest> SupplementalCompanyReports =
+    [
+        new("suppressed-vulnerabilities", "Suppressed Vulnerabilities", "xlsx"),
+        new("external-vulnerabilities", "External Scan", "xlsx"),
+        new("network-vulnerabilities", "Network Vulnerabilities", "xlsx"),
+        new("executive-summary", "Executive Summary Report", "docx"),
+        new("pending-epss", "Pending Remediation EPSS Score Reports", "xlsx")
+    ];
+
     public static readonly IReadOnlyList<StandardReportRequest> DefaultCompanyReports =
     [
         new("all-vulnerabilities", "All Vulnerabilities Report", "xlsx"),

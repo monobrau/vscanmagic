@@ -29,8 +29,7 @@ Open `http://127.0.0.1:8080` (override with `VSCANMAGIC_PORT` and `VSCANMAGIC_AP
 
 1. **Ingest** — Upload or specify path to All Vulnerabilities XLSX
 2. **Review** — Presenter UI for live client review (status, tasks, revised remediation)
-3. **Client view** — `/review/{id}?mode=client` read-only
-4. **Export** — Editable DOCX, read-only client PDF, ticket notes, email, XLSX
+3. **Export** — Editable DOCX, read-only client PDF, ticket notes, email, XLSX
 
 ## Configuration
 

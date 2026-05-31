@@ -121,9 +121,19 @@ public sealed class ManageTicket
 {
     public int Id { get; set; }
     public string? Summary { get; set; }
-    public int? IdNumber => Id;
     public ManageStatusReference? Status { get; set; }
-    public string? TicketNumber => Id.ToString();
+
+    /// <summary>Service board ticket number when returned separately from the record id.</summary>
+    [JsonPropertyName("ticketNumber")]
+    public int? BoardTicketNumber { get; set; }
+
+    public string GetDisplayTicketNumber()
+    {
+        if (BoardTicketNumber is > 0)
+            return BoardTicketNumber.Value.ToString();
+
+        return Id > 0 ? Id.ToString() : "";
+    }
 }
 
 public sealed class ManageStatusReference

@@ -1,3 +1,8 @@
+.sortable-th {
+    cursor: pointer;
+    user-select: none;
+}
+
 .review-collapsible-summary {
     cursor: pointer;
     font-weight: 600;

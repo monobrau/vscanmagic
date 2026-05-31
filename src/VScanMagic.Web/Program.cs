@@ -39,6 +39,7 @@ builder.Services.AddSingleton<AppRestartService>();
 builder.Services.AddSingleton<NativeFolderPickerService>();
 builder.Services.AddSingleton<OutlookDeliverableDraftService>();
 builder.Services.AddSingleton<BulkReviewJobService>();
+builder.Services.AddSingleton<SessionSupplementalReportService>();
 builder.Services.AddScoped<CompanyListService>();
 builder.Services.AddScoped<LoadTimingDisplay>();
 
@@ -77,6 +78,8 @@ var manageStore = app.Services.GetRequiredService<ConnectWiseManageSettingsStore
 var manageCreds = manageStore.LoadCredentials();
 if (!string.IsNullOrWhiteSpace(manageCreds.ApiUrl))
     app.Services.GetRequiredService<ConnectWiseManageClient>().Configure(manageCreds);
+
+await app.Services.GetRequiredService<BulkReviewJobService>().RecoverInterruptedJobsAsync();
 
 if (!app.Environment.IsDevelopment())
 {

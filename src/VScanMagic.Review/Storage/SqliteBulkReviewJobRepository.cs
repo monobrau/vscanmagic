@@ -10,6 +10,7 @@ public interface IBulkReviewJobRepository
     Task<IReadOnlyList<BulkReviewJob>> ListAsync(int limit = 20, CancellationToken ct = default);
     Task<BulkReviewJob?> GetAsync(string id, CancellationToken ct = default);
     Task SaveAsync(BulkReviewJob job, CancellationToken ct = default);
+    Task RecoverInterruptedJobsAsync(CancellationToken ct = default);
 }
 
 public sealed class SqliteBulkReviewJobRepository : IBulkReviewJobRepository, IDisposable
@@ -91,27 +92,83 @@ public sealed class SqliteBulkReviewJobRepository : IBulkReviewJobRepository, ID
     {
         job.UpdatedAt = DateTimeOffset.Now;
         var json = JsonSerializer.Serialize(job, JsonOptions);
+        await SaveJsonAsync(job, json, ct);
+    }
 
+    public async Task RecoverInterruptedJobsAsync(CancellationToken ct = default)
+    {
         await _lock.WaitAsync(ct);
         try
         {
-            await using var conn = new SqliteConnection(_connectionString);
-            await conn.OpenAsync(ct);
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                INSERT INTO bulk_review_jobs (id, status, created_at, updated_at, payload_json)
-                VALUES ($id, $status, $created, $updated, $json)
-                ON CONFLICT(id) DO UPDATE SET
-                    status = $status, updated_at = $updated, payload_json = $json
-                """;
-            cmd.Parameters.AddWithValue("$id", job.Id);
-            cmd.Parameters.AddWithValue("$status", job.Status.ToString());
-            cmd.Parameters.AddWithValue("$created", job.CreatedAt.ToString("O"));
-            cmd.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O"));
-            cmd.Parameters.AddWithValue("$json", json);
-            await cmd.ExecuteNonQueryAsync(ct);
+            var interrupted = new List<BulkReviewJob>();
+            await using (var conn = new SqliteConnection(_connectionString))
+            {
+                await conn.OpenAsync(ct);
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    SELECT payload_json FROM bulk_review_jobs
+                    WHERE status IN ($running, $queued)
+                    """;
+                cmd.Parameters.AddWithValue("$running", BulkReviewJobStatus.Running.ToString());
+                cmd.Parameters.AddWithValue("$queued", BulkReviewJobStatus.Queued.ToString());
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    var job = JsonSerializer.Deserialize<BulkReviewJob>(reader.GetString(0), JsonOptions);
+                    if (job is not null)
+                        interrupted.Add(job);
+                }
+            }
+
+            foreach (var job in interrupted)
+            {
+                job.Status = BulkReviewJobStatus.Failed;
+                job.ErrorMessage = "Interrupted by server restart.";
+                foreach (var item in job.Items)
+                {
+                    if (item.Phase is BulkReviewItemPhase.Completed or BulkReviewItemPhase.Skipped)
+                        continue;
+
+                    item.Phase = BulkReviewItemPhase.Failed;
+                    item.StatusMessage = "Failed.";
+                    item.ErrorMessage ??= "Interrupted by server restart.";
+                }
+
+                job.UpdatedAt = DateTimeOffset.Now;
+                var json = JsonSerializer.Serialize(job, JsonOptions);
+                await SaveJsonUnlockedAsync(job, json, ct);
+            }
         }
         finally { _lock.Release(); }
+    }
+
+    private async Task SaveJsonAsync(BulkReviewJob job, string json, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            await SaveJsonUnlockedAsync(job, json, ct);
+        }
+        finally { _lock.Release(); }
+    }
+
+    private async Task SaveJsonUnlockedAsync(BulkReviewJob job, string json, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO bulk_review_jobs (id, status, created_at, updated_at, payload_json)
+            VALUES ($id, $status, $created, $updated, $json)
+            ON CONFLICT(id) DO UPDATE SET
+                status = $status, updated_at = $updated, payload_json = $json
+            """;
+        cmd.Parameters.AddWithValue("$id", job.Id);
+        cmd.Parameters.AddWithValue("$status", job.Status.ToString());
+        cmd.Parameters.AddWithValue("$created", job.CreatedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$updated", job.UpdatedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$json", json);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public void Dispose() => _lock.Dispose();
