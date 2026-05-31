@@ -110,7 +110,7 @@ public sealed class OutlookDeliverableDraftService
         mail.Display(false);
 
         return OutlookDeliverableDraftResult.Ok(
-            "Opened in Classic Outlook. Click Encrypt if needed, then Send.");
+            "Opened in Classic Outlook. Review and click Send — Exchange encrypts and copies to security-deliverables automatically.");
     }
 
     private static void SetBodyPreservingSignature(dynamic mailItem, string bodyHtmlFragment)
