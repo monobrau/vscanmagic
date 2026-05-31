@@ -1,4 +1,5 @@
 using VScanMagic.ConnectSecure;
+using VScanMagic.ConnectWiseManage;
 using VScanMagic.Core;
 using VScanMagic.Core.Services;
 using VScanMagic.Data;
@@ -32,10 +33,12 @@ builder.Services.AddVScanMagicData();
 builder.Services.AddVScanMagicReview();
 builder.Services.AddVScanMagicReports();
 builder.Services.AddVScanMagicConnectSecure();
+builder.Services.AddVScanMagicConnectWiseManage();
 builder.Services.AddSingleton<ExportOrchestrator>();
 builder.Services.AddSingleton<AppRestartService>();
 builder.Services.AddSingleton<NativeFolderPickerService>();
 builder.Services.AddSingleton<OutlookDeliverableDraftService>();
+builder.Services.AddSingleton<BulkReviewJobService>();
 builder.Services.AddScoped<CompanyListService>();
 builder.Services.AddScoped<LoadTimingDisplay>();
 
@@ -70,6 +73,11 @@ var savedCreds = app.Services.GetRequiredService<SettingsService>().LoadConnectS
 if (!string.IsNullOrWhiteSpace(savedCreds.BaseUrl))
     app.Services.GetRequiredService<ConnectSecureClient>().Configure(savedCreds);
 
+var manageStore = app.Services.GetRequiredService<ConnectWiseManageSettingsStore>();
+var manageCreds = manageStore.LoadCredentials();
+if (!string.IsNullOrWhiteSpace(manageCreds.ApiUrl))
+    app.Services.GetRequiredService<ConnectWiseManageClient>().Configure(manageCreds);
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
@@ -92,6 +100,7 @@ app.MapLegacyReportApi();
 app.MapConnectSecureDownloadApi();
 app.MapAdminApi();
 app.MapPatchApi();
+app.MapConnectWiseManageApi();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

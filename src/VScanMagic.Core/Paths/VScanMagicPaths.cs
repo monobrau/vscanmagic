@@ -26,6 +26,15 @@ public static class VScanMagicPaths
     public static string ConnectSecureCredentialsFile(string? configDir = null) =>
         Path.Combine(GetConfigDirectory(configDir), "ConnectSecure-Credentials.json");
 
+    public static string ConnectWiseManageCredentialsFile(string? configDir = null) =>
+        Path.Combine(GetConfigDirectory(configDir), "ConnectWise-Manage-Credentials.json");
+
+    public static string ConnectWiseManageOptionsFile(string? configDir = null) =>
+        Path.Combine(GetConfigDirectory(configDir), "ConnectWise-Manage-Options.json");
+
+    public static string ConnectWiseCompanyMapFile(string? configDir = null) =>
+        Path.Combine(GetConfigDirectory(configDir), "ConnectWise_CompanyMap.json");
+
     public static string TemplatesFile(string? configDir = null) =>
         Path.Combine(GetConfigDirectory(configDir), "VScanMagic_Templates.json");
 

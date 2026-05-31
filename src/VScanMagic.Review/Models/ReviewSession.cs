@@ -60,6 +60,10 @@ public sealed class ReviewFinding
     public bool TicketGenerated { get; set; }
     /// <summary>Tracks whether ThirdParty default was applied for legacy sessions.</summary>
     public bool TimeEstimateInitialized { get; set; }
+    public int? ManageTicketId { get; set; }
+    public string? ManageTicketNumber { get; set; }
+    public string? ManageTicketStatus { get; set; }
+    public DateTimeOffset? ManageTicketCreatedAt { get; set; }
 }
 
 public sealed class ReviewAffectedSystem

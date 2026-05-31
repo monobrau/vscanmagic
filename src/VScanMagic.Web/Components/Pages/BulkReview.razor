@@ -1,0 +1,388 @@
+@page "/bulk-review"
+@rendermode InteractiveServer
+@implements IDisposable
+@using VScanMagic.ConnectSecure
+@using VScanMagic.Core.Services
+@using VScanMagic.Review.Models
+@using VScanMagic.Review.Services
+@using VScanMagic.Web.Services
+@inject BulkReviewJobService BulkJobs
+@inject ConnectSecureClient CsClient
+@inject SettingsService Settings
+@inject NavigationManager Nav
+
+<PageTitle>Bulk client prep</PageTitle>
+
+<h1>Bulk client prep <HelpTip Text="Download ConnectSecure reports and create review sessions for multiple clients in one job. Review, export, and deliverables are still done per session afterward." /></h1>
+<p class="text-muted mb-3">
+    Select multiple clients, run one background job to download standard reports and create review sessions, then open each review when ready.
+</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="alert alert-danger py-2">@_error</div>
+}
+@if (!string.IsNullOrEmpty(_status))
+{
+    <div class="alert alert-success py-2">@_status</div>
+}
+
+@if (_activeJob is not null)
+{
+    <div class="card mb-3 border-primary">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <span>Job progress — @_activeJob.CompletedCount / @_activeJob.TotalCount completed</span>
+            <span class="badge @JobStatusBadgeClass(_activeJob.Status)">@_activeJob.Status</span>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0 bulk-job-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="col-client">Client</th>
+                            <th class="col-phase">Phase</th>
+                            <th class="col-rmit">RMIT+</th>
+                            <th class="col-action"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _activeJob.Items)
+                        {
+                            <tr>
+                                <td class="col-client">
+                                    <div class="bulk-job-client-name">@item.CompanyName</div>
+                                    @if (!string.IsNullOrEmpty(item.ErrorMessage))
+                                    {
+                                        <div class="text-danger small bulk-job-status">@item.ErrorMessage</div>
+                                    }
+                                    else if (!string.IsNullOrEmpty(item.StatusMessage))
+                                    {
+                                        <div class="text-muted small bulk-job-status">@item.StatusMessage</div>
+                                    }
+                                </td>
+                                <td class="col-phase">@item.Phase</td>
+                                <td class="col-rmit">@(item.IsRmitPlus ? "Yes" : "No")</td>
+                                <td class="col-action text-end">
+                                    @if (!string.IsNullOrEmpty(item.SessionId))
+                                    {
+                                        <a class="btn btn-sm btn-outline-primary" href="/review/@item.SessionId">Open review</a>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        @if (BulkJobs.IsRunning)
+        {
+            <div class="card-footer">
+                <button type="button" class="btn btn-outline-danger btn-sm" @onclick="CancelJobAsync">Cancel job</button>
+            </div>
+        }
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">New bulk job</div>
+    <div class="card-body">
+        @if (!CsClient.IsConfigured)
+        {
+            <p class="text-warning mb-0">Configure ConnectSecure on <a href="/settings">Settings</a> before running bulk prep.</p>
+        }
+        else
+        {
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">Scan date</label>
+                    <input class="form-control" type="date" @bind="_scanDate" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Presenter</label>
+                    <input class="form-control" @bind="_presenter" />
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" @bind="_defaultIsRmitPlus" id="bulkDefaultRmit" />
+                        <label class="form-check-label" for="bulkDefaultRmit">Default RMIT+ for selected clients</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-2 d-flex flex-wrap gap-2 align-items-center">
+                <input class="form-control form-control-sm" style="max-width: 20rem;" placeholder="Filter companies..." @bind="_companyFilter" @bind:event="oninput" />
+                <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@_busy" @onclick="LoadCompanies">Refresh list</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="SelectAllFiltered">Select filtered</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="ClearSelection">Clear</button>
+                <span class="text-muted small">@_selectedCompanyIds.Count selected</span>
+            </div>
+
+            <div class="bulk-company-list border rounded p-2 mb-3" style="max-height: 18rem; overflow-y: auto;">
+                @foreach (var c in FilteredCompanies)
+                {
+                    var id = c.Id;
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="bulk-co-@id"
+                               checked="@_selectedCompanyIds.Contains(id)"
+                               @onchange="e => ToggleCompany(id, e.Value is true)" />
+                        <label class="form-check-label" for="bulk-co-@id">@c.Name</label>
+                    </div>
+                }
+            </div>
+
+            @if (_selectedCompanyIds.Count > 1)
+            {
+                <p class="fw-semibold small mb-2">Per-client RMIT+ overrides</p>
+                <div class="table-responsive mb-3">
+                    <table class="table table-sm align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Client</th>
+                                <th style="width: 6rem;">RMIT+</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var id in _selectedCompanyIds.OrderBy(x => GetCompanyName(x), StringComparer.OrdinalIgnoreCase))
+                            {
+                                <tr>
+                                    <td>@GetCompanyName(id)</td>
+                                    <td>
+                                        <input type="checkbox" class="form-check-input"
+                                               checked="@GetRmitPlus(id)"
+                                               @onchange="e => SetRmitPlus(id, e.Value is true)" />
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            <button type="button" class="btn btn-primary"
+                    disabled="@(_busy || BulkJobs.IsRunning || _selectedCompanyIds.Count == 0)"
+                    @onclick="StartJobAsync">
+                @(_busy ? "Starting..." : "Start bulk prep")
+            </button>
+        }
+    </div>
+</div>
+
+@if (_jobHistory.Count > 0)
+{
+    <div class="card">
+        <div class="card-header">Recent bulk jobs</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Started</th>
+                            <th>Scan</th>
+                            <th>Progress</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in _jobHistory.Where(j => j.Status != BulkReviewJobStatus.Queued || j.Id == BulkJobs.ActiveJobId))
+                        {
+                            <tr>
+                                <td>@job.CreatedAt.LocalDateTime.ToString("g")</td>
+                                <td>@job.ScanDate</td>
+                                <td>@job.CompletedCount / @job.TotalCount</td>
+                                <td><span class="badge @JobStatusBadgeClass(job.Status)">@job.Status</span></td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => ViewJob(job.Id)">View</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<CompanyInfo> _companies = [];
+    private HashSet<string> _selectedCompanyIds = new(StringComparer.Ordinal);
+    private Dictionary<string, bool> _rmitPlusOverrides = new(StringComparer.Ordinal);
+    private DateTime _scanDate = DateTime.Today;
+    private string _presenter = "";
+    private bool _defaultIsRmitPlus;
+    private string _companyFilter = "";
+    private bool _busy;
+    private string? _error;
+    private string? _status;
+    private BulkReviewJob? _activeJob;
+    private List<BulkReviewJob> _jobHistory = [];
+    private System.Threading.Timer? _pollTimer;
+
+    private IEnumerable<CompanyInfo> FilteredCompanies =>
+        string.IsNullOrWhiteSpace(_companyFilter)
+            ? _companies
+            : _companies.Where(c => c.Name.Contains(_companyFilter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = Settings.LoadUserSettings();
+        _presenter = user.PreparedBy;
+        await LoadCompanies();
+        await ReloadJobsAsync();
+        if (BulkJobs.ActiveJobId is not null)
+            await ViewJob(BulkJobs.ActiveJobId);
+        StartPolling();
+    }
+
+    private void StartPolling()
+    {
+        _pollTimer = new System.Threading.Timer(async _ =>
+        {
+            if (!BulkJobs.IsRunning && (_activeJob is null || _activeJob.Status != BulkReviewJobStatus.Running))
+                return;
+
+            await InvokeAsync(async () =>
+            {
+                if (BulkJobs.ActiveJobId is not null)
+                    await ViewJob(BulkJobs.ActiveJobId);
+                else if (_activeJob is not null)
+                    await RefreshActiveJobAsync();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    public void Dispose() => _pollTimer?.Dispose();
+
+    private async Task LoadCompanies()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _companies = (await CsClient.GetCompaniesAsync()).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task StartJobAsync()
+    {
+        _error = null;
+        _status = null;
+        _busy = true;
+        try
+        {
+            var selections = _selectedCompanyIds.Select(id => new BulkReviewCompanySelection(
+                id,
+                GetCompanyName(id),
+                GetRmitPlus(id))).ToList();
+
+            var result = await BulkJobs.StartJobAsync(new BulkReviewJobRequest
+            {
+                ScanDate = _scanDate.ToString("yyyy-MM-dd"),
+                Presenter = _presenter,
+                DefaultIsRmitPlus = _defaultIsRmitPlus,
+                Companies = selections
+            });
+
+            if (!result.Success)
+            {
+                _error = result.Message;
+                return;
+            }
+
+            _status = result.Message;
+            _activeJob = result.Job;
+            await ReloadJobsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CancelJobAsync()
+    {
+        await BulkJobs.CancelActiveJobAsync();
+        await RefreshActiveJobAsync();
+        await ReloadJobsAsync();
+    }
+
+    private async Task ViewJob(string jobId)
+    {
+        _activeJob = await BulkJobs.GetJobAsync(jobId);
+    }
+
+    private async Task RefreshActiveJobAsync()
+    {
+        if (_activeJob is null)
+            return;
+
+        _activeJob = await BulkJobs.GetJobAsync(_activeJob.Id);
+        if (_activeJob?.Status is BulkReviewJobStatus.Completed or BulkReviewJobStatus.Failed or BulkReviewJobStatus.Cancelled)
+            await ReloadJobsAsync();
+    }
+
+    private async Task ReloadJobsAsync()
+    {
+        _jobHistory = (await BulkJobs.ListJobsAsync(10)).ToList();
+    }
+
+    private void ToggleCompany(string id, bool selected)
+    {
+        if (selected)
+        {
+            _selectedCompanyIds.Add(id);
+            if (!_rmitPlusOverrides.ContainsKey(id))
+                _rmitPlusOverrides[id] = _defaultIsRmitPlus;
+        }
+        else
+        {
+            _selectedCompanyIds.Remove(id);
+        }
+    }
+
+    private void SelectAllFiltered()
+    {
+        foreach (var c in FilteredCompanies)
+        {
+            _selectedCompanyIds.Add(c.Id);
+            if (!_rmitPlusOverrides.ContainsKey(c.Id))
+                _rmitPlusOverrides[c.Id] = _defaultIsRmitPlus;
+        }
+    }
+
+    private void ClearSelection()
+    {
+        _selectedCompanyIds.Clear();
+        _rmitPlusOverrides.Clear();
+    }
+
+    private bool GetRmitPlus(string companyId) =>
+        _rmitPlusOverrides.TryGetValue(companyId, out var value) ? value : _defaultIsRmitPlus;
+
+    private void SetRmitPlus(string companyId, bool value) => _rmitPlusOverrides[companyId] = value;
+
+    private string GetCompanyName(string companyId) =>
+        _companies.FirstOrDefault(c => c.Id == companyId)?.Name ?? companyId;
+
+    private static string JobStatusBadgeClass(BulkReviewJobStatus status) => status switch
+    {
+        BulkReviewJobStatus.Running => "text-bg-primary",
+        BulkReviewJobStatus.Completed => "text-bg-success",
+        BulkReviewJobStatus.Failed => "text-bg-danger",
+        BulkReviewJobStatus.Cancelled => "text-bg-secondary",
+        _ => "text-bg-light text-dark"
+    };
+}

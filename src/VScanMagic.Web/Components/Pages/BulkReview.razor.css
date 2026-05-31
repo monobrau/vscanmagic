@@ -1,0 +1,36 @@
+.bulk-job-table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.bulk-job-table .col-client {
+    width: auto;
+}
+
+.bulk-job-table .col-phase {
+    width: 7.5rem;
+    white-space: nowrap;
+}
+
+.bulk-job-table .col-rmit {
+    width: 4.25rem;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.bulk-job-table thead .col-rmit {
+    text-align: center;
+}
+
+.bulk-job-table .col-action {
+    width: 7.5rem;
+}
+
+.bulk-job-client-name {
+    font-weight: 500;
+}
+
+.bulk-job-status {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}

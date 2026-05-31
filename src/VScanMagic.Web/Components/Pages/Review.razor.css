@@ -1,0 +1,9 @@
+.review-collapsible-summary {
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+}
+
+.review-collapsible-summary::-webkit-details-marker {
+    margin-right: 0.35rem;
+}

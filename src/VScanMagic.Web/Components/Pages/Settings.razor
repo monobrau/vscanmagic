@@ -1,8 +1,11 @@
 @page "/settings"
 @rendermode InteractiveServer
 @using VScanMagic.ConnectSecure
+@using VScanMagic.ConnectWiseManage
 @inject SettingsService SettingsSvc
 @inject ConnectSecureClient ConnectSecure
+@inject ConnectWiseManageClient ManageClient
+@inject ConnectWiseManageSettingsStore ManageSettingsStore
 @inject IJSRuntime Js
 
 <PageTitle>Settings</PageTitle>
@@ -177,6 +180,64 @@
     </div>
 </div>
 
+<div class="card mb-3">
+    <div class="card-header">ConnectWise Manage (PSA)</div>
+    <div class="card-body">
+        <p class="text-muted small mb-2">
+            API credentials from Manage: <strong>System → Members → API Members → API Keys</strong>.
+            API URL is typically <code>https://na.myconnectwise.net/v4_6_release/apis/3.0</code> (use your site base before <code>/apis/3.0</code>).
+        </p>
+        <div class="mb-2">
+            <label class="form-label">API URL</label>
+            <input class="form-control" @bind="_manageCreds.ApiUrl" placeholder="https://na.myconnectwise.net/v4_6_release" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Company ID (auth)</label>
+            <input class="form-control" @bind="_manageCreds.CompanyId" placeholder="riverrun" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Public key</label>
+            <input class="form-control" @bind="_manageCreds.PublicKey" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Private key</label>
+            <input class="form-control" type="password" @bind="_manageCreds.PrivateKey" autocomplete="off" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label">Client ID header</label>
+            <input class="form-control" @bind="_manageCreds.ClientId" placeholder="VScanMagic" />
+        </div>
+        <div class="row mb-2">
+            <div class="col-md-6">
+                <label class="form-label">Default service board</label>
+                <select class="form-select" @bind="_manageOptions.DefaultBoardId" @bind:after="OnManageBoardChanged">
+                    <option value="0">-- Select board --</option>
+                    @foreach (var board in _manageBoards)
+                    {
+                        <option value="@board.Id">@board.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Default new-ticket status</label>
+                <select class="form-select" @bind="_manageOptions.DefaultStatusId">
+                    <option value="0">-- Select status --</option>
+                    @foreach (var status in _manageStatuses)
+                    {
+                        <option value="@status.Id">@status.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+        <button type="button" class="btn btn-outline-secondary btn-sm me-2" disabled="@_busy" @onclick="LoadManageBoardsAsync">Load boards</button>
+        <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_busy" @onclick="TestManageConnectionAsync">Test Manage connection</button>
+        @if (!string.IsNullOrEmpty(_manageStatus))
+        {
+            <div class="form-text mt-2 mb-0">@_manageStatus</div>
+        }
+    </div>
+</div>
+
 @if (!string.IsNullOrEmpty(_message))
 {
     <div class="alert alert-success">@_message</div>
@@ -193,6 +254,11 @@
 @code {
     private UserSettings _user = new();
     private ConnectSecureCredentials _creds = new();
+    private ConnectWiseManageCredentials _manageCreds = new();
+    private ConnectWiseManageOptions _manageOptions = new();
+    private List<ManageBoard> _manageBoards = [];
+    private List<ManageStatus> _manageStatuses = [];
+    private string? _manageStatus;
     private string? _message;
     private string? _error;
     private bool _busy;
@@ -207,6 +273,10 @@
     {
         _user = SettingsSvc.LoadUserSettings();
         _creds = SettingsSvc.LoadConnectSecureCredentials();
+        _manageCreds = ManageSettingsStore.LoadCredentials();
+        _manageOptions = ManageSettingsStore.LoadOptions();
+        if (ManageClient.IsConfigured || HasManageCredentialFields())
+            ConfigureManageClient();
         LoadTopNPreset();
         UpdateSecretHint();
     }
@@ -287,7 +357,97 @@
         SettingsSvc.SaveUserSettings(_user);
         SettingsSvc.SaveConnectSecureCredentials(_creds);
         ConnectSecure.Configure(_creds);
+        ManageSettingsStore.SaveCredentials(_manageCreds);
+        ManageSettingsStore.SaveOptions(_manageOptions);
+        ConfigureManageClient();
         _message = "Settings saved.";
+    }
+
+    private bool HasManageCredentialFields() =>
+        !string.IsNullOrWhiteSpace(_manageCreds.ApiUrl) &&
+        !string.IsNullOrWhiteSpace(_manageCreds.CompanyId) &&
+        !string.IsNullOrWhiteSpace(_manageCreds.PublicKey) &&
+        !string.IsNullOrWhiteSpace(_manageCreds.PrivateKey) &&
+        !string.IsNullOrWhiteSpace(_manageCreds.ClientId);
+
+    private void ConfigureManageClient()
+    {
+        if (!HasManageCredentialFields())
+            return;
+        ManageClient.Configure(_manageCreds);
+    }
+
+    private async Task LoadManageBoardsAsync()
+    {
+        _error = null;
+        _manageStatus = null;
+        if (!HasManageCredentialFields())
+        {
+            _error = "Enter ConnectWise Manage credentials first.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            ConfigureManageClient();
+            _manageBoards = (await ManageClient.GetBoardsAsync()).OrderBy(b => b.Name).ToList();
+            _manageStatus = $"Loaded {_manageBoards.Count} board(s).";
+            if (_manageOptions.DefaultBoardId > 0)
+                await LoadManageStatusesAsync(_manageOptions.DefaultBoardId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnManageBoardChanged()
+    {
+        _manageStatuses = [];
+        if (_manageOptions.DefaultBoardId > 0)
+            await LoadManageStatusesAsync(_manageOptions.DefaultBoardId);
+    }
+
+    private async Task LoadManageStatusesAsync(int boardId)
+    {
+        if (!ManageClient.IsConfigured)
+            return;
+
+        _manageStatuses = (await ManageClient.GetBoardStatusesAsync(boardId)).OrderBy(s => s.Name).ToList();
+    }
+
+    private async Task TestManageConnectionAsync()
+    {
+        _error = null;
+        _manageStatus = null;
+        if (!HasManageCredentialFields())
+        {
+            _error = "Enter ConnectWise Manage credentials first.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            ConfigureManageClient();
+            _manageStatus = await ManageClient.TestConnectionAsync();
+            _manageBoards = (await ManageClient.GetBoardsAsync()).OrderBy(b => b.Name).ToList();
+            if (_manageOptions.DefaultBoardId > 0)
+                await LoadManageStatusesAsync(_manageOptions.DefaultBoardId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private async Task TestCredentials()

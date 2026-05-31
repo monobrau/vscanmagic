@@ -393,23 +393,26 @@ else
                         @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) || GetSelectedCveIds().Count > 0)
                         {
                             var cveContext = CveOnlyFindingDisplay.ParseNvdEnrichment(_selected.NvdEnrichment);
-                            <div class="mb-3 border rounded p-3 bg-light">
+                            var cveContextLabel = CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) ? "What this CVE is about" : "CVE context";
+                            var cveCount = GetSelectedCveIds().Count;
+                            <details class="mb-3 border rounded p-3 bg-light">
+                                <summary class="review-collapsible-summary">
+                                    @cveContextLabel@if (cveCount > 0) { <span class="text-muted"> (@cveCount)</span> }
+                                </summary>
+                                <div class="mt-2">
                                 @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
                                 {
                                     <div class="alert alert-info py-2 small mb-3">@CveOnlyFindingDisplay.Explanation</div>
                                 }
-                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                                    <label class="form-label mb-0">
-                                        @(CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) ? "What this CVE is about" : "CVE context")
-                                    </label>
-                                    @if (!_readOnly)
-                                    {
+                                @if (!_readOnly)
+                                {
+                                    <div class="d-flex flex-wrap justify-content-end mb-2">
                                         <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
                                             @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
                                         </button>
-                                    }
-                                </div>
-                                @if (GetSelectedCveIds().Count > 0)
+                                    </div>
+                                }
+                                @if (cveCount > 0)
                                 {
                                     <div class="d-flex flex-wrap gap-2 mb-2">
                                         @foreach (var cve in GetSelectedCveIds())
@@ -446,7 +449,8 @@ else
                                 {
                                     <div class="form-text mt-2">@_nvdStatus</div>
                                 }
-                            </div>
+                                </div>
+                            </details>
                         }
 
                         @if (!_readOnly)
@@ -772,8 +776,12 @@ else
                             </div>
                             @if (GetSelectedCveIds().Count > 0 && !CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
                             {
-                                <div class="mb-3">
-                                    <label class="form-label">CVE references</label>
+                                var cveRefCount = GetSelectedCveIds().Count;
+                                <details class="mb-3">
+                                    <summary class="review-collapsible-summary">
+                                        CVE references <span class="text-muted">(@cveRefCount)</span>
+                                    </summary>
+                                    <div class="mt-2">
                                     <div class="d-flex flex-wrap gap-2 mb-2">
                                         @foreach (var cve in GetSelectedCveIds())
                                         {
@@ -791,7 +799,8 @@ else
                                     {
                                         <span class="form-text ms-2">@_nvdStatus</span>
                                     }
-                                </div>
+                                    </div>
+                                </details>
                             }
                             <div class="mb-3">
                                 <label class="form-label">Meeting Notes</label>

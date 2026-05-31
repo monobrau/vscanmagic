@@ -1,7 +1,9 @@
 @page "/configuration"
 @rendermode InteractiveServer
 @using VScanMagic.Core.Models
+@using VScanMagic.ConnectWiseManage
 @inject CompanyFolderMapService FolderMap
+@inject ConnectWiseCompanyMapService ManageCompanyMap
 @inject CoveredSoftwareService CoveredSoftwareSvc
 @using VScanMagic.ConnectSecure
 @inject ConnectSecureClient ConnectSecure
@@ -19,6 +21,9 @@
     <li class="nav-item">
         <button type="button" class="nav-link @(_tab == "covered" ? "active" : "")" @onclick='() => _tab = "covered"'>Covered software <HelpTip Text="Product patterns treated as first-party under RMIT+ agreements when setting Third party defaults." /></button>
     </li>
+    <li class="nav-item">
+        <button type="button" class="nav-link @(_tab == "manage" ? "active" : "")" @onclick='() => _tab = "manage"'>Manage company map <HelpTip Text="ConnectSecure company ID → ConnectWise Manage company ID for PSA ticket creation." /></button>
+    </li>
 </ul>
 
 @if (!string.IsNullOrEmpty(_message))
@@ -29,6 +34,13 @@
 {
     <div class="alert alert-danger">@_error</div>
 }
+
+<datalist id="companyIds">
+    @foreach (var c in _companies)
+    {
+        <option value="@c.Id">@c.Name</option>
+    }
+</datalist>
 
 @if (_tab == "folders")
 {
@@ -65,16 +77,42 @@
             </tbody>
         </table>
     </div>
-    <datalist id="companyIds">
-        @foreach (var c in _companies)
-        {
-            <option value="@c.Id">@c.Name</option>
-        }
-    </datalist>
     @if (ConnectSecure.IsConfigured)
     {
         <button class="btn btn-outline-secondary btn-sm" disabled="@_busy" @onclick="LoadCompanies">Refresh company list</button>
     }
+}
+else if (_tab == "manage")
+{
+    <p class="text-muted">Maps ConnectSecure company ID to ConnectWise Manage company record ID for remediation ticket creation from Deliverables.</p>
+    <div class="mb-3">
+        <button class="btn btn-outline-primary btn-sm me-2" @onclick="AddManageEntry">Add mapping</button>
+        <button class="btn btn-primary btn-sm" @onclick="SaveManageMap">Save Manage map</button>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 10rem;">ConnectSecure ID</th>
+                    <th style="width: 10rem;">Manage company ID</th>
+                    <th>Manage company name</th>
+                    <th style="width: 6rem;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _manageEntries.Count; i++)
+                {
+                    var index = i;
+                    <tr>
+                        <td><input class="form-control form-control-sm" list="companyIds" @bind="_manageEntries[index].ConnectSecureCompanyId" /></td>
+                        <td><input class="form-control form-control-sm" type="number" min="1" @bind="_manageEntries[index].ManageCompanyId" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_manageEntries[index].ManageCompanyName" /></td>
+                        <td><button class="btn btn-outline-danger btn-sm" @onclick="() => _manageEntries.RemoveAt(index)">Remove</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
 }
 else
 {
@@ -116,6 +154,7 @@ else
 @code {
     private string _tab = "folders";
     private List<FolderMapEntry> _folderEntries = [];
+    private List<ManageMapEntry> _manageEntries = [];
     private List<CoveredSoftwareEntry> _coveredEntries = [];
     private List<CompanyInfo> _companies = [];
     private string? _message;
@@ -129,6 +168,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         ReloadFolderMap();
+        ReloadManageMap();
         ReloadCoveredSoftware();
 
         if (ConnectSecure.IsConfigured)
@@ -228,6 +268,44 @@ else
         _coveredEntries = CoveredSoftwareService.GetDefaults();
     }
 
+    private void ReloadManageMap()
+    {
+        _manageEntries = ManageCompanyMap.GetOrderedEntries()
+            .Select(p => new ManageMapEntry
+            {
+                ConnectSecureCompanyId = p.Key,
+                ManageCompanyId = p.Value.ManageCompanyId,
+                ManageCompanyName = p.Value.ManageCompanyName
+            }).ToList();
+    }
+
+    private void AddManageEntry() => _manageEntries.Add(new ManageMapEntry());
+
+    private void SaveManageMap()
+    {
+        _message = null;
+        _error = null;
+        try
+        {
+            var entries = _manageEntries
+                .Where(e => !string.IsNullOrWhiteSpace(e.ConnectSecureCompanyId) && e.ManageCompanyId > 0)
+                .Select(e => new KeyValuePair<string, ConnectWiseCompanyMapEntry>(
+                    e.ConnectSecureCompanyId.Trim(),
+                    new ConnectWiseCompanyMapEntry
+                    {
+                        ManageCompanyId = e.ManageCompanyId,
+                        ManageCompanyName = e.ManageCompanyName.Trim()
+                    }));
+            ManageCompanyMap.ReplaceAll(entries);
+            ReloadManageMap();
+            _message = "Manage company map saved.";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
     private void SaveCoveredSoftware()
     {
         _message = null;
@@ -247,5 +325,12 @@ else
     {
         public string CompanyId { get; set; } = "";
         public string FolderPath { get; set; } = "";
+    }
+
+    private sealed class ManageMapEntry
+    {
+        public string ConnectSecureCompanyId { get; set; } = "";
+        public int ManageCompanyId { get; set; }
+        public string ManageCompanyName { get; set; } = "";
     }
 }

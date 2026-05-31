@@ -23,7 +23,7 @@ public static class TicketNotesBuilder
                 if (TimeEstimateModifierHelper.IsTicketGenerated(
                         finding.AfterHours, finding.TicketGenerated, finding.ThirdParty))
                 {
-                    ticketLines.Add($"- Ticket created: {FindingTitleFormatter.FormatTicketSubject(finding, isRmitPlus)}");
+                    ticketLines.Add(FormatTicketNoteLine(finding, isRmitPlus));
                 }
             }
         }
@@ -45,5 +45,19 @@ public static class TicketNotesBuilder
 
             {template.NextStepsText}
             """;
+    }
+
+    internal static string FormatTicketNoteLine(ReviewFinding finding, bool isRmitPlus)
+    {
+        var subject = FindingTitleFormatter.FormatTicketSubject(finding, isRmitPlus);
+        if (!string.IsNullOrWhiteSpace(finding.ManageTicketNumber))
+        {
+            var statusSuffix = string.IsNullOrWhiteSpace(finding.ManageTicketStatus)
+                ? ""
+                : $" ({finding.ManageTicketStatus})";
+            return $"- Ticket #{finding.ManageTicketNumber}{statusSuffix}: {subject}";
+        }
+
+        return $"- Ticket created: {subject}";
     }
 }

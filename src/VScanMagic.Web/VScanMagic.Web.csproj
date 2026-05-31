@@ -4,6 +4,7 @@
     <ProjectReference Include="..\VScanMagic.Core\VScanMagic.Core.csproj" />
     <ProjectReference Include="..\VScanMagic.Data\VScanMagic.Data.csproj" />
     <ProjectReference Include="..\VScanMagic.ConnectSecure\VScanMagic.ConnectSecure.csproj" />
+    <ProjectReference Include="..\VScanMagic.ConnectWiseManage\VScanMagic.ConnectWiseManage.csproj" />
     <ProjectReference Include="..\VScanMagic.Reports\VScanMagic.Reports.csproj" />
     <ProjectReference Include="..\VScanMagic.Review\VScanMagic.Review.csproj" />
   </ItemGroup>

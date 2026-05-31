@@ -6,6 +6,8 @@
 @using VScanMagic.Review
 @using VScanMagic.Review.Models
 @using VScanMagic.ConnectSecure
+@using VScanMagic.ConnectWiseManage
+@using VScanMagic.Reports
 @inject IReviewSessionRepository SessionRepo
 @inject TemplatesService TemplatesSvc
 @inject RemediationRuleService RemediationRules
@@ -14,6 +16,7 @@
 @inject ReportFolderHistoryService FolderHistory
 @inject ReviewUsernameRefreshService UsernameRefresh
 @inject OutlookDeliverableDraftService OutlookDraft
+@inject ConnectWiseManageTicketService ManageTickets
 
 <PageTitle>Deliverables</PageTitle>
 
@@ -76,8 +79,20 @@ else
     @if (_tab == "ticket")
     {
         <div class="alert alert-info py-2">
-            Use <strong>Copy subject</strong> / <strong>Copy section</strong> to paste into Manage PSA tickets, quotes, or technician assignments.
+            Use <strong>Copy subject</strong> / <strong>Copy section</strong> to paste into Manage PSA tickets, or create tickets via the Manage API when configured on Settings.
         </div>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <button type="button" class="btn btn-success btn-sm" disabled="@_manageBusy" @onclick="CreateManageTicketsAsync">
+                @(_manageBusy ? "Working..." : "Create Manage tickets")
+            </button>
+            <button type="button" class="btn btn-outline-success btn-sm" disabled="@_manageBusy" @onclick="RefreshManageTicketsAsync">
+                Refresh ticket info
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(_manageStatus))
+        {
+            <div class="alert @(_manageError ? "alert-danger" : "alert-success") py-2">@_manageStatus</div>
+        }
 
         @if (_sections.Count == 0)
         {
@@ -217,9 +232,18 @@ else
     {
         <div class="card">
             <div class="card-body">
-                <button type="button" class="btn btn-primary btn-sm mb-3" data-vscan-copy-target="deliverable-ticket-notes">
-                    Copy ticket notes
-                </button>
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    <button type="button" class="btn btn-primary btn-sm" data-vscan-copy-target="deliverable-ticket-notes">
+                        Copy ticket notes
+                    </button>
+                    <button type="button" class="btn btn-outline-success btn-sm" disabled="@_manageBusy" @onclick="RefreshManageTicketsAsync">
+                        Refresh ticket info
+                    </button>
+                </div>
+                @if (!string.IsNullOrEmpty(_manageStatus) && _tab == "notes")
+                {
+                    <div class="alert @(_manageError ? "alert-danger" : "alert-success") py-2">@_manageStatus</div>
+                }
                 <pre class="deliverable-text mb-0">@_ticketNotes</pre>
             </div>
         </div>
@@ -242,6 +266,9 @@ else
     private string? _outlookDraftStatus;
     private bool _outlookDraftError;
     private bool _openingOutlookDraft;
+    private bool _manageBusy;
+    private string? _manageStatus;
+    private bool _manageError;
     private UserSettings _userSettings = new();
     private readonly HashSet<string> _expandedSections = new(StringComparer.Ordinal);
 
@@ -336,6 +363,61 @@ else
         _outlookDraftStatus = null;
         _outlookDraftError = false;
         _linksStatus = null;
+    }
+
+    private async Task CreateManageTicketsAsync()
+    {
+        if (_session is null)
+            return;
+
+        _manageStatus = null;
+        _manageError = false;
+        _manageBusy = true;
+        try
+        {
+            var result = await ManageTickets.CreateTicketsForSessionAsync(_session);
+            await SessionRepo.SaveAsync(_session);
+            RefreshDeliverableContent();
+            _manageStatus = $"Created {result.Created}, skipped {result.Skipped}, failed {result.Failed}.";
+            _manageError = result.Failed > 0 && result.Created == 0;
+        }
+        catch (Exception ex)
+        {
+            _manageStatus = ex.Message;
+            _manageError = true;
+        }
+        finally
+        {
+            _manageBusy = false;
+        }
+    }
+
+    private async Task RefreshManageTicketsAsync()
+    {
+        if (_session is null)
+            return;
+
+        _manageStatus = null;
+        _manageError = false;
+        _manageBusy = true;
+        try
+        {
+            var count = await ManageTickets.RefreshTicketsForSessionAsync(_session);
+            await SessionRepo.SaveAsync(_session);
+            RefreshDeliverableContent();
+            _manageStatus = count > 0
+                ? $"Refreshed {count} ticket(s). Ticket notes updated below."
+                : "No Manage tickets to refresh on this session.";
+        }
+        catch (Exception ex)
+        {
+            _manageStatus = ex.Message;
+            _manageError = true;
+        }
+        finally
+        {
+            _manageBusy = false;
+        }
     }
 
     private async Task OpenClientEmailInOutlookAsync()

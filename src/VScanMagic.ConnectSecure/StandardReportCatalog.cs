@@ -2,6 +2,11 @@ namespace VScanMagic.ConnectSecure;
 
 public static class StandardReportCatalog
 {
+    public static readonly IReadOnlyList<StandardReportRequest> AllVulnerabilitiesOnly =
+    [
+        new("all-vulnerabilities", "All Vulnerabilities Report", "xlsx")
+    ];
+
     public static readonly IReadOnlyList<StandardReportRequest> DefaultCompanyReports =
     [
         new("all-vulnerabilities", "All Vulnerabilities Report", "xlsx"),

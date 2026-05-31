@@ -9,6 +9,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddVScanMagicReview(this IServiceCollection services)
     {
         services.AddSingleton<IReviewSessionRepository, SqliteReviewSessionRepository>();
+        services.AddSingleton<IBulkReviewJobRepository, SqliteBulkReviewJobRepository>();
         services.AddSingleton<ReviewSessionFactory>();
         services.AddSingleton<CveEnrichmentService>();
         return services;

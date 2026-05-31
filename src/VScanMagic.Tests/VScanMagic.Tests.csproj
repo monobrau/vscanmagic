@@ -28,6 +28,7 @@
     <ProjectReference Include="..\VScanMagic.Reports\VScanMagic.Reports.csproj" />
     <ProjectReference Include="..\VScanMagic.Review\VScanMagic.Review.csproj" />
     <ProjectReference Include="..\VScanMagic.ConnectSecure\VScanMagic.ConnectSecure.csproj" />
+    <ProjectReference Include="..\VScanMagic.ConnectWiseManage\VScanMagic.ConnectWiseManage.csproj" />
     <ProjectReference Include="..\VScanMagic.Web\VScanMagic.Web.csproj" />
   </ItemGroup>
 

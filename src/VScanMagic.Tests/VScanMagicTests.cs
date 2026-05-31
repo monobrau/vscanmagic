@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using System.IO.Compression;
 using System.Text.Json;
@@ -16,6 +17,7 @@ using VScanMagic.Core.Services;
 using VScanMagic.Review;
 using VScanMagic.Review.Services;
 using VScanMagic.Review.Models;
+using VScanMagic.Review.Storage;
 using VScanMagic.Reports;
 using VScanMagic.Web.Services;
 
@@ -1117,6 +1119,31 @@ public class TicketNotesBuilderTimeEstimateTests
         Assert.Contains(
             "Ticket created: After Hours - Vulnerability Remediation - Adobe Reader - Update Required",
             notes);
+    }
+
+    [Fact]
+    public void Build_UsesManageTicketNumberWhenPresent()
+    {
+        var session = new ReviewSession
+        {
+            IsRmitPlus = true,
+            ExportTopN = 1,
+            Findings =
+            [
+                new ReviewFinding
+                {
+                    OriginalRank = 1,
+                    Product = "Adobe Reader",
+                    TicketGenerated = true,
+                    IncludeInExport = true,
+                    ManageTicketNumber = "12345",
+                    ManageTicketStatus = "New"
+                }
+            ]
+        };
+
+        var notes = TicketNotesBuilder.Build(session, new TicketNotesTemplateSettings());
+        Assert.Contains("- Ticket #12345 (New):", notes);
     }
 }
 
@@ -2441,6 +2468,45 @@ public class OutlookDeliverableDraftServiceTests
         Assert.True(ok);
         Assert.Equal("client@example.com", normalized);
         Assert.Equal("", error);
+    }
+}
+
+public class BulkReviewJobRepositoryTests
+{
+    [Fact]
+    public async Task SaveAndGet_RoundTripsJobPayload()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "VScanMagicTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("VSCANMAGIC_CONFIG_DIR", dir);
+        try
+        {
+            using var repo = new SqliteBulkReviewJobRepository(dir);
+            var job = new BulkReviewJob
+            {
+                ScanDate = "2026-05-21",
+                Presenter = "Tester",
+                Items =
+                [
+                    new BulkReviewJobItem { CompanyId = "1", CompanyName = "Contoso", Phase = BulkReviewItemPhase.Pending }
+                ]
+            };
+
+            await repo.SaveAsync(job);
+            var loaded = await repo.GetAsync(job.Id);
+
+            Assert.NotNull(loaded);
+            Assert.Equal("2026-05-21", loaded!.ScanDate);
+            Assert.Single(loaded.Items);
+            Assert.Equal("Contoso", loaded.Items[0].CompanyName);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Environment.SetEnvironmentVariable("VSCANMAGIC_CONFIG_DIR", null);
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
     }
 }
 
