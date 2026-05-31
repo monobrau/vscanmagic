@@ -98,7 +98,7 @@ else
             </li>
             <li class="nav-item">
                 <button type="button" class="nav-link @(_activeTab == AddToExportTab ? "active" : "")" @onclick="() => SetActiveTab(AddToExportTab)">
-                    Add to export (@CandidateCount()) <HelpTip Text="Network and registry findings waiting to be promoted into the client report." />
+                    Add to export (@CandidateCount()) <HelpTip Text="Findings not in the initial client report — network, registry, and overflow application items." />
                 </button>
             </li>
             <li class="nav-item">
@@ -121,8 +121,9 @@ else
             </div>
             <div class="card-body p-0">
                 <p class="small text-muted px-3 pt-3 mb-0">
-                    Enter hours and billing flags for each export item (grouped like the PowerShell time estimate dialog).
-                    Values apply to grouped products such as Visual C++ and .NET variants.
+                    Enter estimated hours and billing options for each item in the client report.
+                    Grouped products (Visual C++, .NET, etc.) share one row.
+                    <strong>After hours</strong> — work billed outside normal business hours.
                     Shift-click checkboxes in a column to toggle a range.
                 </p>
                 <div class="table-responsive">
@@ -133,11 +134,11 @@ else
                                 <th>Product</th>
                                 <th class="text-end">Hosts</th>
                                 <th style="min-width: 7rem;">Hours</th>
-                                <th>After Hours</th>
+                                <th>After hours</th>
                                 @if (_session.IsRmitPlus)
                                 {
-                                    <th>3rd Party</th>
-                                    <th>Ticket Generated</th>
+                                    <th>Third party</th>
+                                    <th>Ticket created</th>
                                 }
                             </tr>
                         </thead>
@@ -203,16 +204,16 @@ else
     @if (GetOrderedFindings().Count > 0 && _activeTab == AddToExportTab)
     {
         <div class="alert alert-info py-2">
-            Network and registry findings are never auto-ranked into Top N. Review every item below and
-            <strong>Add to export</strong> for anything that belongs on tonight's client review.
-            Application reserves ranked below the suggested Top @_session.ExportTopN are also listed here.
+            Network and registry findings are not included in the initial Top @_session.ExportTopN report list.
+            Review the items below and add any that should go to the client.
+            Application findings below that cutoff are listed here as well.
         </div>
 
         <div class="btn-group btn-group-sm mb-3">
             <button type="button" class="btn @CandidateFilterClass(null)" @onclick="() => SetCandidateFilter(null)">All (@CandidateCount(null))</button>
             <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Network)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Network)">Network (@CandidateCount(VulnerabilitySourceHelper.Network))</button>
             <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Registry)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Registry)">Registry (@CandidateCount(VulnerabilitySourceHelper.Registry))</button>
-            <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Application)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Application)">Application reserve (@CandidateCount(VulnerabilitySourceHelper.Application))</button>
+            <button type="button" class="btn @CandidateFilterClass(VulnerabilitySourceHelper.Application)" @onclick="() => SetCandidateFilter(VulnerabilitySourceHelper.Application)">Below Top @_session.ExportTopN (@CandidateCount(VulnerabilitySourceHelper.Application))</button>
         </div>
 
         @if (_candidateFindings.Count == 0)
@@ -311,7 +312,7 @@ else
                                     }
                                     else
                                     {
-                                        <span class="badge bg-light text-dark ms-1">Reserve</span>
+                                        <span class="badge bg-light text-dark ms-1">Below Top N</span>
                                     }
                                 }
                                 else if (f.ExcludedFromExport)
@@ -355,35 +356,36 @@ else
                                            @onchange="e => SetFindingExport(e.Value is true)" id="includeExport" />
                                     <label class="form-check-label" for="includeExport">Include finding in export</label>
                                 </div>
-                                <div class="form-text">Uncheck to drop this item — the next application reserve promotes into the suggested export set (@ExportSetLabel()). Network/registry items are added from the Add to export tab.</div>
+                                <div class="form-text">Uncheck to remove this item from the client report. The next ranked application finding takes its place (@ExportSetLabel()). Add network and registry items from the Add to export tab.</div>
                             }
                         </div>
                     </div>
                     <div class="card-body">
                         <p>@FormatFindingRiskSummary(_selected)</p>
-                        @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) || GetSelectedCveIds().Count > 0)
+                        @if (ShouldShowCveSection(_selected))
                         {
+                            var cveIds = GetSelectedCveIds();
+                            var cveCount = cveIds.Count;
+                            var isCveOnly = CveOnlyFindingDisplay.IsCveOnlyFinding(_selected);
                             var cveContext = CveOnlyFindingDisplay.ParseNvdEnrichment(_selected.NvdEnrichment);
-                            var cveContextLabel = CveOnlyFindingDisplay.IsCveOnlyFinding(_selected) ? "What this CVE is about" : "CVE context";
-                            var cveCount = GetSelectedCveIds().Count;
                             <details class="mb-3 border rounded p-3 bg-light">
                                 <summary class="review-collapsible-summary">
-                                    @cveContextLabel@if (cveCount > 0) { <span class="text-muted"> (@cveCount)</span> }
+                                    @(isCveOnly ? "What this CVE is about" : "CVEs")@if (cveCount > 0) { <span class="text-muted"> (@cveCount.ToString("N0"))</span> }
                                 </summary>
                                 <div class="mt-2">
-                                @if (CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
+                                @if (isCveOnly)
                                 {
                                     <div class="alert alert-info py-2 small mb-3">@CveOnlyFindingDisplay.Explanation</div>
                                 }
                                 <div class="d-flex flex-wrap justify-content-end mb-2">
-                                    <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
-                                        @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
-                                    </button>
+                                        <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
+                                            @(_nvdBusy ? "Fetching NVD…" : string.IsNullOrWhiteSpace(_selected.NvdEnrichment) ? "Load NVD details" : "Refresh NVD details")
+                                        </button>
                                 </div>
                                 @if (cveCount > 0)
                                 {
                                     <div class="d-flex flex-wrap gap-2 mb-2">
-                                        @foreach (var cve in GetSelectedCveIds())
+                                        @foreach (var cve in cveIds)
                                         {
                                             <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
                                         }
@@ -438,7 +440,7 @@ else
                                     <div class="col-sm-8">
                                         <div class="form-check">
                                             <input class="form-check-input" type="checkbox" @bind="_selected.AfterHours" @bind:after="OnTimeEstimateFieldChanged" id="afterHoursDetail" />
-                                            <label class="form-check-label" for="afterHoursDetail">After Hours</label>
+                                            <label class="form-check-label" for="afterHoursDetail">After-hours work</label>
                                         </div>
                                         @if (_session.IsRmitPlus)
                                         {
@@ -688,34 +690,6 @@ else
                             <label class="form-label">Revised Remediation</label>
                             <textarea class="form-control" rows="6" @bind="_selected.RevisedRemediation" @bind:after="ScheduleSave"></textarea>
                         </div>
-                        @if (GetSelectedCveIds().Count > 0 && !CveOnlyFindingDisplay.IsCveOnlyFinding(_selected))
-                        {
-                            var cveRefCount = GetSelectedCveIds().Count;
-                            <details class="mb-3">
-                                <summary class="review-collapsible-summary">
-                                    CVE references <span class="text-muted">(@cveRefCount)</span>
-                                </summary>
-                                <div class="mt-2">
-                                <div class="d-flex flex-wrap gap-2 mb-2">
-                                    @foreach (var cve in GetSelectedCveIds())
-                                    {
-                                        <a class="btn btn-sm btn-outline-secondary" href="@CveReferenceHelper.GetNvdDetailUrl(cve)" target="_blank" rel="noopener">@cve</a>
-                                    }
-                                </div>
-                                @if (!string.IsNullOrWhiteSpace(_selected.NvdEnrichment))
-                                {
-                                    <div class="small border rounded p-2 bg-light mb-2" style="white-space: pre-wrap;">@_selected.NvdEnrichment</div>
-                                }
-                                <button type="button" class="btn btn-outline-primary btn-sm" disabled="@_nvdBusy" @onclick="FetchNvdForSelected">
-                                    @(_nvdBusy ? "Fetching NVD…" : "Fetch NVD details")
-                                </button>
-                                @if (!string.IsNullOrWhiteSpace(_nvdStatus))
-                                {
-                                    <span class="form-text ms-2">@_nvdStatus</span>
-                                }
-                                </div>
-                            </details>
-                        }
                         <div class="mb-3">
                             <label class="form-label">Meeting Notes</label>
                             <textarea class="form-control" rows="3" @bind="_selected.MeetingNotes" @bind:after="ScheduleSave"></textarea>
@@ -728,8 +702,8 @@ else
                         @if (!string.IsNullOrWhiteSpace(_selected.OriginalFix))
                         {
                             <details class="mt-3">
-                                <summary>ConnectSecure patch reference</summary>
-                                <p class="small text-muted mb-1">Patch/version details from the scan. Exported as ConnectSecure Solution when distinct from remediation guidance.</p>
+                                <summary>Patch notes from scan</summary>
+                                <p class="small text-muted mb-1">Version and patch details from ConnectSecure. Ticket exports include this when it differs from your remediation text.</p>
                                 <p class="small mb-0">@_selected.OriginalFix</p>
                             </details>
                         }
@@ -742,6 +716,8 @@ else
 }
 
 @code {
+    private const int MaxDisplayedCveLinks = 12;
+
     private const string ReviewTab = "review";
     private const string AddToExportTab = "add";
     private const string TimeEstimatesTab = "time";
@@ -1636,7 +1612,7 @@ else
         if (finding.TimeEstimateHours > 0)
             parts.Add($" · {finding.TimeEstimateHours}h");
         if (finding.AfterHours)
-            parts.Add(" · After Hours");
+            parts.Add(" · After hours");
         if (_session.IsRmitPlus && finding.ThirdParty)
             parts.Add(" · 3rd Party");
         if (_session.IsRmitPlus && finding.TicketGenerated)
@@ -1739,6 +1715,18 @@ else
 
     private IReadOnlyList<string> GetSelectedCveIds() =>
         _selected is null ? [] : FindingExportDetails.GetCveIds(_selected);
+
+    private static bool ShouldShowCveSection(ReviewFinding? finding)
+    {
+        if (finding is null)
+            return false;
+
+        if (CveOnlyFindingDisplay.IsCveOnlyFinding(finding))
+            return true;
+
+        var count = FindingExportDetails.GetCveIds(finding).Count;
+        return count > 0 && count <= MaxDisplayedCveLinks;
+    }
 
     private async Task FetchNvdForSelected()
     {
