@@ -210,7 +210,7 @@
         <div class="row mb-2">
             <div class="col-md-6">
                 <label class="form-label">Default service board</label>
-                <select class="form-select" @bind="_manageOptions.DefaultBoardId" @bind:after="OnManageBoardChanged">
+                <select class="form-select" value="@_manageOptions.DefaultBoardId" @onchange="OnManageBoardSelectChanged">
                     <option value="0">-- Select board --</option>
                     @foreach (var board in _manageBoards)
                     {
@@ -269,14 +269,34 @@
     private string _customTopN = "10";
     private readonly CheckboxRangeColumn _severityRange = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _user = SettingsSvc.LoadUserSettings();
         _creds = SettingsSvc.LoadConnectSecureCredentials();
         _manageCreds = ManageSettingsStore.LoadCredentials();
         _manageOptions = ManageSettingsStore.LoadOptions();
-        if (ManageClient.IsConfigured || HasManageCredentialFields())
-            ConfigureManageClient();
+        try
+        {
+            if (ManageClient.IsConfigured || HasManageCredentialFields())
+                ConfigureManageClient();
+        }
+        catch (Exception ex)
+        {
+            _error = $"ConnectWise Manage settings could not be applied: {ex.Message}";
+        }
+
+        if (_manageOptions.DefaultBoardId > 0 && ManageClient.IsConfigured)
+        {
+            try
+            {
+                await LoadManageStatusesAsync(_manageOptions.DefaultBoardId);
+            }
+            catch (Exception ex)
+            {
+                _manageStatus = ex.Message;
+            }
+        }
+
         LoadTopNPreset();
         UpdateSecretHint();
     }
@@ -406,11 +426,26 @@
         }
     }
 
-    private async Task OnManageBoardChanged()
+    private async Task OnManageBoardSelectChanged(ChangeEventArgs e)
     {
+        if (!int.TryParse(e.Value?.ToString(), out var boardId))
+            return;
+
+        _manageOptions.DefaultBoardId = boardId;
         _manageStatuses = [];
-        if (_manageOptions.DefaultBoardId > 0)
-            await LoadManageStatusesAsync(_manageOptions.DefaultBoardId);
+        _manageStatus = null;
+
+        if (boardId > 0 && ManageClient.IsConfigured)
+        {
+            try
+            {
+                await LoadManageStatusesAsync(boardId);
+            }
+            catch (Exception ex)
+            {
+                _manageStatus = ex.Message;
+            }
+        }
     }
 
     private async Task LoadManageStatusesAsync(int boardId)

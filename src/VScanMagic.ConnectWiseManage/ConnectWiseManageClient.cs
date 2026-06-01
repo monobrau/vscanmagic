@@ -28,11 +28,12 @@ public sealed class ConnectWiseManageClient
 
     public void Configure(ConnectWiseManageCredentials credentials)
     {
+        if (!TryBuildApiBaseUri(credentials.ApiUrl, out var baseUri))
+            throw new InvalidOperationException(
+                "ConnectWise Manage API URL is invalid. Use your site base, e.g. https://na.myconnectwise.net/v4_6_release");
+
         _credentials = credentials;
-        var baseUrl = credentials.ApiUrl.Trim().TrimEnd('/');
-        if (!baseUrl.EndsWith("/apis/3.0", StringComparison.OrdinalIgnoreCase))
-            baseUrl += "/apis/3.0";
-        _http.BaseAddress = new Uri(baseUrl + "/");
+        _http.BaseAddress = baseUri;
 
         var authValue = Convert.ToBase64String(
             Encoding.UTF8.GetBytes($"{credentials.CompanyId}+{credentials.PublicKey}:{credentials.PrivateKey}"));
@@ -89,6 +90,26 @@ public sealed class ConnectWiseManageClient
     {
         if (!IsConfigured)
             throw new InvalidOperationException("ConnectWise Manage is not configured.");
+    }
+
+    internal static bool TryBuildApiBaseUri(string apiUrl, out Uri baseUri)
+    {
+        baseUri = null!;
+        var baseUrl = apiUrl.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            return false;
+
+        if (!baseUrl.EndsWith("/apis/3.0", StringComparison.OrdinalIgnoreCase))
+            baseUrl += "/apis/3.0";
+
+        if (!Uri.TryCreate(baseUrl + "/", UriKind.Absolute, out var parsed))
+            return false;
+
+        if (parsed.Scheme is not ("http" or "https"))
+            return false;
+
+        baseUri = parsed;
+        return true;
     }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response)

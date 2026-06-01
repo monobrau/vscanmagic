@@ -76,8 +76,21 @@ if (!string.IsNullOrWhiteSpace(savedCreds.BaseUrl))
 
 var manageStore = app.Services.GetRequiredService<ConnectWiseManageSettingsStore>();
 var manageCreds = manageStore.LoadCredentials();
-if (!string.IsNullOrWhiteSpace(manageCreds.ApiUrl))
-    app.Services.GetRequiredService<ConnectWiseManageClient>().Configure(manageCreds);
+if (!string.IsNullOrWhiteSpace(manageCreds.ApiUrl) &&
+    !string.IsNullOrWhiteSpace(manageCreds.CompanyId) &&
+    !string.IsNullOrWhiteSpace(manageCreds.PublicKey) &&
+    !string.IsNullOrWhiteSpace(manageCreds.PrivateKey) &&
+    !string.IsNullOrWhiteSpace(manageCreds.ClientId))
+{
+    try
+    {
+        app.Services.GetRequiredService<ConnectWiseManageClient>().Configure(manageCreds);
+    }
+    catch (Exception ex)
+    {
+        Log.Warning(ex, "Saved ConnectWise Manage credentials could not be applied at startup.");
+    }
+}
 
 await app.Services.GetRequiredService<BulkReviewJobService>().RecoverInterruptedJobsAsync();
 
