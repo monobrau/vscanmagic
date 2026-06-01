@@ -50,7 +50,7 @@ If you have existing VScanMagic data in local storage (`%LOCALAPPDATA%\VScanMagi
 1. Open PowerShell in the VScanMagic directory
 2. Run the migration script:
    ```powershell
-   .\MigrateToMemberberryStorage.ps1
+   .\archive\MigrateToMemberberryStorage.ps1
    ```
 
 **Migration Options:**
@@ -61,13 +61,13 @@ If you have existing VScanMagic data in local storage (`%LOCALAPPDATA%\VScanMagi
 **Example with options:**
 ```powershell
 # Migrate with backup, keep originals
-.\MigrateToMemberberryStorage.ps1 -BackupOriginal
+.\archive\MigrateToMemberberryStorage.ps1 -BackupOriginal
 
 # Migrate with backup, delete originals after migration
-.\MigrateToMemberberryStorage.ps1 -BackupOriginal -DeleteOriginal
+.\archive\MigrateToMemberberryStorage.ps1 -BackupOriginal -DeleteOriginal
 
 # Specify custom memberberry config path
-.\MigrateToMemberberryStorage.ps1 -MemberberryConfigPath "D:\Tools\memberberry\config.json"
+.\archive\MigrateToMemberberryStorage.ps1 -MemberberryConfigPath "D:\Tools\memberberry\config.json"
 ```
 
 ## Step 4: Verify Integration is Working

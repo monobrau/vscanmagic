@@ -91,7 +91,7 @@ portal-company-review-capture.json
 archive/
 
 # API capture scripts and guides (local use, not in repo)
-api/
+/api/
 
 # API Configuration files (may contain credentials)
 ConnectSecure-Config.ps1

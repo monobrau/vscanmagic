@@ -24,7 +24,6 @@ $paths = @(
     (Join-Path $root 'VScanMagic-GUI.ps1')
     (Join-Path $root 'VScanMagic-API.ps1')
     (Join-Path $root 'ConnectSecure-API.ps1')
-    (Join-Path $root 'Export-VulnerabilitiesToCsv.ps1')
     (Join-Path $root 'VScanMagic-Modules')
 )
 
